@@ -1,13 +1,31 @@
 //! Ogmara Desktop — Tauri backend.
 //!
 //! Provides native OS integration: system tray, notifications,
-//! and Tauri commands accessible from the frontend.
+//! secure storage via OS credential store, and Tauri commands
+//! accessible from the frontend.
 
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
 };
+
+/// Service name used for all keyring entries.
+const KEYRING_SERVICE: &str = "ogmara-desktop";
+
+/// Allowed key prefixes for secure storage operations.
+const ALLOWED_KEY_PREFIXES: &[&str] = &["ogmara.vault.", "ogmara.app_lock."];
+
+/// Validate that a storage key uses an allowed prefix.
+fn validate_key(key: &str) -> Result<(), String> {
+    if key.is_empty() || key.len() > 256 {
+        return Err("key must be 1-256 characters".into());
+    }
+    if !ALLOWED_KEY_PREFIXES.iter().any(|p| key.starts_with(p)) {
+        return Err("invalid key prefix".into());
+    }
+    Ok(())
+}
 
 /// Tauri command: get the app version.
 #[tauri::command]
@@ -19,6 +37,48 @@ fn get_version() -> String {
 #[tauri::command]
 fn get_platform() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+}
+
+// --- Secure Storage (OS credential store) ---
+
+/// Tauri command: read a value from the OS credential store.
+#[tauri::command]
+fn secure_store_get(key: String) -> Result<Option<String>, String> {
+    validate_key(&key)?;
+    let entry =
+        keyring::Entry::new(KEYRING_SERVICE, &key).map_err(|e| format!("keyring error: {e}"))?;
+    match entry.get_password() {
+        Ok(val) => Ok(Some(val)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("keyring get error: {e}")),
+    }
+}
+
+/// Tauri command: write a value to the OS credential store.
+#[tauri::command]
+fn secure_store_set(key: String, value: String) -> Result<(), String> {
+    validate_key(&key)?;
+    if value.len() > 65536 {
+        return Err("value too large (max 64KB)".into());
+    }
+    let entry =
+        keyring::Entry::new(KEYRING_SERVICE, &key).map_err(|e| format!("keyring error: {e}"))?;
+    entry
+        .set_password(&value)
+        .map_err(|e| format!("keyring set error: {e}"))
+}
+
+/// Tauri command: delete a value from the OS credential store.
+#[tauri::command]
+fn secure_store_delete(key: String) -> Result<(), String> {
+    validate_key(&key)?;
+    let entry =
+        keyring::Entry::new(KEYRING_SERVICE, &key).map_err(|e| format!("keyring error: {e}"))?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()), // already gone, that's fine
+        Err(e) => Err(format!("keyring delete error: {e}")),
+    }
 }
 
 /// Tauri command: send a native OS notification.
@@ -55,6 +115,9 @@ pub fn run() {
             get_version,
             get_platform,
             send_notification,
+            secure_store_get,
+            secure_store_set,
+            secure_store_delete,
         ])
         .setup(|app| {
             // Build system tray menu
