@@ -36,6 +36,17 @@ const en = {
   settings_no_wallet: 'No wallet configured',
   settings_wallet_address: 'Address',
   settings_wallet_warning: 'Your wallet is not protected. Anyone with access to this device can use your Ogmara account and funds.',
+  // Engagement
+  news_like: 'Like', news_dislike: 'Dislike', news_repost: 'Repost',
+  news_reposted: 'Reposted', news_bookmark: 'Bookmark', news_bookmarked: 'Saved',
+  news_reactions: 'Reactions', bookmarks_title: 'Bookmarks', bookmarks_empty: 'No saved posts',
+  nav_bookmarks: 'Bookmarks',
+  // Channel admin
+  channel_members: 'Members', channel_pins: 'Pinned', channel_admin: 'Admin',
+  channel_moderators: 'Moderators', channel_kick: 'Kick', channel_ban: 'Ban',
+  channel_unban: 'Unban', channel_pin: 'Pin', channel_unpin: 'Unpin',
+  channel_invite: 'Invite', channel_reply_to: 'Replying to',
+  node_add_custom: 'Add custom node URL', node_selector: 'Node',
 };
 
 const de = {
@@ -73,6 +84,17 @@ const de = {
   settings_no_wallet: 'Keine Wallet konfiguriert',
   settings_wallet_address: 'Adresse',
   settings_wallet_warning: 'Deine Wallet ist nicht geschützt. Jeder mit Zugang zu diesem Gerät kann dein Ogmara-Konto und Guthaben verwenden.',
+  // Engagement
+  news_like: 'Gefällt mir', news_dislike: 'Gefällt mir nicht', news_repost: 'Teilen',
+  news_reposted: 'Geteilt', news_bookmark: 'Lesezeichen', news_bookmarked: 'Gespeichert',
+  news_reactions: 'Reaktionen', bookmarks_title: 'Lesezeichen', bookmarks_empty: 'Keine gespeicherten Beiträge',
+  nav_bookmarks: 'Lesezeichen',
+  // Channel admin
+  channel_members: 'Mitglieder', channel_pins: 'Angepinnt', channel_admin: 'Admin',
+  channel_moderators: 'Moderatoren', channel_kick: 'Rauswerfen', channel_ban: 'Sperren',
+  channel_unban: 'Entsperren', channel_pin: 'Anpinnen', channel_unpin: 'Lösen',
+  channel_invite: 'Einladen', channel_reply_to: 'Antwort auf',
+  node_add_custom: 'Eigene Node-URL hinzufügen', node_selector: 'Node',
 };
 
 export function initI18n(): void {
