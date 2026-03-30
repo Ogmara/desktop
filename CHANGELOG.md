@@ -5,6 +5,21 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-03-30
+
+### Added
+- **Message Formatting** — i18n keys for node selection and custom node input
+- **Default Node** — changed from localhost to node.ogmara.org
+- **Node Selection** — i18n keys for node selector UI (en + de)
+
+## [0.3.0] - 2026-03-30
+
+### Added
+- **Bookmarks View** — new navigation tab for saved posts
+- **News Engagement** — reaction emoji hints, repost and bookmark labels in news placeholder
+- **i18n** — 15+ new keys for engagement/admin features in both English and German
+- **Channel Admin** — i18n keys for members, pins, moderators, kick, ban, invite
+
 ## [0.2.0] - 2026-03-29
 
 ### Added

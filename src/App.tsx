@@ -29,7 +29,7 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
   return null;
 }
 
-type View = 'chat' | 'news' | 'settings';
+type View = 'chat' | 'news' | 'bookmarks' | 'settings';
 type AppState = 'loading' | 'locked' | 'unlocked' | 'pin_setup';
 
 export const App: Component = () => {
@@ -162,6 +162,7 @@ export const App: Component = () => {
             <nav class="toolbar-nav">
               <button class={view() === 'chat' ? 'active' : ''} onClick={() => setView('chat')}>{t('nav_chat')}</button>
               <button class={view() === 'news' ? 'active' : ''} onClick={() => setView('news')}>{t('nav_news')}</button>
+              <button class={view() === 'bookmarks' ? 'active' : ''} onClick={() => setView('bookmarks')}>{t('nav_bookmarks')}</button>
               <button class={view() === 'settings' ? 'active' : ''} onClick={() => setView('settings')}>{t('nav_settings')}</button>
             </nav>
           </header>
@@ -177,6 +178,15 @@ export const App: Component = () => {
               <div class="placeholder">
                 <h2>{t('nav_news')}</h2>
                 <p>{t('news_no_posts')}</p>
+                <p class="engagement-hint">
+                  {t('news_reactions')}: 👍 👎 ❤️ 🔥 😂 &middot; {t('news_repost')} &middot; {t('news_bookmark')}
+                </p>
+              </div>
+            </Show>
+            <Show when={view() === 'bookmarks'}>
+              <div class="placeholder">
+                <h2>{t('bookmarks_title')}</h2>
+                <p>{t('bookmarks_empty')}</p>
               </div>
             </Show>
             <Show when={view() === 'settings'}>
