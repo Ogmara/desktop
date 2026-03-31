@@ -97,14 +97,63 @@ const de = {
   node_add_custom: 'Eigene Node-URL hinzufügen', node_selector: 'Node',
 };
 
+const ru = {
+  nav_chat: 'Чат', nav_news: 'Новости', nav_settings: 'Настройки',
+  chat_no_channel: 'Выберите канал, чтобы начать общение',
+  news_no_posts: 'Пока нет публикаций',
+  status_connected: 'Подключён', status_disconnected: 'Отключён',
+  // Lock screen
+  lock_title: 'Ogmara заблокирован',
+  lock_enter_pin: 'Введите PIN для разблокировки',
+  lock_unlock: 'Разблокировать',
+  lock_wrong_pin: 'Неверный PIN',
+  lock_cooldown: 'Слишком много попыток. Повторите через {{seconds}}с',
+  lock_forgot: 'Забыли PIN?',
+  // PIN setup
+  pin_setup_title: 'Настройка блокировки',
+  pin_setup_desc: 'Создайте 6-значный PIN для защиты кошелька',
+  pin_setup_enter: 'Введите PIN',
+  pin_setup_confirm: 'Подтвердите PIN',
+  pin_setup_mismatch: 'PIN-коды не совпадают',
+  pin_setup_save: 'Включить блокировку',
+  pin_setup_cancel: 'Отмена',
+  pin_setup_success: 'Блокировка включена',
+  // Settings security section
+  settings_security: 'Безопасность',
+  settings_app_lock: 'Блокировка (PIN)',
+  settings_app_lock_desc: 'Защитите кошелёк PIN-кодом',
+  settings_auto_lock: 'Автоблокировка',
+  settings_auto_lock_minutes: '{{minutes}} минут',
+  settings_remove_pin: 'Удалить PIN',
+  settings_remove_pin_confirm: 'Введите текущий PIN для отключения блокировки',
+  settings_change_pin: 'Изменить PIN',
+  // Wallet
+  settings_wallet: 'Кошелёк',
+  settings_no_wallet: 'Кошелёк не настроен',
+  settings_wallet_address: 'Адрес',
+  settings_wallet_warning: 'Ваш кошелёк не защищён. Любой, кто получит доступ к этому устройству, может использовать ваш аккаунт и средства Ogmara.',
+  // Engagement
+  news_like: 'Нравится', news_dislike: 'Не нравится', news_repost: 'Репост',
+  news_reposted: 'Репост сделан', news_bookmark: 'В закладки', news_bookmarked: 'В закладках',
+  news_reactions: 'Реакции', bookmarks_title: 'Закладки', bookmarks_empty: 'Нет сохранённых публикаций',
+  nav_bookmarks: 'Закладки',
+  // Channel admin
+  channel_members: 'Участники', channel_pins: 'Закреплённые', channel_admin: 'Админ',
+  channel_moderators: 'Модераторы', channel_kick: 'Исключить', channel_ban: 'Заблокировать',
+  channel_unban: 'Разблокировать', channel_pin: 'Закрепить', channel_unpin: 'Открепить',
+  channel_invite: 'Пригласить', channel_reply_to: 'Ответ на',
+  node_add_custom: 'Добавить свой URL узла', node_selector: 'Узел',
+};
+
 export function initI18n(): void {
   const lang = localStorage.getItem('ogmara.lang') || navigator.language.split('-')[0];
   i18next.init({
-    lng: ['en', 'de'].includes(lang) ? lang : 'en',
+    lng: ['en', 'de', 'ru'].includes(lang) ? lang : 'en',
     fallbackLng: 'en',
     resources: {
       en: { translation: en },
       de: { translation: de },
+      ru: { translation: ru },
     },
   });
 }
