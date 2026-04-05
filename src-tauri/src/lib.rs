@@ -53,6 +53,12 @@ impl SecureFileStore {
         let json = serde_json::to_string_pretty(&*data)
             .map_err(|e| format!("serialize error: {e}"))?;
         fs::write(&self.path, json).map_err(|e| format!("write error: {e}"))?;
+        // Restrict file permissions to owner-only on Unix (0600)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(0o600));
+        }
         Ok(())
     }
 
@@ -181,10 +187,74 @@ fn open_url(url: String) -> Result<(), String> {
     let result = std::process::Command::new("open").arg(&url).spawn();
 
     #[cfg(target_os = "windows")]
-    let result = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
+    let result = std::process::Command::new("explorer").arg(&url).spawn();
 
     result.map_err(|e| format!("failed to open URL: {}", e))?;
     Ok(())
+}
+
+/// Tauri command: show a native save dialog and write content to the selected file.
+#[tauri::command]
+async fn save_export_file(
+    app: tauri::AppHandle,
+    filename: String,
+    content: String,
+) -> Result<bool, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    // Build dialog on main thread, then run blocking save off Tokio runtime
+    let dialog = app
+        .dialog()
+        .file()
+        .set_file_name(&filename)
+        .add_filter("JSON", &["json"]);
+
+    let path = tokio::task::spawn_blocking(move || dialog.blocking_save_file())
+        .await
+        .map_err(|e| format!("Dialog error: {}", e))?;
+
+    match path {
+        Some(file_path) => {
+            let p = file_path.as_path().ok_or("Invalid path")?;
+            std::fs::write(p, content.as_bytes())
+                .map_err(|e| format!("Failed to write file: {}", e))?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+/// Tauri command: fetch a URL with auth headers and return the body as a string.
+/// Used for large responses that Tauri's HTTP plugin can't handle reliably.
+/// Headers are restricted to x-ogmara-* for security (prevents SSRF with arbitrary auth tokens).
+/// Response body is capped at 50 MB to prevent OOM.
+#[tauri::command]
+async fn fetch_and_save(
+    url: String,
+    headers: HashMap<String, String>,
+) -> Result<String, String> {
+    if !url.starts_with("https://") {
+        return Err("only https:// URLs are allowed".into());
+    }
+    // Run blocking HTTP request off the Tokio runtime
+    tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let mut req = ureq::get(&url);
+        for (k, v) in &headers {
+            if k.starts_with("x-ogmara-") {
+                req = req.header(k, v);
+            }
+        }
+        let mut resp = req.call().map_err(|e| format!("HTTP error: {}", e))?;
+        let body = resp
+            .body_mut()
+            .with_config()
+            .limit(50_000_000)
+            .read_to_string()
+            .map_err(|e| format!("Read error: {}", e))?;
+        Ok(body)
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
 }
 
 /// Show the main window and restore its saved position.
@@ -218,6 +288,9 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags(
@@ -238,6 +311,8 @@ pub fn run() {
             secure_store_set,
             secure_store_delete,
             open_url,
+            save_export_file,
+            fetch_and_save,
         ])
         .setup(|app| {
             // Build system tray menu

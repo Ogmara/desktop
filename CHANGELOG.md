@@ -5,6 +5,45 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-04-05
+
+### Added
+- **Clipboard paste for images** — screenshots pasted into chat are now uploaded
+  via Tauri clipboard plugin (`tauri-plugin-clipboard-manager`). Webkit2gtk
+  doesn't support web clipboard API, so RGBA pixels are read via plugin,
+  converted to PNG via canvas, then uploaded to IPFS.
+- **Native file export** — account data export uses Rust-side HTTP fetch (`ureq`)
+  and native save dialog (`tauri-plugin-dialog`). Bypasses Tauri HTTP plugin
+  limitations with large response bodies and webkit2gtk blob URL restrictions.
+- **SVG inline rendering** — SVG images now display inline in chat messages
+  (rendered via safe `<img>` tag, no script execution).
+- **Cross-platform URL opening** — `open_url` Rust command supports Linux
+  (`xdg-open`), macOS (`open`), and Windows (`cmd /C start`).
+
+### Fixed
+- **Transaction nonce errors** — Klever API returns lowercase `nonce` field,
+  code was reading PascalCase `Nonce` (silently defaulting to 0). Now checks
+  both casings. Added local nonce cache for consecutive TXs within the 4-second
+  API indexing window.
+- **File uploads failing** — Tauri HTTP plugin can't serialize `Blob`/`File` in
+  `FormData`. Global fetch override now manually builds multipart body as raw
+  `Uint8Array` for FormData requests.
+- **Images not showing inline after send** — optimistic messages now carry
+  `_attachments` so uploaded images render immediately without re-entering
+  the channel.
+- **Chat FOUC on channel open** — messages container hidden (`opacity: 0`)
+  until initial layout and scroll position are set, preventing flash of
+  left-aligned messages before own-message styling applies.
+- **Scroll to latest on channel open** — improved scroll timing with double
+  rAF + dual timeouts for reliable positioning in webkit2gtk.
+- **Data export error** — "The string did not match the expected pattern" from
+  webkit2gtk rejecting blob URLs and Tauri HTTP plugin failing on large
+  response bodies. Replaced with Rust-native HTTP fetch + file write.
+- **Explorer links not opening** — replaced `<a target="_blank">` (dead on
+  webkit2gtk) with Rust `open_url` command using system browser.
+- **TX confirmation colors** — success/error messages in send dialog now use
+  theme-aware colors instead of hard-coded backgrounds.
+
 ## [1.12.0] - 2026-04-05
 
 ### Added

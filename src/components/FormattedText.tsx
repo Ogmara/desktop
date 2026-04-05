@@ -18,8 +18,8 @@ interface Props {
   attachments?: Attachment[];
 }
 
-/** Image MIME types that should render inline. SVG excluded — can contain scripts. */
-const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+/** Image MIME types that should render inline. SVG rendered via <img> tag (safe — scripts don't execute in <img>). */
+const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'];
 /** Video MIME types that render as inline <video> elements. */
 const VIDEO_TYPES = ['video/mp4', 'video/webm', 'video/ogg'];
 
