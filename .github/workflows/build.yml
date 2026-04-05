@@ -2,7 +2,8 @@ name: Build Desktop App
 
 on:
   push:
-    branches: [main]
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 env:
@@ -129,7 +130,7 @@ jobs:
             done
           fi
 
-      # Upload artifacts
+      # Upload artifacts (available in Actions tab)
       - name: Upload Windows artifacts
         if: matrix.label == 'windows'
         uses: actions/upload-artifact@v4
@@ -155,3 +156,57 @@ jobs:
           name: ogmara-${{ steps.version.outputs.version }}-beta-macos
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+
+  # Create GitHub Release after all builds complete
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Ogmara Desktop v${{ steps.version.outputs.version }} (Beta)
+          tag_name: ${{ github.ref_name }}
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            ## Ogmara Desktop v${{ steps.version.outputs.version }} — Beta Release
+
+            Decentralized chat and news on Klever blockchain. Standalone wallet, no browser extension needed.
+
+            ### Downloads
+            | Platform | File |
+            |----------|------|
+            | Windows (installer) | `ogmara-${{ steps.version.outputs.version }}-beta-windows-setup.exe` |
+            | Windows (MSI) | `ogmara-${{ steps.version.outputs.version }}-beta-windows.msi` |
+            | Linux (AppImage) | `ogmara-${{ steps.version.outputs.version }}-beta-linux-x86_64.AppImage` |
+            | Linux (deb) | `ogmara-${{ steps.version.outputs.version }}-beta-linux-amd64.deb` |
+            | macOS (DMG) | `ogmara-${{ steps.version.outputs.version }}-beta-macos-arm64.dmg` |
+
+            > **Beta:** This is a pre-release for testing. Report issues at [Ogmara/desktop](https://github.com/Ogmara/desktop/issues).
+          files: |
+            artifacts/**/*.exe
+            artifacts/**/*.msi
+            artifacts/**/*.AppImage
+            artifacts/**/*.deb
+            artifacts/**/*.dmg
