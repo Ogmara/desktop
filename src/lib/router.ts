@@ -16,6 +16,7 @@
  *   #/bookmarks             — Bookmarks
  *   #/settings              — Settings
  *   #/wallet                — Wallet management
+ *   #/wallet/tokens         — Token portfolio (balances + send)
  */
 
 import { createSignal } from 'solid-js';
@@ -31,6 +32,7 @@ export type ViewName =
   | 'bookmarks'
   | 'settings'
   | 'wallet'
+  | 'token-portfolio'
   | 'compose'
   | 'channel-create'
   | 'channel-settings'
@@ -108,6 +110,9 @@ function parseHash(hash: string): Route {
       return { view: 'settings', params: {}, query };
 
     case 'wallet':
+      if (second === 'tokens') {
+        return { view: 'token-portfolio', params: {}, query };
+      }
       return { view: 'wallet', params: { sub: second }, query };
 
     case 'compose':

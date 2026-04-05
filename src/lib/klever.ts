@@ -230,10 +230,11 @@ async function buildSignBroadcast(
     contractType: c.type,
   }));
   const senderAddr = signer.walletAddress || signer.address;
+  const usedNonce = await getAccountNonce(senderAddr);
   const sendBody: Record<string, unknown> = {
     type: contracts[0].type,
     sender: senderAddr,
-    nonce: await getAccountNonce(senderAddr),
+    nonce: usedNonce,
     contracts: kleverContracts,
   };
   if (data && data.length > 0) {
@@ -307,10 +308,28 @@ async function buildSignBroadcast(
     || broadcastData?.data?.txHash
     || txHash;
 
+  // Track the nonce we used so consecutive TXs don't collide
+  recordUsedNonce(senderAddr, usedNonce);
+
   return broadcastHash;
 }
 
-/** Get the current nonce for an account from the Klever API. */
+/**
+ * Track the last nonce we used locally so rapid-fire TXs don't collide.
+ * The API returns the last *confirmed* nonce, which may lag behind
+ * recently broadcast transactions.
+ */
+const nonceCache: Record<string, { nonce: number; ts: number }> = {};
+
+/**
+ * Get the next nonce for a transaction.
+ *
+ * The Klever API `Nonce` field is already the next nonce to use (not the
+ * last used). However, the API indexes every ~4 seconds, so if we broadcast
+ * a TX and immediately try another, the API still returns the old nonce.
+ *
+ * We track locally submitted nonces to handle this window.
+ */
 async function getAccountNonce(address: string): Promise<number> {
   const apiBase = kleverProvider.api;
   const resp = await fetchWithTimeout(`${apiBase}/v1.0/address/${address}`);
@@ -319,8 +338,25 @@ async function getAccountNonce(address: string): Promise<number> {
   if (!resp.ok) {
     throw new Error(`Failed to fetch account nonce (HTTP ${resp.status})`);
   }
-  const data = await resp.json();
-  return data?.data?.account?.Nonce ?? 0;
+  const rawBody = await resp.text();
+  let data: any;
+  try { data = JSON.parse(rawBody); } catch { data = null; }
+  const apiNonce: number = data?.data?.account?.nonce ?? data?.data?.account?.Nonce ?? 0;
+  const cached = nonceCache[address];
+
+  // If we recently broadcast a TX, the API may not have indexed it yet.
+  // Use whichever is higher: API nonce or our locally tracked next nonce.
+  if (cached && cached.ts > Date.now() - 30_000) {
+    const localNext = cached.nonce + 1;
+    return Math.max(apiNonce, localNext);
+  }
+
+  return apiNonce;
+}
+
+/** Record that we successfully broadcast a TX with this nonce. */
+function recordUsedNonce(address: string, nonce: number): void {
+  nonceCache[address] = { nonce, ts: Date.now() };
 }
 
 // --- Smart Contract Invocations ---
@@ -536,4 +572,130 @@ export async function signMessage(message: string): Promise<string> {
   const signer = requireSigner();
   const sigBytes = await signer.signKleverMessage(new TextEncoder().encode(message));
   return bytesToHex(sigBytes);
+}
+
+// --- Account & Token Queries ---
+
+/** Token balance entry from the Klever API. */
+export interface TokenBalance {
+  /** Asset ID (e.g., "KLV", "FLIPPY-3FQ0") */
+  assetId: string;
+  /** Balance in atomic units (divide by precision for display) */
+  balance: number;
+  /** Frozen balance in atomic units */
+  frozenBalance: number;
+  /** Token precision (decimals). KLV = 6, KDA tokens vary. */
+  precision: number;
+  /** Token name (if available from metadata) */
+  name?: string;
+  /** Token logo URI (if available from metadata) */
+  logo?: string;
+}
+
+/**
+ * Fetch all token balances for an account from the Klever API.
+ * Returns an array of TokenBalance sorted by balance (highest first),
+ * with KLV always at the top.
+ * @param address - klv1... address to query
+ */
+export async function getAccountBalances(address: string): Promise<TokenBalance[]> {
+  const apiBase = kleverProvider.api;
+  const resp = await fetchWithTimeout(`${apiBase}/v1.0/address/${address}`);
+  if (resp.status === 404) return [];
+  if (!resp.ok) {
+    throw new Error(`Failed to fetch account data (HTTP ${resp.status})`);
+  }
+  const json = await resp.json();
+  const account = json?.data?.account;
+  if (!account) return [];
+
+  const balances: TokenBalance[] = [];
+
+  // KLV balance is always at the top level
+  const klvBalance = account.Balance ?? account.balance ?? 0;
+  balances.push({
+    assetId: 'KLV',
+    balance: klvBalance,
+    frozenBalance: account.FrozenBalance ?? 0,
+    precision: 6,
+    name: 'Klever',
+    logo: 'https://media.klever.io/token/klv.png',
+  });
+
+  // KDA (Klever Digital Assets) — assets map
+  const assets = account.Assets ?? account.assets ?? {};
+  for (const [assetId, assetData] of Object.entries(assets)) {
+    if (assetId === 'KLV') continue; // already added above
+    const asset = assetData as Record<string, unknown>;
+    balances.push({
+      assetId,
+      balance: (asset.Balance ?? asset.balance ?? 0) as number,
+      frozenBalance: (asset.FrozenBalance ?? asset.frozenBalance ?? 0) as number,
+      precision: (asset.Precision ?? asset.precision ?? 0) as number,
+    });
+  }
+
+  // Sort: KLV first, then by balance descending
+  balances.sort((a, b) => {
+    if (a.assetId === 'KLV') return -1;
+    if (b.assetId === 'KLV') return 1;
+    return b.balance - a.balance;
+  });
+
+  return balances;
+}
+
+/**
+ * Fetch token metadata (name, logo, precision) from the Klever API.
+ * @param assetId - Token ID (e.g., "FLIPPY-3FQ0")
+ */
+export async function getTokenMetadata(assetId: string): Promise<{
+  name: string;
+  ticker: string;
+  logo: string;
+  precision: number;
+} | null> {
+  if (assetId === 'KLV') {
+    return { name: 'Klever', ticker: 'KLV', logo: 'https://media.klever.io/token/klv.png', precision: 6 };
+  }
+  const apiBase = kleverProvider.api;
+  try {
+    const resp = await fetchWithTimeout(`${apiBase}/v1.0/assets/${encodeURIComponent(assetId)}`);
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    const asset = json?.data?.asset;
+    if (!asset) return null;
+    return {
+      name: asset.Name ?? asset.name ?? assetId,
+      ticker: asset.Ticker ?? asset.ticker ?? assetId.split('-')[0],
+      logo: asset.Logo ?? asset.logo ?? '',
+      precision: asset.Precision ?? asset.precision ?? 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Send a token transfer transaction.
+ * Works for KLV and any KDA token.
+ * @param recipient - klv1... address
+ * @param assetId - Token ID (e.g., "KLV", "FLIPPY-3FQ0")
+ * @param amount - Amount in atomic units
+ */
+export async function sendTransfer(
+  recipient: string,
+  assetId: string,
+  amount: number,
+): Promise<string> {
+  const payload: Record<string, unknown> = {
+    receiver: recipient,
+    amount,
+    kda: assetId,
+  };
+
+  return buildSignBroadcast([{
+    type: 0, // Transfer
+    payload,
+  }]);
 }
