@@ -3,8 +3,8 @@
  * Two-step: enter PIN, then confirm. On success, encrypts the vault.
  */
 
-import { Component, createSignal, Show, onCleanup } from 'solid-js';
-import { t } from './i18n';
+import { Component, createSignal, Show, onCleanup, onMount } from 'solid-js';
+import { t } from './i18n/init';
 import { setupPin } from './lib/appLock';
 import { vaultEncryptWithPin } from './lib/vault';
 
@@ -20,10 +20,18 @@ export const PinSetup: Component<PinSetupProps> = (props) => {
   const [error, setError] = createSignal('');
   const [loading, setLoading] = createSignal(false);
 
+  let enterRef: HTMLInputElement | undefined;
+  let confirmRef: HTMLInputElement | undefined;
+
   // Clear sensitive PIN data from signals on unmount
   onCleanup(() => {
     setPin('');
     setConfirmPin('');
+  });
+
+  // Auto-focus the first input on mount
+  onMount(() => {
+    setTimeout(() => enterRef?.focus(), 50);
   });
 
   function handleNext() {
@@ -31,12 +39,15 @@ export const PinSetup: Component<PinSetupProps> = (props) => {
     setStep('confirm');
     setConfirmPin('');
     setError('');
+    // Focus confirm input after SolidJS renders the new view
+    setTimeout(() => confirmRef?.focus(), 50);
   }
 
   async function handleConfirm() {
     if (confirmPin() !== pin()) {
       setError(t('pin_setup_mismatch'));
       setConfirmPin('');
+      setTimeout(() => confirmRef?.focus(), 50);
       return;
     }
 
@@ -66,6 +77,7 @@ export const PinSetup: Component<PinSetupProps> = (props) => {
         setStep('enter');
         setConfirmPin('');
         setError('');
+        setTimeout(() => enterRef?.focus(), 50);
       } else {
         props.onCancel();
       }
@@ -82,6 +94,7 @@ export const PinSetup: Component<PinSetupProps> = (props) => {
           <div class="lock-form">
             <label class="pin-label">{t('pin_setup_confirm')}</label>
             <input
+              ref={confirmRef}
               type="password"
               inputMode="numeric"
               pattern="[0-9]*"
@@ -92,7 +105,6 @@ export const PinSetup: Component<PinSetupProps> = (props) => {
               placeholder="------"
               class="pin-input"
               disabled={loading()}
-              autofocus
             />
             <Show when={error()}>
               <p class="lock-error">{error()}</p>
@@ -100,7 +112,12 @@ export const PinSetup: Component<PinSetupProps> = (props) => {
             <div class="pin-setup-actions">
               <button
                 class="btn-secondary"
-                onClick={() => { setStep('enter'); setConfirmPin(''); setError(''); }}
+                onClick={() => {
+                  setStep('enter');
+                  setConfirmPin('');
+                  setError('');
+                  setTimeout(() => enterRef?.focus(), 50);
+                }}
                 disabled={loading()}
               >
                 {t('pin_setup_cancel')}
@@ -118,6 +135,7 @@ export const PinSetup: Component<PinSetupProps> = (props) => {
           <div class="lock-form">
             <label class="pin-label">{t('pin_setup_enter')}</label>
             <input
+              ref={enterRef}
               type="password"
               inputMode="numeric"
               pattern="[0-9]*"
@@ -127,7 +145,6 @@ export const PinSetup: Component<PinSetupProps> = (props) => {
               onKeyDown={handleKeyDown}
               placeholder="------"
               class="pin-input"
-              autofocus
             />
             <div class="pin-setup-actions">
               <button class="btn-secondary" onClick={props.onCancel}>

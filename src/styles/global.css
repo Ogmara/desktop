@@ -1,0 +1,342 @@
+/* Ogmara Desktop — Global Styles
+ * Design tokens from spec 06-frontend.md section 3.2
+ * Combined: web app design system + desktop-specific (lock screen, tray) */
+
+/* Shared design tokens (spacing, fonts, radii) — always available */
+:root {
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-size-xs: 12px;
+  --font-size-sm: 14px;
+  --font-size-md: 16px;
+  --font-size-lg: 20px;
+  --font-size-xl: 24px;
+  --font-size-xxl: 32px;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  /* Dark theme colors (default) — customizable via theme.ts */
+  --color-bg-primary: #1a1a2e;
+  --color-bg-secondary: #16213e;
+  --color-bg-tertiary: #0f3460;
+  --color-text-primary: #e0e0e0;
+  --color-text-secondary: #8b8b8b;
+  --color-text-inverse: #1a1a1a;
+  --color-accent: #a29bfe;
+  --color-accent-hover: #6c5ce7;
+  --color-accent-primary: #a29bfe;
+  --color-accent-secondary: #6c5ce7;
+  --color-border: #2a2a4a;
+  --color-success: #55efc4;
+  --color-warning: #ffeaa7;
+  --color-error: #ff7675;
+  --color-dm: #fab1a0;
+}
+
+/* Light theme (override colors only) */
+[data-theme="light"] {
+  --color-bg-primary: #ffffff;
+  --color-bg-secondary: #f5f5f7;
+  --color-bg-tertiary: #e8e8ed;
+  --color-text-primary: #1a1a1a;
+  --color-text-secondary: #6b6b6b;
+  --color-text-inverse: #ffffff;
+  --color-accent: #6c5ce7;
+  --color-accent-hover: #a29bfe;
+  --color-accent-primary: #6c5ce7;
+  --color-accent-secondary: #a29bfe;
+  --color-border: #e0e0e0;
+  --color-success: #00b894;
+  --color-warning: #fdcb6e;
+  --color-error: #d63031;
+  --color-dm: #e17055;
+}
+
+/* Reset */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  transition: background-color 200ms, color 200ms;
+  overflow: hidden;
+}
+
+/* App layout */
+.app-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg-secondary);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-full);
+}
+
+/* Focus indicators (accessibility) */
+:focus-visible {
+  outline: 2px solid var(--color-accent-primary);
+  outline-offset: 2px;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
+}
+
+/* Responsive: collapse sidebar below 768px */
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .sidebar.mobile-open {
+    display: flex;
+    position: fixed;
+    z-index: 100;
+    left: 0;
+    top: 48px;
+    bottom: 0;
+    width: 240px;
+    box-shadow: 4px 0 16px rgba(0,0,0,0.3);
+  }
+  .toolbar-brand { display: none; }
+  .toolbar { padding: var(--spacing-xs) var(--spacing-sm); }
+  .toolbar-nav { padding: var(--spacing-xs) var(--spacing-sm); font-size: var(--font-size-xs); }
+  .toolbar-btn { padding: var(--spacing-xs); font-size: var(--font-size-sm); }
+}
+
+/* Button base */
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+/* Form controls — match theme */
+select, input[type="text"], input[type="password"], input[type="number"], input[type="email"], textarea {
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+}
+select:focus, input:focus, textarea:focus {
+  border-color: var(--color-accent-primary);
+  outline: none;
+}
+select option {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
+a {
+  color: var(--color-accent-primary);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Compact layout — tighter spacing and smaller fonts */
+html.compact {
+  --spacing-xs: 2px;
+  --spacing-sm: 4px;
+  --spacing-md: 10px;
+  --spacing-lg: 16px;
+  --spacing-xl: 22px;
+
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-md: 14px;
+  --font-size-lg: 17px;
+  --font-size-xl: 20px;
+  --font-size-xxl: 26px;
+}
+
+/* --- Desktop Toolbar (draggable for Tauri window) --- */
+.toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--spacing-sm) var(--spacing-md); background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border); height: 48px;
+  -webkit-app-region: drag;
+}
+.toolbar button, .toolbar a { -webkit-app-region: no-drag; }
+.toolbar-brand { display: flex; align-items: center; gap: var(--spacing-sm); font-weight: 700; font-size: 18px; color: var(--color-accent-primary); }
+.logo-svg { width: 28px; height: 28px; border-radius: 5px; }
+.toolbar-nav { display: flex; gap: var(--spacing-xs); }
+.toolbar-nav button {
+  color: var(--color-text-secondary); padding: 6px 16px;
+  border-radius: var(--radius-md); font-size: var(--font-size-sm); font-weight: 500;
+}
+.toolbar-nav button:hover { background: var(--color-bg-tertiary); }
+.toolbar-nav button.active { color: var(--color-accent-primary); background: var(--color-bg-tertiary); }
+
+/* --- Status Bar --- */
+.status-bar {
+  display: flex; align-items: center; gap: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-md); background: var(--color-bg-secondary);
+  border-top: 1px solid var(--color-border); font-size: var(--font-size-xs); color: var(--color-text-secondary);
+  height: 28px;
+}
+.status-dot { width: 8px; height: 8px; border-radius: 50%; }
+.status-dot.connected { background: var(--color-success); }
+.version { margin-left: auto; opacity: 0.5; }
+
+/* --- Buttons --- */
+.btn-primary {
+  padding: 10px 24px; border-radius: var(--radius-md); border: none;
+  background: var(--color-accent-primary); color: #fff; font-size: var(--font-size-sm); font-weight: 600;
+  cursor: pointer; transition: opacity 150ms;
+}
+.btn-primary:hover:not(:disabled) { opacity: 0.9; }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-secondary {
+  padding: 10px 24px; border-radius: var(--radius-md);
+  border: 1px solid var(--color-border); background: transparent;
+  color: var(--color-text-primary); font-size: var(--font-size-sm); font-weight: 500;
+  cursor: pointer; transition: background 150ms;
+}
+.btn-secondary:hover:not(:disabled) { background: var(--color-bg-tertiary); }
+.btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-danger {
+  padding: 10px 24px; border-radius: var(--radius-md); border: none;
+  background: var(--color-error); color: #fff; font-size: var(--font-size-sm); font-weight: 600;
+  cursor: pointer; transition: opacity 150ms;
+}
+.btn-danger:hover:not(:disabled) { opacity: 0.9; }
+.btn-danger:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* --- Lock Screen --- */
+.lock-screen {
+  display: flex; align-items: center; justify-content: center;
+  height: 100vh; background: var(--color-bg-primary);
+}
+.lock-card {
+  display: flex; flex-direction: column; align-items: center;
+  gap: var(--spacing-md); padding: 48px; max-width: 400px; width: 100%;
+}
+.lock-logo { width: 80px; height: 80px; border-radius: 16px; }
+.lock-logo.spin { animation: spin 2s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.lock-card h1 { font-size: var(--font-size-xl); color: var(--color-text-primary); }
+.lock-subtitle { color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+.lock-form { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
+.pin-input {
+  width: 200px; text-align: center; font-size: var(--font-size-xl); letter-spacing: 8px;
+  padding: 12px 16px; border-radius: var(--radius-md);
+  background: var(--color-bg-secondary); border: 1px solid var(--color-border); color: var(--color-text-primary);
+  font-family: monospace;
+}
+.pin-input:focus { border-color: var(--color-accent-primary); outline: none; }
+.pin-input::placeholder { letter-spacing: 4px; color: var(--color-text-secondary); opacity: 0.4; }
+.lock-error { color: var(--color-error); font-size: 13px; }
+.lock-cooldown { color: var(--color-error); font-size: var(--font-size-sm); text-align: center; padding: var(--spacing-md) 0; }
+
+/* --- PIN Setup Overlay --- */
+.pin-setup-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+}
+.pin-setup-card {
+  background: var(--color-bg-secondary); border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg); padding: 32px; max-width: 400px; width: 90%;
+  display: flex; flex-direction: column; align-items: center; gap: var(--spacing-md);
+}
+.pin-setup-card h2 { font-size: var(--font-size-lg); color: var(--color-text-primary); }
+.pin-setup-desc { color: var(--color-text-secondary); font-size: var(--font-size-sm); text-align: center; }
+.pin-label { color: var(--color-text-secondary); font-size: 13px; font-weight: 500; }
+.pin-setup-actions { display: flex; gap: 12px; margin-top: var(--spacing-sm); }
+
+/* --- Settings View --- */
+.settings-view {
+  padding: var(--spacing-lg) 32px; max-width: 600px; margin: 0 auto;
+  display: flex; flex-direction: column; gap: var(--spacing-lg);
+  overflow-y: auto; height: 100%;
+}
+.settings-view h2 { font-size: var(--font-size-xl); color: var(--color-text-primary); }
+.settings-section {
+  background: var(--color-bg-secondary); border: 1px solid var(--color-border);
+  border-radius: 10px; padding: var(--spacing-md) 20px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.settings-section h3 { font-size: var(--font-size-sm); color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+.settings-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-md);
+}
+.settings-label { font-size: var(--font-size-sm); font-weight: 500; color: var(--color-text-primary); }
+.settings-desc { font-size: var(--font-size-xs); color: var(--color-text-secondary); margin-top: 2px; }
+.settings-value {
+  font-size: var(--font-size-xs); color: var(--color-text-secondary); background: var(--color-bg-tertiary);
+  padding: var(--spacing-xs) var(--spacing-sm); border-radius: var(--radius-sm); word-break: break-all;
+}
+.settings-info { font-size: 13px; color: var(--color-text-secondary); }
+.settings-warning {
+  font-size: 13px; color: var(--color-error);
+  background: rgba(255, 118, 117, 0.1); border-radius: var(--radius-md);
+  padding: 10px 12px; line-height: 1.4;
+}
+.badge-enabled {
+  font-size: 11px; font-weight: 700; color: var(--color-success);
+  background: rgba(85, 239, 196, 0.15); padding: var(--spacing-xs) 10px; border-radius: var(--radius-sm);
+}
+.wallet-badge {
+  font-size: 11px; color: var(--color-accent-primary); background: var(--color-bg-tertiary);
+  padding: 2px 6px; border-radius: 3px; font-family: monospace;
+  margin-left: var(--spacing-sm);
+}
+
+/* --- Placeholder --- */
+.placeholder {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100%; color: var(--color-text-secondary); gap: var(--spacing-sm);
+}
+.placeholder h2 { font-size: var(--font-size-xl); color: var(--color-text-primary); }
+
+/* --- Engagement Hint --- */
+.engagement-hint { font-size: var(--font-size-sm); color: var(--color-text-secondary); }

@@ -1,8 +1,8 @@
 {
   "name": "@ogmara/desktop",
-  "version": "0.6.0",
+  "version": "1.11.0",
   "private": true,
-  "description": "Ogmara desktop application — Tauri app with native notifications and system tray",
+  "description": "Ogmara desktop application — decentralized chat and news with standalone wallet",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -10,8 +10,12 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@msgpack/msgpack": "^3.0.0",
+    "@noble/ed25519": "^2.3.0",
+    "@noble/hashes": "^1.8.0",
     "@ogmara/sdk": "file:../sdk-js",
     "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-http": "^2.5.8",
     "i18next": "^25.2.0",
     "solid-js": "^1.9.7"
   },

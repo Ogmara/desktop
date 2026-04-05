@@ -4,7 +4,7 @@
  */
 
 import { Component, createSignal, Show, onCleanup } from 'solid-js';
-import { t } from './i18n';
+import { t } from './i18n/init';
 import { verifyPin, getRemainingCooldown, getFailedAttempts, getCooldownSeconds } from './lib/appLock';
 import { vaultUnlockWithPin } from './lib/vault';
 
