@@ -347,6 +347,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     if (view === 'bookmarks') return r.view === 'bookmarks';
     if (view === 'search') return r.view === 'search';
     if (view === 'settings') return r.view === 'settings';
+    if (view === 'portfolio') return r.view === 'token-portfolio';
     return false;
   };
 
@@ -475,6 +476,18 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
 
       {/* Divider */}
       <div class="sidebar-divider" />
+
+      {/* Wallet Portfolio */}
+      <Show when={authStatus() === 'ready'}>
+        <div class="sidebar-section">
+          <button
+            class={`sidebar-nav-item ${isView('portfolio') ? 'active' : ''}`}
+            onClick={() => go('/wallet/tokens')}
+          >
+            💰 {t('nav_wallet')}
+          </button>
+        </div>
+      </Show>
 
       {/* Bookmarks */}
       <div class="sidebar-section">

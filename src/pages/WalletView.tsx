@@ -486,8 +486,8 @@ export const WalletView: Component = () => {
         .permission-checkboxes { display: flex; gap: var(--spacing-md); margin-bottom: var(--spacing-sm); font-size: var(--font-size-sm); }
         .permission-checkboxes label { display: flex; align-items: center; gap: var(--spacing-xs); cursor: pointer; }
         .wallet-export-timer { font-size: var(--font-size-xs); color: var(--color-text-secondary); font-style: italic; }
-        .wallet-disconnect-confirm { margin-top: var(--spacing-md); padding: var(--spacing-md); background: rgba(255,118,117,0.1); border: 1px solid var(--color-error); border-radius: var(--radius-md); }
-        .wallet-disconnect-warning { font-size: var(--font-size-sm); color: var(--color-error); margin-bottom: var(--spacing-md); line-height: 1.5; font-weight: 500; }
+        .wallet-disconnect-confirm { margin-top: var(--spacing-md); padding: var(--spacing-md); background: var(--color-bg-tertiary); border: 1px solid var(--color-error); border-radius: var(--radius-md); }
+        .wallet-disconnect-warning { font-size: var(--font-size-sm); color: var(--color-text-primary); margin-bottom: var(--spacing-md); line-height: 1.5; font-weight: 500; }
         .wallet-disconnect-actions { display: flex; gap: var(--spacing-sm); }
       `}</style>
     </div>

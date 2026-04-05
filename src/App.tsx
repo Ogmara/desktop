@@ -34,6 +34,7 @@ import { NewsView } from './pages/NewsView';
 import { BookmarksView } from './pages/BookmarksView';
 import { SettingsView } from './pages/SettingsView';
 import { WalletView } from './pages/WalletView';
+import { TokenPortfolioView } from './pages/TokenPortfolioView';
 import { ComposeView } from './pages/ComposeView';
 import { DmListView } from './pages/DmListView';
 import { DmConversationView } from './pages/DmConversationView';
@@ -225,6 +226,9 @@ export const App: Component = () => {
                 </Match>
                 <Match when={route().view === 'wallet'}>
                   <WalletView />
+                </Match>
+                <Match when={route().view === 'token-portfolio'}>
+                  <TokenPortfolioView />
                 </Match>
                 <Match when={route().view === 'dm'}>
                   <DmListView />

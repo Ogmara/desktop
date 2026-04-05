@@ -165,6 +165,20 @@ async fn send_notification(
     Ok(())
 }
 
+/// Tauri command: open a URL in the system default browser.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    // Only allow https:// URLs
+    if !url.starts_with("https://") {
+        return Err("only https:// URLs are allowed".into());
+    }
+    std::process::Command::new("xdg-open")
+        .arg(&url)
+        .spawn()
+        .map_err(|e| format!("failed to open URL: {}", e))?;
+    Ok(())
+}
+
 /// Show the main window and restore its saved position.
 fn restore_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -215,6 +229,7 @@ pub fn run() {
             secure_store_get,
             secure_store_set,
             secure_store_delete,
+            open_url,
         ])
         .setup(|app| {
             // Build system tray menu

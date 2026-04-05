@@ -5,6 +5,47 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-04-05
+
+### Added
+- **Token Portfolio page** — new "Wallet" sidebar menu showing all token balances
+  (KLV + all KDA tokens) with token logos, names, and precision-aware formatting.
+  Fetches balances from Klever API, displays frozen amounts, and links to
+  Kleverscan explorer for each asset.
+- **Send tokens** — modal dialog to transfer any token (KLV or KDA) to another
+  klv1... address. Includes MAX button, input validation (invalid address,
+  self-send, insufficient balance, zero amount), and explorer link for
+  the broadcast transaction.
+- **Token metadata resolution** — automatically fetches token name and logo from
+  Klever API for non-KLV assets. Displays placeholder icon with first letter
+  when logo is unavailable.
+- **Open URLs in system browser** — custom Rust command using `xdg-open` for
+  reliable external link opening on Linux (Tauri shell plugin doesn't work
+  reliably on webkit2gtk).
+- **i18n** — 21 new translation keys across all 7 languages (EN, DE, ES, PT,
+  JA, ZH, RU) for wallet portfolio, send dialog, and validation messages.
+
+### Fixed
+- **Transaction nonce error** — Klever API returns lowercase `nonce` field but
+  code read PascalCase `Nonce`, silently falling back to 0. Now checks both
+  casings. Also tracks locally used nonces to handle consecutive TXs within
+  the 4-second API indexing window.
+- **Explorer links not opening** — `target="_blank"` and Tauri shell plugin
+  silently fail on Linux/webkit2gtk. Replaced with custom `open_url` Rust
+  command that calls `xdg-open` directly.
+- **TX confirmation unreadable colors** — success/error messages in send dialog
+  now use theme-aware colors (`--color-bg-tertiary` background with colored
+  border) instead of hard-coded green/red backgrounds.
+
+### Security
+- **Amount precision** — token amounts parsed via string math (no float
+  multiplication) to prevent precision loss on large balances
+- **Address validation** — full bech32 regex `/^klv1[a-z0-9]{58}$/`
+- **Logo URL sanitization** — only `https://` URLs rendered, prevents tracking
+- **Unicode spoofing prevention** — control chars and RTL overrides stripped
+  from token names
+- **URL path injection** — `encodeURIComponent` on all API-sourced URL segments
+
 ## [1.11.0] - 2026-04-05
 
 ### Fixed
