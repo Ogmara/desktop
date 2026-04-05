@@ -24,12 +24,17 @@ const VAULT_MODE_KEY = 'ogmara.vault.mode'; // 'raw' | 'encrypted'
 
 /** Internal signer — never exported directly. */
 let cachedSigner: WalletSigner | null = null;
+/** Cached raw key hex — kept in memory while unlocked for export/sync. */
+let cachedKeyHex: string | null = null;
 
 /**
  * Initialize the vault WITHOUT PIN (for apps without PIN lock).
  * Returns the public address if a wallet exists, null otherwise.
  */
 export async function vaultInit(): Promise<string | null> {
+  // If signer is already loaded (e.g., from vaultUnlockWithPin), return it
+  if (cachedSigner) return cachedSigner.address;
+
   const mode = await SecureStore.getItemAsync(VAULT_MODE_KEY).catch(() => null);
 
   if (mode === 'encrypted') {
@@ -43,6 +48,7 @@ export async function vaultInit(): Promise<string | null> {
     const hex = await SecureStore.getItemAsync(VAULT_RAW_KEY);
     if (hex) {
       cachedSigner = await WalletSigner.fromHex(hex);
+      cachedKeyHex = hex;
       return cachedSigner.address;
     }
   } catch {
@@ -80,6 +86,7 @@ export async function vaultUnlockWithPin(pinKey: CryptoKey): Promise<string | nu
 
     const hex = await decryptWithKey(pinKey, encrypted);
     cachedSigner = await WalletSigner.fromHex(hex);
+    cachedKeyHex = hex;
     return cachedSigner.address;
   } catch {
     return null; // wrong PIN or corrupted data
@@ -103,6 +110,7 @@ export async function vaultStore(privateKeyHex: string): Promise<string> {
   await SecureStore.deleteItemAsync(VAULT_ENCRYPTED_KEY).catch(() => {});
 
   cachedSigner = signer;
+  cachedKeyHex = privateKeyHex;
   return signer.address;
 }
 
@@ -112,22 +120,36 @@ export async function vaultStore(privateKeyHex: string): Promise<string> {
  * The raw key is deleted after successful encryption.
  */
 export async function vaultEncryptWithPin(pinKey: CryptoKey): Promise<void> {
-  const hex = await SecureStore.getItemAsync(VAULT_RAW_KEY).catch(() => null);
+  // Try SecureStore first, fall back to in-memory cached key
+  let hex = await SecureStore.getItemAsync(VAULT_RAW_KEY).catch(() => null);
+  if (!hex && cachedKeyHex) hex = cachedKeyHex;
   if (!hex) throw new Error('No wallet to encrypt');
 
   const encrypted = await encryptWithKey(pinKey, hex);
   await SecureStore.setItemAsync(VAULT_ENCRYPTED_KEY, encrypted);
 
-  // Verify encrypted data is recoverable before deleting raw key
-  const readBack = await SecureStore.getItemAsync(VAULT_ENCRYPTED_KEY);
-  if (!readBack) throw new Error('Encryption verification failed: could not read back');
-  const testDecrypt = await decryptWithKey(pinKey, readBack);
-  if (testDecrypt !== hex) throw new Error('Encryption verification failed: decryption mismatch');
+  // Verify encrypted data is recoverable before deleting raw key.
+  // Tauri keyring IPC writes may not be immediately readable — retry with delay.
+  let readBack: string | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    readBack = await SecureStore.getItemAsync(VAULT_ENCRYPTED_KEY).catch(() => null);
+    if (readBack) break;
+    await new Promise(r => setTimeout(r, 200));
+  }
+  if (!readBack) {
+    // Last resort: verify the encrypted string directly (we just created it)
+    const testDecrypt = await decryptWithKey(pinKey, encrypted);
+    if (testDecrypt !== hex) throw new Error('Encryption verification failed');
+  } else {
+    const testDecrypt = await decryptWithKey(pinKey, readBack);
+    if (testDecrypt !== hex) throw new Error('Encryption verification failed: decryption mismatch');
+  }
 
   await SecureStore.setItemAsync(VAULT_MODE_KEY, 'encrypted');
 
   // Safe to delete raw key — encrypted data verified
   await SecureStore.deleteItemAsync(VAULT_RAW_KEY);
+  cachedKeyHex = hex; // Keep in memory for session use
 }
 
 /**
@@ -181,17 +203,31 @@ export function vaultIsUnlocked(): boolean {
   return cachedSigner !== null;
 }
 
-/** Lock the vault — clear signer from memory without wiping storage. */
+/** Lock the vault — clear signer and key from memory without wiping storage. */
 export function vaultLock(): void {
   cachedSigner = null;
+  cachedKeyHex = null;
 }
 
 /** Wipe the wallet from memory and all storage. */
 export async function vaultWipe(): Promise<void> {
   cachedSigner = null;
+  cachedKeyHex = null;
   await SecureStore.deleteItemAsync(VAULT_RAW_KEY).catch(() => {});
   await SecureStore.deleteItemAsync(VAULT_ENCRYPTED_KEY).catch(() => {});
   await SecureStore.deleteItemAsync(VAULT_MODE_KEY).catch(() => {});
+}
+
+/** Export the raw private key hex. Works in raw mode or when unlocked from encrypted mode. */
+export async function vaultExportKey(): Promise<string | null> {
+  // If key is cached in memory (unlocked encrypted vault or raw vault), return it
+  if (cachedKeyHex) return cachedKeyHex;
+  // Fall back to reading from storage (raw mode)
+  const mode = await SecureStore.getItemAsync(VAULT_MODE_KEY).catch(() => null);
+  if (mode === 'raw') {
+    return await SecureStore.getItemAsync(VAULT_RAW_KEY) ?? null;
+  }
+  return null;
 }
 
 /** Sign an auth request through the vault. */

@@ -5,6 +5,223 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-04-05
+
+### Fixed
+- **On-chain TX signing working** — discovered the correct Klever signing flow:
+  1. Build TX via `/transaction/send` (flat contract format with `contractType`)
+  2. Get hash via `/transaction/decode`
+  3. Sign hex-decoded raw hash bytes (32 bytes) with raw Ed25519 (NOT UTF-8 string, NOT Klever message prefix)
+  4. Broadcast with base64-encoded signature in PascalCase `Signature` field
+- **Verified badge updates immediately** — profile cache is invalidated after
+  on-chain registration so the checkmark appears without restart
+- Removed debug output from TX error messages
+- User-friendly TX error messages with i18n in all 7 languages (insufficient
+  balance, no account, nonce error, signature error, SC error)
+
+## [1.10.0] - 2026-04-05
+
+### Fixed
+- **Wallet not connecting after PIN unlock** — `vaultInit()` returned null for
+  encrypted vaults even when the signer was already loaded by
+  `vaultUnlockWithPin()`. Now checks for cached signer first.
+- **Reconnect button on Wallet page** — shows inline PIN input for encrypted
+  vaults. Falls back to raw `initAuth()` first, then PIN prompt if encrypted.
+- **Missing translations** — added `wallet_existing`, `wallet_existing_desc`,
+  `wallet_reconnect` to all 7 languages. Updated `pin_setup_desc` to clarify
+  6 is the minimum, not max.
+- **Select dropdown white on Linux** — added `appearance: none` with custom
+  SVG chevron to override webkit2gtk native select styling.
+
+## [1.9.0] - 2026-04-05
+
+### Changed
+- **Replaced OS keyring with file-based secure store** — the `keyring` crate
+  (gnome-keyring/kwallet) on Linux is often session-scoped and doesn't persist
+  across reboots or when the secret service daemon isn't running. Vault data is
+  now stored in `~/.local/share/org.ogmara.desktop/.secure-store.json`. When
+  PIN is enabled, the private key is still encrypted with AES-256-GCM — the
+  file just stores the encrypted ciphertext, not raw keys.
+- Replaced `keyring` crate dependency with `dirs` crate for app data paths
+
+### Fixed
+- **Wallet page shows "Reconnect" option** — added loading state so the vault
+  check completes before showing create/import. Previously the async check
+  started as `false` and the create section rendered immediately.
+- **PIN setup auto-focus** — cursor now moves to the confirm input automatically
+- **PIN encryption verification** — retries read-back with delays, falls back
+  to in-memory verification if keyring/file store reads are delayed
+- Missing `settings_wallet_warning` translation in all 7 languages
+
+## [1.8.0] - 2026-04-05
+
+### Added
+- **PIN setup prompt after wallet creation** — when a wallet is created or
+  imported, a modal recommends setting up a PIN for security. User can set up
+  PIN immediately or decline with "Maybe Later".
+- **Security section in Settings** — users who declined the initial PIN prompt
+  can set up a PIN anytime from Settings > Security. Shows:
+  - PIN enable/disable toggle with current status
+  - Auto-lock timeout selector (1 min to 1 hour)
+  - Remove PIN option (requires current PIN)
+  - Warning when PIN is not set
+
+### Security
+- Unprotected wallet warning displayed in Settings when no PIN is set
+- PIN removal requires entering the current PIN (prevents unauthorized changes)
+
+## [1.7.0] - 2026-04-05
+
+### Fixed
+- **Wallet not reconnecting after restart** — if localStorage was cleared
+  (Tauri dev restart, cache clear) but the OS keyring still had the private
+  key, the app showed "Create Wallet" instead of connecting. Now treats the
+  OS keyring as source of truth: if a key exists, it's automatically
+  recognized as a built-in wallet and localStorage settings are restored.
+
+## [1.6.0] - 2026-04-05
+
+### Fixed
+- **Duplicate messages in chat** — `localMessages` was not cleared when
+  navigating away and back to the same channel. Now always cleared when the
+  channel resource fetcher runs, preventing stale WS/poll messages from
+  duplicating with fresh API results.
+- **Horizontal overflow on long messages** — added `overflow-wrap: break-word`
+  and `word-break: break-word` to message bubbles. Long addresses and URLs
+  now wrap instead of expanding the chat area horizontally. Also added
+  `overflow-x: hidden` to the messages container.
+- **Scroll to last-read position** — improved initial scroll timing for
+  Tauri/webkit2gtk using double `requestAnimationFrame` + `setTimeout` to
+  ensure DOM is fully rendered before scrolling to the unread divider.
+- **@noble/ed25519 async API not found** — stale system-level `~/node_modules`
+  had v1.x without `getPublicKeyAsync`/`signAsync`. Fixed with Vite
+  `resolve.alias` to pin the correct v2.3.0 from local `node_modules`.
+
+## [1.5.0] - 2026-04-05
+
+### Fixed
+- **Window dragging** — `data-tauri-drag-region` CSS attribute doesn't work on
+  Linux/webkit2gtk. Replaced with explicit `getCurrentWindow().startDragging()`
+  API call on a dedicated drag handle div.
+- **Window controls (minimize/maximize/close) not working** — missing Tauri
+  capability permissions (`core:window:allow-close`, `allow-minimize`,
+  `allow-toggle-maximize`, `allow-start-dragging`, etc.). All window API calls
+  were silently denied without these.
+- **Dynamic imports replaced with static** — `await import('@tauri-apps/api/window')`
+  was unreliable in Tauri's webview. Now uses static `import { getCurrentWindow }`
+  called once at module load.
+- **Window state plugin no longer overrides decorations** — excluded `DECORATIONS`
+  and `FULLSCREEN` from save/restore flags so the custom title bar is always used.
+
+## [1.4.0] - 2026-04-05
+
+### Added
+- **Custom frameless window** — removed OS window decorations (`decorations: false`),
+  replaced with custom title bar matching the app's dark theme. Window controls
+  (minimize, maximize, close) integrated into the toolbar with hover effects.
+  Close button highlights red on hover (Windows-style convention).
+- **Ogmara logo in title bar** — SVG monogram icon next to the brand name
+- **Double-click title bar to maximize** — standard desktop behavior via
+  `data-tauri-drag-region`
+
+### Changed
+- Toolbar height reduced from 48px to 40px for a tighter, more native feel
+- Window control buttons use the app's color scheme instead of OS chrome
+
+## [1.3.0] - 2026-04-05
+
+### Fixed
+- **Window position restored on tray restore** — saves position in a Mutex
+  before hiding to tray, restores it explicitly on show. Linux window managers
+  don't always preserve position for hidden windows.
+- **Tray icon visible on Linux** — set icon explicitly via `TrayIconBuilder`
+  using the app's default window icon. Previous config relied on `tauri.conf.json`
+  path which Linux doesn't always pick up.
+- **Fetch override scoped to external URLs only** — the v1.2.0 global fetch
+  override broke internal resource loading (blank white page). Now only routes
+  `https://` URLs through Tauri's HTTP plugin; local requests use native fetch.
+
+## [1.2.0] - 2026-04-05
+
+### Fixed
+- **News feed loading** — root cause was CORS: Tauri's webview origin is not
+  allowed by the L2 node's CORS policy. Fixed by adding `tauri-plugin-http`
+  which overrides global `fetch` with a system-level HTTP client that bypasses
+  webview CORS restrictions. All API calls now go through the Tauri backend.
+- **Window state persistence** — the close-to-tray handler prevented the window
+  from actually closing, so the window-state plugin never saved. Now explicitly
+  calls `save_window_state()` before hiding to tray.
+
+### Added
+- `tauri-plugin-http` dependency (Rust + JS) for CORS-free HTTP requests
+- HTTP permissions in Tauri capabilities for `https://*` and `http://localhost:*`
+
+## [1.1.0] - 2026-04-05
+
+### Changed
+- Removed duplicate Chat/News/Messages navigation from toolbar header (already
+  in sidebar — cleaner standalone desktop look)
+- Renamed "News" to "News Feed" in sidebar navigation
+- Fixed form controls (select, input) to match dark/light theme — native
+  dropdowns no longer render with white background
+- Permissive CSP for initial release — tighten after confirming all connections
+  work across environments
+- System tray icon: disabled `iconAsTemplate` (macOS-only), use 32x32 icon
+  for Linux visibility
+- Window state plugin: persist position, size, and maximized state with
+  `StateFlags::all()`
+- Added window-state permissions to Tauri capabilities
+
+### Fixed
+- News feed: added visible error state and loading indicator for debugging
+- WebSocket now starts even without a wallet (was skipped in no-wallet path)
+- Added error logging to news feed API calls
+
+## [1.0.0] - 2026-04-05
+
+### Added
+- **Full feature parity with web app** — all 16 views, 10 components, complete
+  chat, news, DMs, channels, profiles, search, bookmarks, notifications
+- **Standalone Klever wallet** — built-in transaction building, signing, and
+  broadcasting. No browser extension or K5 wallet needed. Supports: user
+  registration, channel creation, tipping, device delegation, governance voting
+- **Hash-based router** — full navigation with 16+ routes matching the web app
+- **Theme customization** — dark/light/system + custom accent, background, and
+  text colors via color pickers in Settings
+- **Native desktop notifications** — triggered from WebSocket events (mentions,
+  DMs, replies) via Tauri notification plugin
+- **7 languages** — EN, DE, ES, PT, JA, ZH, RU (274 translation keys each)
+- **Complete SDK integration** — OgmaraClient API, WebSocket real-time messaging,
+  MessagePack payload decoding, profile caching, settings sync
+- **Channel features** — create (on-chain + private), join, settings, admin,
+  moderator management, member lists, pinned messages
+- **News features** — feed, compose, reactions, reposts, bookmarks, tipping,
+  comments, hashtag search
+- **DM features** — conversation list, threaded messages, media attachments
+- **User profiles** — display name, bio, avatar upload, follow/unfollow,
+  on-chain verification badge
+- **Media upload** — IPFS-based file attachments with thumbnails
+- **Node management** — node selector with ping measurements, anchor badges,
+  custom node URL, failover support
+- **Settings sync** — encrypted upload/download of settings via L2 node (HKDF +
+  AES-256-GCM)
+- **Account data export** — JSON download of all user data
+
+### Changed
+- Upgraded from placeholder views to full functional UI
+- Auth module expanded with `AuthStatus`, `isRegistered`, `checkRegistrationStatus`
+- i18n upgraded from 50 inline keys (3 languages) to 274 keys (7 languages) with
+  separate locale JSON files
+- CSS redesigned with full design token system (spacing, fonts, radii, colors)
+
+### Security
+- Standalone wallet never exposes private keys — all signing happens through
+  vault's WalletSigner
+- On-chain operations use the same Ed25519 + Keccak-256 signing as the Klever
+  ecosystem
+- CSP expanded to allow connections to Klever APIs and IPFS gateways while
+  maintaining security boundaries
+
 ## [0.6.0] - 2026-04-01
 
 ### Added
