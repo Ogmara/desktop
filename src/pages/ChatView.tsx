@@ -66,6 +66,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   const [replyTo, setReplyTo] = createSignal<{ msgId: string; author: string; preview: string } | null>(null);
   const [localMessages, setLocalMessages] = createSignal<any[]>([]);
   const [sending, setSending] = createSignal(false);
+  const [chatReady, setChatReady] = createSignal(false);
   const [showEmoji, setShowEmoji] = createSignal(false);
   const [profiles, setProfiles] = createSignal<Map<string, CachedProfile>>(new Map());
   const [userMenu, setUserMenu] = createSignal<{ x: number; y: number; address: string; msgId: string } | null>(null);
@@ -150,6 +151,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       // Always clear local messages when fetching — prevents duplicates
       // when navigating away and back to the same channel
       setLocalMessages([]);
+      setChatReady(false);
       lastChannelId = channelId;
       prevMsgCount = 0;
       initialLoad = true;
@@ -383,20 +385,25 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       initialLoad = false;
       if (!wasMore && !isFirst) return; // only scroll on new messages, not removals
       if (isFirst) {
-        // Initial load: wait for SolidJS to render all <For> items into the DOM
-        // Wait for DOM to render all messages before scrolling.
-        // Use two rAF frames + setTimeout for reliable rendering in Tauri/webkit2gtk.
+        // Initial load: wait for SolidJS to render all <For> items into the DOM.
+        // Webkit2gtk needs extra time — use multiple rAF + longer timeout.
+        const doScroll = () => {
+          if (!messagesRef) return;
+          const divider = messagesRef.querySelector('.unread-divider');
+          if (divider) {
+            divider.scrollIntoView({ block: 'start' });
+          } else {
+            scrollToBottom();
+          }
+        };
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             setTimeout(() => {
-              if (!messagesRef) return;
-              const divider = messagesRef.querySelector('.unread-divider');
-              if (divider) {
-                divider.scrollIntoView({ block: 'start' });
-              } else {
-                scrollToBottom();
-              }
-            }, 50);
+              doScroll();
+              setChatReady(true);
+              // Second attempt after images/content may have loaded
+              setTimeout(doScroll, 200);
+            }, 100);
           });
         });
       } else {
@@ -442,8 +449,9 @@ export const ChatView: Component<ChatViewProps> = (props) => {
         msg_id: `local-${Date.now()}`,
         author: addr,
         timestamp: Date.now(),
-        payload: text, // string payloads are handled by getPayloadContent
+        payload: text,
         _optimistic: true,
+        _attachments: atts.length > 0 ? atts : undefined,
       }]);
 
       setMessageInput('');
@@ -602,7 +610,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
           </button>
         </div>
 
-        <div class="chat-messages" ref={messagesRef}>
+        <div class="chat-messages" ref={messagesRef} style={{ opacity: chatReady() ? '1' : '0' }}>
           <Show
             when={allMessages().length > 0}
             fallback={<div class="chat-empty"><p>{t('chat_no_messages')}</p></div>}
@@ -700,7 +708,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                             </div>
                           }
                         >
-                          <div class="message-body"><FormattedText content={getPayloadContent(msg.payload)} attachments={getPayloadAttachments(msg.payload)} /></div>
+                          <div class="message-body"><FormattedText content={getPayloadContent(msg.payload)} attachments={msg._attachments || getPayloadAttachments(msg.payload)} /></div>
                         </Show>
                       </Show>
                       {/* Floating emoji bar on hover */}
@@ -781,25 +789,71 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                 }
               }}
               onPaste={(e) => {
+                if (!walletAddress()) return;
+                // Try web API first (clipboardData.items / .files)
+                let file: File | null = null;
                 const items = e.clipboardData?.items;
-                if (!items || !walletAddress()) return;
-                const imageItem = Array.from(items).find((i) => i.type.startsWith('image/'));
-                if (!imageItem) return;
-                // Must preventDefault synchronously before browser inserts text
-                e.preventDefault();
-                const file = imageItem.getAsFile();
-                if (!file) return;
-                // Upload asynchronously after preventing default
-                getClient().uploadMedia(file, `paste-${Date.now()}.${file.type.split('/')[1] || 'png'}`)
-                  .then((result) => {
+                if (items) {
+                  const imageItem = Array.from(items).find((i) => i.type.startsWith('image/'));
+                  if (imageItem) file = imageItem.getAsFile();
+                }
+                if (!file && e.clipboardData?.files) {
+                  file = Array.from(e.clipboardData.files).find((f) => f.type.startsWith('image/')) ?? null;
+                }
+                if (file) {
+                  e.preventDefault();
+                  const filename = `paste-${Date.now()}.${file.type.split('/')[1] || 'png'}`;
+                  getClient().uploadMedia(file, filename)
+                    .then((result) => {
+                      setAttachments((prev) => [...prev, {
+                        cid: result.cid,
+                        mime_type: file!.type,
+                        size_bytes: file!.size,
+                        filename,
+                        thumbnail_cid: result.thumbnail_cid,
+                      }]);
+                    }).catch((err: any) => {
+                      setSendError(err?.message || 'Upload failed');
+                      setTimeout(() => setSendError(null), 6000);
+                    });
+                  return;
+                }
+                // Tauri clipboard plugin fallback for webkit2gtk
+                // Don't preventDefault here — if clipboard has no image, text paste must work
+                (async () => {
+                  try {
+                    const { readImage } = await import('@tauri-apps/plugin-clipboard-manager');
+                    const img = await readImage();
+                    const { width, height } = await img.size();
+                    if (width > 4096 || height > 4096) {
+                      setSendError('Image too large (max 4096x4096)');
+                      setTimeout(() => setSendError(null), 4000);
+                      return;
+                    }
+                    const rgba = await img.rgba();
+                    // Convert RGBA to PNG via canvas
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d')!;
+                    const imageData = new ImageData(new Uint8ClampedArray(rgba), width, height);
+                    ctx.putImageData(imageData, 0, 0);
+                    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+                    if (!blob) return;
+                    const pasteFile = new File([blob], `paste-${Date.now()}.png`, { type: 'image/png' });
+                    const result = await getClient().uploadMedia(pasteFile, pasteFile.name);
                     setAttachments((prev) => [...prev, {
                       cid: result.cid,
-                      mime_type: file.type,
-                      size_bytes: file.size,
-                      filename: `paste-${Date.now()}.${file.type.split('/')[1] || 'png'}`,
+                      mime_type: 'image/png',
+                      size_bytes: pasteFile.size,
+                      filename: pasteFile.name,
                       thumbnail_cid: result.thumbnail_cid,
                     }]);
-                  }).catch(() => { /* upload failed */ });
+                  } catch (err: any) {
+                    setSendError(`Paste failed: ${err?.message || err}`);
+                    setTimeout(() => setSendError(null), 6000);
+                  }
+                })();
               }}
               disabled={sending() || !walletAddress()}
             />

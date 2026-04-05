@@ -365,17 +365,23 @@ export const SettingsView: Component = () => {
               setExportStatus(t('settings_export_downloading'));
               try {
                 const client = getClient();
-                const data = await client.exportAccount();
-                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `ogmara-export-${walletAddress()?.slice(0, 8)}.json`;
-                a.click();
-                URL.revokeObjectURL(url);
-                setExportStatus('');
+                const nodeUrl = (client as any).nodeUrl;
+                const signer = (client as any).signer;
+                const authHeaders = await signer.signRequest('GET', '/api/v1/account/export');
+                setExportStatus('Fetching...');
+                const { invoke } = await import('@tauri-apps/api/core');
+                // Fetch via Rust — Tauri's HTTP plugin can't read large response bodies
+                const json = await invoke('fetch_and_save', {
+                  url: `${nodeUrl}/api/v1/account/export`,
+                  headers: authHeaders,
+                }) as string;
+                setExportStatus('Saving file...');
+                const filename = `ogmara-export-${walletAddress()?.slice(0, 8)}.json`;
+                const saved = await invoke('save_export_file', { filename, content: json });
+                setExportStatus(saved ? t('settings_export_success') || 'Export saved!' : '');
               } catch (e: any) {
-                setExportStatus(e?.message || 'Export failed');
+                const url = (client as any)?.nodeUrl || '?';
+                setExportStatus(`Error: ${e?.message || e}\nURL: ${url}/api/v1/account/export\nStack: ${e?.stack?.slice(0, 200) || 'none'}`);
               }
             }}
           >
@@ -433,7 +439,7 @@ export const SettingsView: Component = () => {
         .settings-wallet-btn { padding: var(--spacing-sm) var(--spacing-md); border-radius: var(--radius-md); font-weight: 600; font-size: var(--font-size-sm); background: var(--color-bg-tertiary); color: var(--color-text-primary); }
         .settings-wallet-btn:hover { background: var(--color-accent-primary); color: var(--color-text-inverse); }
         .settings-sync-row { display: flex; gap: var(--spacing-sm); margin-bottom: var(--spacing-sm); }
-        .settings-status { font-size: var(--font-size-sm); color: var(--color-text-secondary); margin-top: var(--spacing-xs); }
+        .settings-status { font-size: var(--font-size-sm); color: var(--color-text-secondary); margin-top: var(--spacing-xs); white-space: pre-wrap; word-break: break-all; }
         .settings-color-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--spacing-sm); }
         .settings-color-row { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-sm); }
         .settings-color-row label { font-size: var(--font-size-sm); color: var(--color-text-primary); }
