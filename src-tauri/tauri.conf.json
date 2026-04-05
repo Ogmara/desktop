@@ -38,7 +38,8 @@
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
-      "icons/128x128@2x.png"
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
     ],
     "shortDescription": "Decentralized chat and news on Klever blockchain",
     "longDescription": "Ogmara is a decentralized chat and news platform built on Klever blockchain. Own your identity, your data, and your conversations.",
@@ -47,6 +48,11 @@
     "linux": {
       "deb": {
         "depends": []
+      }
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
       }
     }
   },

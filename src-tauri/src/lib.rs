@@ -166,16 +166,24 @@ async fn send_notification(
 }
 
 /// Tauri command: open a URL in the system default browser.
+/// Uses platform-specific commands: xdg-open (Linux), open (macOS), cmd (Windows).
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     // Only allow https:// URLs
     if !url.starts_with("https://") {
         return Err("only https:// URLs are allowed".into());
     }
-    std::process::Command::new("xdg-open")
-        .arg(&url)
-        .spawn()
-        .map_err(|e| format!("failed to open URL: {}", e))?;
+
+    #[cfg(target_os = "linux")]
+    let result = std::process::Command::new("xdg-open").arg(&url).spawn();
+
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(&url).spawn();
+
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
+
+    result.map_err(|e| format!("failed to open URL: {}", e))?;
     Ok(())
 }
 
