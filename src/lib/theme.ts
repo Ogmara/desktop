@@ -1,14 +1,25 @@
 /**
- * Theme management — dark/light/system with custom color overrides.
+ * Theme management — dark/light/system with custom color overrides and design styles.
  *
  * Applied before first paint to prevent flash (spec 06-frontend.md 3.3).
  * Desktop extends the web theme with user-customizable accent and background colors.
+ *
+ * Design styles control the visual language (shapes, shadows, effects) independently
+ * from the color theme (light/dark). Available styles:
+ * - classic: Original flat design
+ * - glassmorphism: Frosted glass panels, gradient background, glow accents
+ * - elevated: Layered shadows, bold radius, clear depth hierarchy
+ * - minimal: Pill shapes, tight palette, content-first
  */
 
 export type Theme = 'light' | 'dark' | 'system';
+export type DesignStyle = 'classic' | 'glassmorphism' | 'elevated' | 'minimal';
+
+export const DESIGN_STYLES: DesignStyle[] = ['glassmorphism', 'elevated', 'minimal', 'classic'];
 
 const STORAGE_KEY = 'ogmara.theme';
 const CUSTOM_THEME_KEY = 'ogmara.customTheme';
+const STYLE_KEY = 'ogmara.designStyle';
 
 /** Customizable color tokens — user can override these in Settings. */
 export interface CustomTheme {
@@ -38,6 +49,21 @@ const TOKEN_MAP: Record<keyof CustomTheme, string> = {
   textPrimary: '--color-text-primary',
   textSecondary: '--color-text-secondary',
 };
+
+/** Get the current design style (validated against known values). */
+export function getDesignStyle(): DesignStyle {
+  const stored = localStorage.getItem(STYLE_KEY);
+  if (stored && DESIGN_STYLES.includes(stored as DesignStyle)) {
+    return stored as DesignStyle;
+  }
+  return 'glassmorphism';
+}
+
+/** Set the design style and apply it. */
+export function setDesignStyle(style: DesignStyle): void {
+  localStorage.setItem(STYLE_KEY, style);
+  applyDesignStyle(style);
+}
 
 /** Get the current theme preference. */
 export function getTheme(): Theme {
@@ -79,6 +105,7 @@ export function clearCustomTheme(): void {
 export function initTheme(): void {
   applyTheme(getTheme());
   applyCustomColors(getCustomTheme());
+  applyDesignStyle(getDesignStyle());
 
   // Listen for system theme changes
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
@@ -93,6 +120,15 @@ function applyTheme(theme: Theme): void {
     ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
     : theme;
   document.documentElement.setAttribute('data-theme', resolved);
+}
+
+/** Apply the design style as a data attribute on <html>. */
+function applyDesignStyle(style: DesignStyle): void {
+  if (style === 'classic') {
+    document.documentElement.removeAttribute('data-style');
+  } else {
+    document.documentElement.setAttribute('data-style', style);
+  }
 }
 
 /** Apply custom color overrides as inline CSS variables on :root. */

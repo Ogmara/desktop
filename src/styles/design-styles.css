@@ -1,0 +1,682 @@
+/* Ogmara Design Styles
+ * Each style overrides CSS variables and component classes via [data-style="..."].
+ * Classic = no attribute (default CSS in global.css applies).
+ *
+ * Styles:
+ * 1. glassmorphism — frosted glass, gradient bg, glow accents
+ * 2. elevated — layered shadows, bold radius, depth hierarchy
+ * 3. minimal — pill shapes, tight palette, content-first
+ */
+
+/* ==========================================================================
+   GLASSMORPHISM
+   ========================================================================== */
+
+[data-style="glassmorphism"] {
+  /* Design tokens */
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 20px;
+
+  /* Glass effect tokens (used by components below) */
+  --glass-bg: rgba(255, 255, 255, 0.06);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-blur: 20px;
+  --glass-glow: rgba(162, 155, 254, 0.25);
+}
+
+/* Gradient background with animated blobs */
+[data-style="glassmorphism"] #root {
+  background: linear-gradient(135deg, #0f0a1a 0%, #1a1035 50%, #0d1b2a 100%);
+}
+
+[data-style="glassmorphism"] #root::before,
+[data-style="glassmorphism"] #root::after {
+  content: '';
+  position: fixed;
+  border-radius: 50%;
+  filter: blur(120px);
+  opacity: 0.12;
+  z-index: 0;
+  pointer-events: none;
+  animation: glass-float 25s ease-in-out infinite;
+}
+[data-style="glassmorphism"] #root::before {
+  width: 500px; height: 500px;
+  background: #7c3aed;
+  top: -150px; left: -100px;
+}
+[data-style="glassmorphism"] #root::after {
+  width: 400px; height: 400px;
+  background: #2563eb;
+  bottom: -150px; right: -100px;
+  animation-delay: -12s;
+}
+@keyframes glass-float {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(30px, 20px); }
+}
+
+/* Toolbar — glass panel */
+[data-style="glassmorphism"] .toolbar {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-bottom-color: var(--glass-border);
+}
+
+/* Toolbar nav buttons — pill group */
+[data-style="glassmorphism"] .toolbar-nav {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 3px;
+  gap: 2px;
+}
+[data-style="glassmorphism"] .toolbar-btn {
+  border-radius: 10px;
+  padding: var(--spacing-xs) 16px;
+  transition: all 0.2s;
+}
+[data-style="glassmorphism"] .toolbar-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+[data-style="glassmorphism"] .toolbar-nav button.active {
+  background: var(--color-accent-primary);
+  color: white;
+  box-shadow: 0 2px 12px var(--glass-glow);
+}
+
+/* Sidebar — glass panel */
+[data-style="glassmorphism"] .sidebar {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-right-color: var(--glass-border);
+}
+[data-style="glassmorphism"] .sidebar-item:hover,
+[data-style="glassmorphism"] .sidebar-nav-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+[data-style="glassmorphism"] .sidebar-item.active {
+  background: rgba(162, 155, 254, 0.12);
+  border: 1px solid rgba(162, 155, 254, 0.2);
+}
+[data-style="glassmorphism"] .sidebar-divider {
+  background: var(--glass-border);
+}
+
+/* Chat header — glass */
+[data-style="glassmorphism"] .channel-bar {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-bottom-color: var(--glass-border);
+}
+
+/* Chat messages — glass-tinted bubbles (no backdrop-filter for scroll perf) */
+[data-style="glassmorphism"] .message {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--glass-border);
+  border-radius: var(--radius-md);
+}
+[data-style="glassmorphism"] .message.own {
+  background: linear-gradient(135deg, rgba(162, 155, 254, 0.18), rgba(96, 165, 250, 0.12));
+  border-color: rgba(162, 155, 254, 0.25);
+}
+
+/* Date separators */
+[data-style="glassmorphism"] .date-separator::before,
+[data-style="glassmorphism"] .date-separator::after {
+  border-top-color: var(--glass-border);
+}
+
+/* Compose area — glass */
+[data-style="glassmorphism"] .chat-input-area {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-top-color: var(--glass-border);
+}
+[data-style="glassmorphism"] .chat-textarea {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--glass-border);
+  border-radius: var(--radius-md);
+}
+[data-style="glassmorphism"] .chat-textarea:focus {
+  border-color: var(--color-accent-primary);
+  box-shadow: 0 0 0 3px var(--glass-glow);
+}
+[data-style="glassmorphism"] .send-btn {
+  background: linear-gradient(135deg, var(--color-accent-primary), #818cf8);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 16px var(--glass-glow);
+  transition: all 0.2s;
+}
+[data-style="glassmorphism"] .send-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px var(--glass-glow);
+  opacity: 1;
+}
+
+/* News cards — glass */
+[data-style="glassmorphism"] .news-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-color: var(--glass-border);
+  border-radius: var(--radius-lg);
+  transition: all 0.3s;
+}
+[data-style="glassmorphism"] .news-card:hover {
+  border-color: rgba(162, 155, 254, 0.3);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  transform: translateY(-2px);
+}
+[data-style="glassmorphism"] .news-actions {
+  border-top-color: var(--glass-border);
+}
+[data-style="glassmorphism"] .action-btn:hover,
+[data-style="glassmorphism"] .tip-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-sm);
+}
+
+/* New post button — gradient glow */
+[data-style="glassmorphism"] .new-post-btn {
+  background: linear-gradient(135deg, var(--color-accent-primary), #818cf8);
+  box-shadow: 0 4px 16px var(--glass-glow);
+  border-radius: var(--radius-md);
+  transition: all 0.2s;
+}
+[data-style="glassmorphism"] .new-post-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px var(--glass-glow);
+  opacity: 1;
+}
+
+/* Primary button — gradient glow */
+[data-style="glassmorphism"] .btn-primary {
+  background: linear-gradient(135deg, var(--color-accent-primary), #818cf8);
+  box-shadow: 0 2px 12px var(--glass-glow);
+  border-radius: var(--radius-md);
+}
+
+/* Status bar — glass */
+[data-style="glassmorphism"] .status-bar {
+  background: rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-top-color: var(--glass-border);
+}
+
+/* Settings sections — glass */
+[data-style="glassmorphism"] .settings-section {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md) 20px;
+}
+
+/* Context menus — glass */
+[data-style="glassmorphism"] .channel-context-menu,
+[data-style="glassmorphism"] .user-context-menu {
+  background: rgba(20, 20, 35, 0.85);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-color: var(--glass-border);
+  border-radius: var(--radius-md);
+}
+
+/* Reply/edit indicators — glass */
+[data-style="glassmorphism"] .reply-indicator,
+[data-style="glassmorphism"] .edit-indicator {
+  background: var(--glass-bg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-top-color: var(--glass-border);
+}
+
+/* Scrollbar — subtle */
+[data-style="glassmorphism"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+[data-style="glassmorphism"] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Unread badge — glow */
+[data-style="glassmorphism"] .unread-badge {
+  box-shadow: 0 0 8px var(--glass-glow);
+}
+
+/* DM conversation — glass-tinted bubbles */
+[data-style="glassmorphism"] .dm-message {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--glass-border);
+}
+[data-style="glassmorphism"] .dm-message.own {
+  background: linear-gradient(135deg, rgba(162, 155, 254, 0.18), rgba(96, 165, 250, 0.12));
+  border-color: rgba(162, 155, 254, 0.25);
+}
+
+/* Lock screen — glass card */
+[data-style="glassmorphism"] .lock-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  padding: 48px;
+}
+
+/* Bookmarks, Search, Notifications — glass cards */
+[data-style="glassmorphism"] .bookmark-card,
+[data-style="glassmorphism"] .search-result,
+[data-style="glassmorphism"] .notif-item {
+  background: var(--glass-bg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-color: var(--glass-border);
+  border-radius: var(--radius-md);
+}
+
+/* Light theme adjustments for glassmorphism */
+[data-style="glassmorphism"][data-theme="light"] {
+  --glass-bg: rgba(255, 255, 255, 0.45);
+  --glass-border: rgba(255, 255, 255, 0.6);
+  --glass-glow: rgba(108, 92, 231, 0.2);
+}
+[data-style="glassmorphism"][data-theme="light"] #root {
+  background: linear-gradient(135deg, #e8e0f0 0%, #d5cce8 50%, #c5d5e8 100%);
+}
+[data-style="glassmorphism"][data-theme="light"] #root::before {
+  background: #a78bfa;
+  opacity: 0.15;
+}
+[data-style="glassmorphism"][data-theme="light"] #root::after {
+  background: #60a5fa;
+  opacity: 0.15;
+}
+
+
+/* ==========================================================================
+   ELEVATED CARDS
+   ========================================================================== */
+
+[data-style="elevated"] {
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.15);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.2);
+
+  --color-bg-primary: #0c0c14;
+  --color-bg-secondary: #14141f;
+  --color-bg-tertiary: #1c1c2b;
+  --color-border: rgba(255, 255, 255, 0.06);
+}
+
+/* Toolbar */
+[data-style="elevated"] .toolbar {
+  background: var(--color-bg-secondary);
+  box-shadow: var(--shadow-sm);
+}
+[data-style="elevated"] .toolbar-nav {
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-md);
+  padding: 3px;
+}
+[data-style="elevated"] .toolbar-btn {
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  transition: all 0.2s;
+}
+[data-style="elevated"] .toolbar-nav button.active {
+  background: linear-gradient(135deg, var(--color-accent-primary), #6366f1);
+  color: white;
+  box-shadow: var(--shadow-md);
+}
+
+/* Sidebar */
+[data-style="elevated"] .sidebar {
+  background: var(--color-bg-secondary);
+}
+[data-style="elevated"] .sidebar-item.active {
+  background: rgba(162, 155, 254, 0.1);
+  box-shadow: inset 3px 0 0 var(--color-accent-primary);
+}
+[data-style="elevated"] .sidebar-add-btn:hover {
+  background: var(--color-accent-primary);
+  color: white;
+  box-shadow: 0 0 12px rgba(162, 155, 254, 0.25);
+}
+
+/* Unread badge — glow */
+[data-style="elevated"] .unread-badge {
+  box-shadow: 0 2px 8px rgba(162, 155, 254, 0.25);
+}
+
+/* Messages — elevated bubbles */
+[data-style="elevated"] .message {
+  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-lg);
+  border-color: var(--color-border);
+}
+[data-style="elevated"] .message.own {
+  border-color: rgba(162, 155, 254, 0.12);
+  box-shadow: var(--shadow-md);
+}
+
+/* Compose — elevated input */
+[data-style="elevated"] .chat-textarea {
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-lg);
+  border-color: rgba(255, 255, 255, 0.08);
+  transition: all 0.2s;
+}
+[data-style="elevated"] .chat-textarea:focus {
+  border-color: var(--color-accent-primary);
+  box-shadow: 0 0 0 3px rgba(162, 155, 254, 0.15);
+}
+[data-style="elevated"] .send-btn {
+  background: linear-gradient(135deg, var(--color-accent-primary), #6366f1);
+  box-shadow: var(--shadow-md);
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  transition: all 0.2s;
+}
+[data-style="elevated"] .send-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lg);
+  opacity: 1;
+}
+
+/* News cards — elevated */
+[data-style="elevated"] .news-card {
+  background: var(--color-bg-secondary);
+  border-color: rgba(255, 255, 255, 0.04);
+  border-radius: 24px;
+  box-shadow: var(--shadow-md);
+  transition: all 0.3s;
+}
+[data-style="elevated"] .news-card:hover {
+  box-shadow: var(--shadow-xl);
+  transform: translateY(-3px);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+[data-style="elevated"] .news-actions {
+  border-top-color: rgba(255, 255, 255, 0.04);
+}
+[data-style="elevated"] .action-btn:hover,
+[data-style="elevated"] .tip-btn:hover {
+  background: rgba(162, 155, 254, 0.1);
+  border-radius: 8px;
+}
+
+/* New post & primary buttons — gradient */
+[data-style="elevated"] .new-post-btn,
+[data-style="elevated"] .btn-primary {
+  background: linear-gradient(135deg, var(--color-accent-primary), #6366f1);
+  box-shadow: var(--shadow-md);
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  transition: all 0.2s;
+}
+[data-style="elevated"] .new-post-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lg);
+  opacity: 1;
+}
+
+/* Status bar */
+[data-style="elevated"] .status-bar {
+  background: var(--color-bg-secondary);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Settings — elevated sections */
+[data-style="elevated"] .settings-section {
+  background: var(--color-bg-secondary);
+  border-color: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--spacing-md) 20px;
+}
+
+/* Context menus — elevated */
+[data-style="elevated"] .channel-context-menu,
+[data-style="elevated"] .user-context-menu {
+  background: var(--color-bg-secondary);
+  box-shadow: var(--shadow-lg);
+  border-color: rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-md);
+}
+
+/* DM messages */
+[data-style="elevated"] .dm-message {
+  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-lg);
+}
+[data-style="elevated"] .dm-message.own {
+  box-shadow: var(--shadow-md);
+}
+
+/* Scrollbar */
+[data-style="elevated"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+[data-style="elevated"] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* Light theme adjustments */
+[data-style="elevated"][data-theme="light"] {
+  --color-bg-primary: #f0f0f5;
+  --color-bg-secondary: #ffffff;
+  --color-bg-tertiary: #f5f5fa;
+  --color-border: rgba(0, 0, 0, 0.06);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+
+/* ==========================================================================
+   CLEAN MINIMAL
+   ========================================================================== */
+
+[data-style="minimal"] {
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+
+  --color-bg-primary: #101018;
+  --color-bg-secondary: #16161f;
+  --color-bg-tertiary: #1e1e2a;
+  --color-border: rgba(255, 255, 255, 0.05);
+  --color-text-secondary: #8888a0;
+}
+
+/* Toolbar — clean, minimal */
+[data-style="minimal"] .toolbar {
+  background: var(--color-bg-secondary);
+  border-bottom-color: var(--color-border);
+}
+[data-style="minimal"] .toolbar-nav {
+  gap: 4px;
+}
+[data-style="minimal"] .toolbar-btn {
+  border-radius: var(--radius-full);
+  padding: var(--spacing-xs) 16px;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+[data-style="minimal"] .toolbar-nav button.active {
+  background: var(--color-accent-primary);
+  color: white;
+  border-radius: var(--radius-full);
+}
+[data-style="minimal"] .toolbar-btn:hover {
+  background: var(--color-bg-tertiary);
+}
+
+/* Sidebar — clean */
+[data-style="minimal"] .sidebar {
+  background: var(--color-bg-secondary);
+}
+[data-style="minimal"] .sidebar-item.active {
+  background: rgba(162, 155, 254, 0.08);
+  color: var(--color-accent-primary);
+}
+[data-style="minimal"] .unread-badge {
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Chat messages — minimal bubbles */
+[data-style="minimal"] .message {
+  border-radius: 4px 18px 18px 18px;
+  background: var(--color-bg-tertiary);
+  border: none;
+}
+[data-style="minimal"] .message.own {
+  border-radius: 18px 4px 18px 18px;
+  background: #2a2550;
+  border: 1px solid rgba(162, 155, 254, 0.15);
+}
+
+/* Date separators — pill style */
+[data-style="minimal"] .date-separator::before,
+[data-style="minimal"] .date-separator::after {
+  display: none;
+}
+[data-style="minimal"] .date-separator {
+  justify-content: center;
+}
+[data-style="minimal"] .date-separator-label {
+  background: var(--color-bg-tertiary);
+  padding: 3px 14px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+}
+
+/* Compose — minimal pill input */
+[data-style="minimal"] .chat-textarea {
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+[data-style="minimal"] .chat-textarea:focus {
+  border-color: rgba(162, 155, 254, 0.35);
+}
+[data-style="minimal"] .send-btn {
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  transition: all 0.15s;
+}
+[data-style="minimal"] .send-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(162, 155, 254, 0.25);
+  opacity: 1;
+}
+
+/* News cards — minimal clean */
+[data-style="minimal"] .news-card {
+  background: var(--color-bg-secondary);
+  border-color: var(--color-border);
+  border-radius: var(--radius-md);
+  transition: border-color 0.2s;
+}
+[data-style="minimal"] .news-card:hover {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+[data-style="minimal"] .action-btn,
+[data-style="minimal"] .tip-btn {
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
+  transition: all 0.15s;
+}
+[data-style="minimal"] .action-btn:hover,
+[data-style="minimal"] .tip-btn:hover {
+  background: rgba(162, 155, 254, 0.08);
+}
+
+/* New post button — pill */
+[data-style="minimal"] .new-post-btn,
+[data-style="minimal"] .btn-primary {
+  border-radius: var(--radius-full);
+  transition: all 0.15s;
+}
+[data-style="minimal"] .new-post-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(162, 155, 254, 0.2);
+  opacity: 1;
+}
+
+/* Settings — minimal sections */
+[data-style="minimal"] .settings-section {
+  background: var(--color-bg-secondary);
+  border-color: var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+/* Context menus — minimal */
+[data-style="minimal"] .channel-context-menu,
+[data-style="minimal"] .user-context-menu {
+  border-radius: var(--radius-md);
+  border-color: var(--color-border);
+}
+
+/* DM messages — minimal bubbles */
+[data-style="minimal"] .dm-message {
+  border-radius: 4px 18px 18px 18px;
+  border: none;
+}
+[data-style="minimal"] .dm-message.own {
+  border-radius: 18px 4px 18px 18px;
+  background: #2a2550;
+}
+
+/* Scrollbar — thinner */
+[data-style="minimal"] ::-webkit-scrollbar {
+  width: 4px;
+}
+[data-style="minimal"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+[data-style="minimal"] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* Light theme adjustments */
+[data-style="minimal"][data-theme="light"] {
+  --color-bg-primary: #fafafa;
+  --color-bg-secondary: #ffffff;
+  --color-bg-tertiary: #f0f0f5;
+  --color-border: rgba(0, 0, 0, 0.06);
+  --color-text-secondary: #6b6b80;
+}
+[data-style="minimal"][data-theme="light"] .message.own {
+  background: #ede9fe;
+  border-color: rgba(108, 92, 231, 0.2);
+}
+[data-style="minimal"][data-theme="light"] .dm-message.own {
+  background: #ede9fe;
+}
