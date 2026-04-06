@@ -44,12 +44,15 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
   };
 
   const handleJoin = async () => {
-    if (!walletAddress()) { navigate('/wallet'); return; }
     setJoining(true);
     setError('');
     try {
-      const client = getClient();
-      await client.joinChannel(channelIdNum());
+      // Authenticated users: send join envelope so the node tracks membership
+      if (walletAddress()) {
+        const client = getClient();
+        await client.joinChannel(channelIdNum());
+      }
+      // Add to local sidebar (works for both authenticated and anonymous users)
       addJoinedChannel(channelIdNum());
       window.dispatchEvent(new Event('ogmara:channels-changed'));
       navigate(`/chat/${channelIdNum()}`);
@@ -88,12 +91,13 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
             <p class="join-private-hint">{t('channel_private_invite_link')}</p>
           </Show>
 
-          <Show when={authStatus() !== 'ready'}>
+          {/* Private channels require authentication; public channels can be joined anonymously */}
+          <Show when={isPrivate() && authStatus() !== 'ready'}>
             <button class="join-btn" onClick={() => navigate('/wallet')}>
               {t('auth_connect_prompt')}
             </button>
           </Show>
-          <Show when={authStatus() === 'ready'}>
+          <Show when={!isPrivate() || authStatus() === 'ready'}>
             <button
               class="join-btn"
               onClick={handleJoin}

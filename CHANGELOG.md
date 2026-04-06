@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - New users no longer see all public channels on first load — only the default
   "ogmara" channel is shown. Other channels appear after joining via Search.
+- Anonymous users can now join and view public channels without connecting a
+  wallet. Only private channels require authentication.
 
 ## [1.13.0] - 2026-04-05
 
