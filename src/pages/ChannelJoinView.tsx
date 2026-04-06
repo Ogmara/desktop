@@ -47,12 +47,18 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
     setJoining(true);
     setError('');
     try {
-      // Authenticated users: send join envelope so the node tracks membership
+      // Authenticated users: send join envelope so the node tracks membership.
+      // For public channels this is best-effort — the channel is readable without it.
       if (walletAddress()) {
-        const client = getClient();
-        await client.joinChannel(channelIdNum());
+        try {
+          const client = getClient();
+          await client.joinChannel(channelIdNum());
+        } catch {
+          // Non-critical for public channels — user can still read messages
+          if (isPrivate()) throw new Error('Failed to join private channel');
+        }
       }
-      // Add to local sidebar (works for both authenticated and anonymous users)
+      // Add to local sidebar and navigate
       addJoinedChannel(channelIdNum());
       window.dispatchEvent(new Event('ogmara:channels-changed'));
       navigate(`/chat/${channelIdNum()}`);
