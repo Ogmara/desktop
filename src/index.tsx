@@ -8,6 +8,7 @@ import { setContractAddress, setKleverNetwork } from './lib/klever';
 import { getClient } from './lib/api';
 import { getSetting } from './lib/settings';
 import './styles/global.css';
+import './styles/design-styles.css';
 
 // Override global fetch for external URLs only (bypasses CORS for API calls).
 // Internal/local requests (Vite HMR, local assets) use the original browser fetch.
