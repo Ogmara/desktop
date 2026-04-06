@@ -62,11 +62,13 @@ function syncJoinedWithApi(apiChannels: { channel_id: number; channel_type: numb
   let changed = false;
 
   if (!storageInitialized() && apiChannels.length > 0) {
-    // First-time migration: seed with all visible channels
-    for (const ch of apiChannels) {
-      current.add(ch.channel_id);
+    // First-time: only seed the default "ogmara" channel, not all channels.
+    // Users discover and join other channels via Search.
+    const defaultCh = apiChannels.find((ch) => ch.slug === DEFAULT_CHANNEL_SLUG);
+    if (defaultCh) {
+      current.add(defaultCh.channel_id);
+      changed = true;
     }
-    changed = true;
   } else {
     // Auto-add private channels the API returns (user must be a member)
     for (const ch of apiChannels) {
@@ -300,7 +302,9 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
 
   // Listen for channel list changes (create/leave/delete)
   if (typeof window !== 'undefined') {
-    window.addEventListener('ogmara:channels-changed', () => setChannelVersion(v => v + 1));
+    const onChannelsChanged = () => setChannelVersion(v => v + 1);
+    window.addEventListener('ogmara:channels-changed', onChannelsChanged);
+    onCleanup(() => window.removeEventListener('ogmara:channels-changed', onChannelsChanged));
   }
 
   // Poll unread counts + refresh channel list every 30 seconds when authenticated
