@@ -5,6 +5,36 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] - 2026-04-10
+
+### Added
+- **Tray badge with unread count** — system tray icon now shows a numbered
+  badge (dark circle with white text) when there are unread messages, DMs,
+  or notifications. Badge is rendered via canvas onto the icon image since
+  Linux/Windows tray icons have no native badge API.
+- **App restore from tray** — when the app is restored from the system tray
+  after being minimized, WebSocket reconnects automatically and unread counts
+  refresh immediately. No more frozen UI after long minimize periods.
+- **Image lightbox** — clicking any image in chat opens it fullscreen at
+  original size. Close with Escape, clicking the overlay, or the X button.
+- **Wallet reset** — new "Reset Wallet" button on the wallet page when PIN
+  unlock fails (e.g., corrupted PIN data). Wipes the encrypted vault so the
+  user can re-import their private key. Requires confirmation.
+- i18n translations for wallet reset in all 7 languages.
+
+### Fixed
+- **Duplicate messages in chat** — messages from WebSocket and poll were added
+  to localMessages without checking if they already existed in the API resource.
+  Now both handlers check against API messages before adding.
+- **Context menu clipped by sidebar** — right-click menus on channels/members
+  were hidden behind the sidebar's `overflow-y: auto`. Now rendered via SolidJS
+  `<Portal>` directly on document.body.
+- **PIN removal error** — "must be an instance of CryptoKey" caused by webkit2gtk
+  rejecting `Uint8Array.buffer` (ArrayBufferLike). Fixed with `.buffer.slice()`
+  to create clean ArrayBuffer instances for SubtleCrypto operations.
+- **Tray label on Linux** — removed tray `title` that some DEs displayed as
+  text below the icon. Tooltip set to "Ogmara Desktop".
+
 ## [1.14.0] - 2026-04-06
 
 ### Added

@@ -5,7 +5,7 @@
  * URLs open in a new browser tab.
  */
 
-import { Component, For, Show } from 'solid-js';
+import { Component, For, Show, createSignal } from 'solid-js';
 import { JSX } from 'solid-js/jsx-runtime';
 import { parseMessageContent, type TextSegment, type Attachment } from '@ogmara/sdk';
 import { getClient } from '../lib/api';
@@ -60,6 +60,31 @@ function renderTextWithBreaksAndHashtags(text: string): JSX.Element {
   }
   return <>{elements}</>;
 }
+
+// Shared lightbox state — only one image fullscreen at a time
+const [lightboxUrl, setLightboxUrl] = createSignal<string | null>(null);
+
+// Close on Escape key
+if (typeof document !== 'undefined') {
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && lightboxUrl()) setLightboxUrl(null);
+  });
+}
+
+/** Fullscreen image lightbox overlay. */
+export const ImageLightbox: Component = () => (
+  <Show when={lightboxUrl()}>
+    <div class="lightbox-overlay" onClick={() => setLightboxUrl(null)}>
+      <img
+        src={lightboxUrl()!}
+        class="lightbox-image"
+        onClick={(e) => e.stopPropagation()}
+        alt="Full size"
+      />
+      <button class="lightbox-close" onClick={() => setLightboxUrl(null)}>✕</button>
+    </div>
+  </Show>
+);
 
 export const FormattedText: Component<Props> = (props) => {
   const segments = () => parseMessageContent(props.content);
@@ -134,16 +159,15 @@ export const FormattedText: Component<Props> = (props) => {
 
               if (isImage && autoload) {
                 return (
-                  <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
-                    <img
-                      src={att.thumbnail_cid
-                        ? getClient().getMediaUrl(att.thumbnail_cid)
-                        : mediaUrl}
-                      alt={att.filename || 'image'}
-                      class="msg-image"
-                      loading="lazy"
-                    />
-                  </a>
+                  <img
+                    src={att.thumbnail_cid
+                      ? getClient().getMediaUrl(att.thumbnail_cid)
+                      : mediaUrl}
+                    alt={att.filename || 'image'}
+                    class="msg-image"
+                    loading="lazy"
+                    onClick={() => setLightboxUrl(mediaUrl)}
+                  />
                 );
               }
               if (isVideo && autoload) {
@@ -229,6 +253,39 @@ export const FormattedText: Component<Props> = (props) => {
           font-family: inherit;
         }
         .msg-hashtag:hover { text-decoration: underline; }
+
+        .lightbox-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.9);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 10000;
+          cursor: zoom-out;
+        }
+        .lightbox-image {
+          max-width: 95vw;
+          max-height: 95vh;
+          object-fit: contain;
+          border-radius: var(--radius-md);
+          cursor: default;
+          box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
+        }
+        .lightbox-close {
+          position: fixed;
+          top: 16px;
+          right: 16px;
+          font-size: 24px;
+          padding: 8px 14px;
+          border-radius: 50%;
+          background: rgba(255, 255, 255, 0.15);
+          color: white;
+          cursor: pointer;
+          z-index: 10001;
+          transition: background 0.15s;
+        }
+        .lightbox-close:hover { background: rgba(255, 255, 255, 0.3); }
       `}</style>
     </span>
   );

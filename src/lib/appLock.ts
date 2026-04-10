@@ -54,9 +54,11 @@ export async function deriveKeyFromPin(
 ): Promise<CryptoKey> {
   const encoder = new TextEncoder();
   const pinBytes = encoder.encode(pin);
+  // Use .slice() to guarantee a clean ArrayBuffer (webkit2gtk SubtleCrypto
+  // rejects ArrayBufferLike / offset views from Uint8Array.buffer)
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
-    pinBytes.buffer as ArrayBuffer,
+    pinBytes.buffer.slice(pinBytes.byteOffset, pinBytes.byteOffset + pinBytes.byteLength),
     'PBKDF2',
     false,
     ['deriveKey'],
@@ -65,7 +67,7 @@ export async function deriveKeyFromPin(
   return crypto.subtle.deriveKey(
     {
       name: 'PBKDF2',
-      salt: salt.buffer as ArrayBuffer,
+      salt: salt.buffer.slice(salt.byteOffset, salt.byteOffset + salt.byteLength),
       iterations: PBKDF2_ITERATIONS,
       hash: 'SHA-256',
     },
@@ -86,9 +88,9 @@ export async function encryptWithKey(
   const encoder = new TextEncoder();
   const plaintextBytes = encoder.encode(plaintext);
   const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: iv.buffer as ArrayBuffer },
+    { name: 'AES-GCM', iv: iv.buffer.slice(iv.byteOffset, iv.byteOffset + iv.byteLength) },
     key,
-    plaintextBytes.buffer as ArrayBuffer,
+    plaintextBytes.buffer.slice(plaintextBytes.byteOffset, plaintextBytes.byteOffset + plaintextBytes.byteLength),
   );
   // Format: ivHex:ciphertextHex
   return bytesToHex(iv) + ':' + bytesToHex(new Uint8Array(ciphertext));
@@ -110,9 +112,9 @@ export async function decryptWithKey(
   const iv = hexToBytes(ivHex);
   const ciphertext = hexToBytes(ctHex);
   const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: iv.buffer as ArrayBuffer },
+    { name: 'AES-GCM', iv: iv.buffer.slice(iv.byteOffset, iv.byteOffset + iv.byteLength) },
     key,
-    ciphertext.buffer as ArrayBuffer,
+    ciphertext.buffer.slice(ciphertext.byteOffset, ciphertext.byteOffset + ciphertext.byteLength),
   );
   return new TextDecoder().decode(plaintext);
 }
