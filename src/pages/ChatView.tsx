@@ -216,6 +216,9 @@ export const ChatView: Component<ChatViewProps> = (props) => {
           }
         }
         setLocalMessages((prev) => {
+          const wsId = msgIdToHex(msg.msg_id);
+          // Skip if already in API messages
+          if ((messages() || []).some((m: any) => msgIdToHex(m.msg_id) === wsId)) return prev;
           // Remove optimistic messages that match this real message
           // (same author, timestamp within 10s)
           const filtered = prev.filter((m) => {
@@ -223,8 +226,8 @@ export const ChatView: Component<ChatViewProps> = (props) => {
             return !(m.author === msg.author &&
               Math.abs(new Date(m.timestamp).getTime() - new Date(msg.timestamp).getTime()) < 10000);
           });
-          // Skip if already present (WS can re-deliver)
-          if (filtered.some((m) => msgIdToHex(m.msg_id) === msgIdToHex(msg.msg_id))) return filtered;
+          // Skip if already present in localMessages (WS can re-deliver)
+          if (filtered.some((m) => msgIdToHex(m.msg_id) === wsId)) return filtered;
           const next = [...filtered, msg];
           return next.length > MAX_LOCAL_MESSAGES ? next.slice(-MAX_LOCAL_MESSAGES) : next;
         });
@@ -358,9 +361,13 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       const resp = await client.getChannelMessages(channelId, 200, undefined, latestMsgId);
       if (resp.messages && resp.messages.length > 0) {
         setLocalMessages((prev) => {
-          // Dedup: only add messages not already in localMessages
-          const existingIds = new Set(prev.map((m) => msgIdToHex(m.msg_id)));
-          const newMsgs = resp.messages.filter((m: any) => !existingIds.has(msgIdToHex(m.msg_id)));
+          // Dedup: check against BOTH localMessages AND API resource messages
+          const existingLocal = new Set(prev.map((m) => msgIdToHex(m.msg_id)));
+          const existingApi = new Set((messages() || []).map((m: any) => msgIdToHex(m.msg_id)));
+          const newMsgs = resp.messages.filter((m: any) => {
+            const id = msgIdToHex(m.msg_id);
+            return !existingLocal.has(id) && !existingApi.has(id);
+          });
           if (newMsgs.length === 0) return prev;
           const next = [...prev, ...newMsgs];
           return next.length > MAX_LOCAL_MESSAGES ? next.slice(-MAX_LOCAL_MESSAGES) : next;
@@ -819,7 +826,8 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                   return;
                 }
                 // Tauri clipboard plugin fallback for webkit2gtk
-                // Don't preventDefault here — if clipboard has no image, text paste must work
+                // Save textarea value before async — if image found, revert any text that got pasted
+                const textBefore = messageInput();
                 (async () => {
                   try {
                     const { readImage } = await import('@tauri-apps/plugin-clipboard-manager');
@@ -830,8 +838,9 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                       setTimeout(() => setSendError(null), 4000);
                       return;
                     }
+                    // Image found in clipboard — revert any text that was pasted by default handler
+                    setMessageInput(textBefore);
                     const rgba = await img.rgba();
-                    // Convert RGBA to PNG via canvas
                     const canvas = document.createElement('canvas');
                     canvas.width = width;
                     canvas.height = height;
@@ -849,9 +858,8 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                       filename: pasteFile.name,
                       thumbnail_cid: result.thumbnail_cid,
                     }]);
-                  } catch (err: any) {
-                    setSendError(`Paste failed: ${err?.message || err}`);
-                    setTimeout(() => setSendError(null), 6000);
+                  } catch {
+                    // No image in clipboard — text paste already happened via default, which is correct
                   }
                 })();
               }}

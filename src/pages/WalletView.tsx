@@ -18,7 +18,7 @@ import {
   getSigner,
   initAuth,
 } from '../lib/auth';
-import { vaultHasWallet, vaultExportKey, vaultUnlockWithPin } from '../lib/vault';
+import { vaultHasWallet, vaultExportKey, vaultUnlockWithPin, vaultWipe } from '../lib/vault';
 import { verifyPin } from '../lib/appLock';
 import { registerUser, delegateDevice, revokeDevice } from '../lib/klever';
 import { navigate } from '../lib/router';
@@ -261,6 +261,35 @@ export const WalletView: Component = () => {
               </button>
             </div>
           </Show>
+
+          {/* Reset vault — escape hatch when PIN data is corrupted */}
+          <div style="margin-top: var(--spacing-lg); padding-top: var(--spacing-md); border-top: 1px solid var(--color-border);">
+            <p class="wallet-desc">{t('wallet_reset_desc')}</p>
+            <Show when={!showDisconnectConfirm()}>
+              <button class="wallet-btn danger" onClick={() => setShowDisconnectConfirm(true)}>
+                {t('wallet_reset')}
+              </button>
+            </Show>
+            <Show when={showDisconnectConfirm()}>
+              <div class="wallet-disconnect-confirm">
+                <p class="wallet-disconnect-warning">{t('wallet_reset_warning')}</p>
+                <div class="wallet-disconnect-actions">
+                  <button class="wallet-btn danger" onClick={async () => {
+                    await disconnectWallet();
+                    setVaultHasKey(false);
+                    setShowDisconnectConfirm(false);
+                    setShowUnlock(false);
+                    setError('');
+                  }}>
+                    {t('wallet_reset_confirm')}
+                  </button>
+                  <button class="wallet-btn" onClick={() => setShowDisconnectConfirm(false)}>
+                    {t('cancel')}
+                  </button>
+                </div>
+              </div>
+            </Show>
+          </div>
         </section>
       </Show>
 

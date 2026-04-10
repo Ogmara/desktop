@@ -26,7 +26,8 @@ import {
   stopIdleMonitor,
 } from './lib/appLock';
 import { initAuth, authStatus, walletJustCreated } from './lib/auth';
-import { initWs } from './lib/ws';
+import { initWs, wsConnected } from './lib/ws';
+import { listen } from '@tauri-apps/api/event';
 import { Sidebar } from './components/Sidebar';
 import { Toolbar } from './components/Toolbar';
 import { ChatView } from './pages/ChatView';
@@ -47,6 +48,7 @@ import { ChannelJoinView } from './pages/ChannelJoinView';
 import { NotificationsView } from './pages/NotificationsView';
 import { FollowListView } from './pages/FollowListView';
 import { StatusBar } from './components/StatusBar';
+import { ImageLightbox } from './components/FormattedText';
 import { route, navigate } from './lib/router';
 
 const isMobile = () => window.innerWidth <= 768;
@@ -63,6 +65,16 @@ export const App: Component = () => {
 
   onMount(async () => {
     await initializeVault();
+
+    // Listen for app restore from tray — reconnect WS + refresh data
+    const unlistenPromise = listen('app-restored', () => {
+      if (appState() !== 'unlocked') return;
+      if (!wsConnected()) {
+        startWebSocket();
+      }
+      window.dispatchEvent(new CustomEvent('ogmara:app-restored'));
+    });
+    onCleanup(() => { unlistenPromise.then((fn) => fn()); });
   });
 
   onCleanup(() => {
@@ -328,6 +340,9 @@ export const App: Component = () => {
           `}</style>
         </Show>
       </Show>
+
+      {/* Global image lightbox */}
+      <ImageLightbox />
     </>
   );
 };

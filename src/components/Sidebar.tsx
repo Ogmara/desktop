@@ -6,6 +6,8 @@
  */
 
 import { Component, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup } from 'solid-js';
+import { Portal } from 'solid-js/web';
+import { updateTrayBadge } from '../lib/trayBadge';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { authStatus, walletAddress } from '../lib/auth';
@@ -305,6 +307,11 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     const onChannelsChanged = () => setChannelVersion(v => v + 1);
     window.addEventListener('ogmara:channels-changed', onChannelsChanged);
     onCleanup(() => window.removeEventListener('ogmara:channels-changed', onChannelsChanged));
+
+    // Refresh immediately when app is restored from tray
+    const onAppRestored = () => { pollData(); };
+    window.addEventListener('ogmara:app-restored', onAppRestored);
+    onCleanup(() => window.removeEventListener('ogmara:app-restored', onAppRestored));
   }
 
   // Poll unread counts + refresh channel list every 30 seconds when authenticated
@@ -323,8 +330,15 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       ]);
       setUnreadCounts(unread.unread ?? {});
       const dmCounts = dmUnread.unread ?? {};
-      setDmUnreadTotal(Object.values(dmCounts).reduce((a: number, b: number) => a + b, 0));
-      setNotifUnread((notifResp as any).notifications?.length ?? 0);
+      const dmTotal = Object.values(dmCounts).reduce((a: number, b: number) => a + b, 0);
+      setDmUnreadTotal(dmTotal);
+      const notifCount = (notifResp as any).notifications?.length ?? 0;
+      setNotifUnread(notifCount);
+
+      // Update tray icon badge with total unread count
+      const channelTotal = Object.values(unread.unread ?? {}).reduce((a: number, b: number) => a + b, 0);
+      const totalUnread = channelTotal + dmTotal + notifCount;
+      updateTrayBadge(totalUnread);
     } catch { /* ignore */ }
   };
   createEffect(() => {
@@ -532,7 +546,8 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         </div>
       </Show>
 
-      {/* Channel context menu */}
+      {/* Channel context menu — rendered via Portal to escape sidebar overflow clipping */}
+      <Portal>
       <Show when={contextMenu()}>
         <div
           class="channel-context-menu"
@@ -584,8 +599,10 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
           </Show>
         </div>
       </Show>
+      </Portal>
 
-      {/* Member context menu (right-click on member in sidebar) */}
+      {/* Member context menu — rendered via Portal to escape sidebar overflow clipping */}
+      <Portal>
       <Show when={memberMenu()}>
         <div
           class="channel-context-menu"
@@ -627,6 +644,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
           </Show>
         </div>
       </Show>
+      </Portal>
 
       <style>{`
         .sidebar {
@@ -745,8 +763,8 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
           background: var(--color-bg-secondary);
           border: 1px solid var(--color-border);
           border-radius: var(--radius-md);
-          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-          z-index: 100;
+          box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+          z-index: 9999;
           padding: 4px;
           min-width: 160px;
         }

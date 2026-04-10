@@ -17,7 +17,7 @@ import { navigate } from '../lib/router';
 import { getClient } from '../lib/api';
 import { uploadSettings, downloadSettings } from '../lib/settings-sync';
 import { vaultExportKey } from '../lib/vault';
-import { isLockEnabled, hasPinSetup, removePin, getLockTimeout, setLockTimeout } from '../lib/appLock';
+import { isLockEnabled, hasPinSetup, removePin, verifyPin, getLockTimeout, setLockTimeout } from '../lib/appLock';
 import { vaultDecryptToRaw, vaultIsEncrypted } from '../lib/vault';
 import { enableNotifications, disableNotifications } from '../lib/push';
 import { PinSetup } from '../PinSetup';
@@ -89,9 +89,11 @@ const PinLockSection: Component = () => {
             if (!pin) return;
             setStatus('');
             try {
-              const key = await removePin(pin);
-              if (key) {
-                await vaultDecryptToRaw(key);
+              // Verify PIN first to get CryptoKey, then remove PIN, then decrypt vault
+              const cryptoKey = await verifyPin(pin);
+              if (cryptoKey) {
+                await removePin(pin);
+                await vaultDecryptToRaw(cryptoKey);
                 setPinEnabled(false);
                 setStatus(t('pin_removed') || 'PIN removed');
               } else {

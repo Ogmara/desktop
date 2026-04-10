@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, PhysicalPosition,
+    Emitter, Manager, PhysicalPosition,
 };
 
 /// Saved window position for restoring after hide/show (tray minimize).
@@ -257,17 +257,45 @@ async fn fetch_and_save(
     .map_err(|e| format!("Task error: {}", e))?
 }
 
+/// Tauri command: update the tray icon with an unread badge.
+/// Receives RGBA pixel data from the frontend (rendered via canvas).
+#[tauri::command]
+fn update_tray_badge(app: tauri::AppHandle, rgba: Vec<u8>, width: u32, height: u32, count: u32) -> Result<(), String> {
+    // Validate RGBA buffer dimensions
+    let expected = (width as usize) * (height as usize) * 4;
+    if rgba.len() != expected || width > 256 || height > 256 {
+        return Err("invalid icon dimensions".into());
+    }
+
+    if let Some(tray) = app.tray_by_id("Ogmara") {
+        // Update tooltip
+        let tooltip = if count > 0 {
+            format!("Ogmara Desktop ({} unread)", count)
+        } else {
+            "Ogmara Desktop".to_string()
+        };
+        tray.set_tooltip(Some(&tooltip)).map_err(|e| format!("{}", e))?;
+
+        // Update icon with badge overlay
+        let icon = tauri::image::Image::new_owned(rgba, width, height);
+        tray.set_icon(Some(icon)).map_err(|e| format!("{}", e))?;
+    }
+    Ok(())
+}
+
 /// Show the main window and restore its saved position.
 fn restore_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         // Restore saved position (window manager may not preserve it after hide)
         if let Some(saved) = app.try_state::<SavedPosition>() {
-            if let Some(pos) = saved.0.lock().unwrap().take() {
+            if let Some(pos) = saved.0.lock().ok().and_then(|mut g| g.take()) {
                 let _ = window.set_position(pos);
             }
         }
         let _ = window.set_focus();
+        // Notify the frontend to refresh data (WS may have disconnected while hidden)
+        let _ = app.emit("app-restored", ());
     }
 }
 
@@ -313,6 +341,7 @@ pub fn run() {
             open_url,
             save_export_file,
             fetch_and_save,
+            update_tray_badge,
         ])
         .setup(|app| {
             // Build system tray menu
@@ -325,10 +354,12 @@ pub fn run() {
                 .default_window_icon()
                 .cloned()
                 .expect("app icon must be set");
-            let _tray = TrayIconBuilder::new()
+            let _tray = TrayIconBuilder::with_id("Ogmara")
                 .icon(icon)
                 .menu(&menu)
-                .tooltip("Ogmara")
+                .title("Ogmara Desktop")
+                .tooltip("Ogmara Desktop")
+                .menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         restore_window(app);
@@ -358,7 +389,9 @@ pub fn run() {
                         // Save window position for restore on show
                         if let Ok(pos) = window_clone.outer_position() {
                             if let Some(saved) = window_clone.app_handle().try_state::<SavedPosition>() {
-                                *saved.0.lock().unwrap() = Some(pos);
+                                if let Ok(mut guard) = saved.0.lock() {
+                                    *guard = Some(pos);
+                                }
                             }
                         }
                         // Save window state to disk for persistence across restarts
