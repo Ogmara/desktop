@@ -24,8 +24,8 @@ export const kleverConnecting = () => false;
 // --- Network Configuration ---
 
 let kleverProvider = {
-  api: 'https://api.klever.org',
-  node: 'https://node.klever.org',
+  api: 'https://api.mainnet.klever.org',
+  node: 'https://node.mainnet.klever.org',
 };
 let currentNetwork = 'mainnet';
 
@@ -49,8 +49,8 @@ export function setKleverNetwork(network: string): void {
     };
   } else {
     kleverProvider = {
-      api: 'https://api.klever.org',
-      node: 'https://node.klever.org',
+      api: 'https://api.mainnet.klever.org',
+      node: 'https://node.mainnet.klever.org',
     };
   }
 }

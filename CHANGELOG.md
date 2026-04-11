@@ -5,6 +5,14 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.3] - 2026-04-11
+
+### Fixed
+- **Klever mainnet provider URLs wrong** — `api.klever.org` and `node.klever.org`
+  don't exist. Fixed to `api.mainnet.klever.org` and `node.mainnet.klever.org`,
+  matching the testnet URL pattern. This broke wallet registration and on-chain
+  transactions on mainnet.
+
 ## [1.15.2] - 2026-04-11
 
 ### Security
