@@ -7,7 +7,7 @@ import { Component, createResource, createSignal, createEffect, createMemo, For,
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { authStatus, getSigner, walletAddress, isRegistered } from '../lib/auth';
-import { onWsEvent, wsSubscribeChannels, wsUnsubscribeChannels } from '../lib/ws';
+import { onWsEvent, wsSubscribeChannels, wsUnsubscribeChannels, wsConnected } from '../lib/ws';
 import { navigate } from '../lib/router';
 import { setSetting } from '../lib/settings';
 import { FormattedText } from '../components/FormattedText';
@@ -16,9 +16,9 @@ import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
 import { getPayloadContent, getPayloadAttachments, decodePayload } from '../lib/payload';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
 
-/** Convert a msg_id (hex string, byte array, or Uint8Array) to a consistent hex string. */
+/** Convert a msg_id (hex string, byte array, or Uint8Array) to a consistent lowercase hex string. */
 function msgIdToHex(msgId: unknown): string {
-  if (typeof msgId === 'string') return msgId;
+  if (typeof msgId === 'string') return msgId.toLowerCase();
   if (msgId instanceof Uint8Array) {
     return Array.from(msgId).map((b) => b.toString(16).padStart(2, '0')).join('');
   }
@@ -262,13 +262,15 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     if (prevChannelId) wsUnsubscribeChannels([prevChannelId]);
   });
 
-  // Deduplicate and sort messages
+  // Deduplicate and sort messages.
+  // Messages can arrive from 3 sources: API resource, WebSocket, and poll.
+  // Each may use different msg_id formats (hex string vs byte array, different casing).
+  // We normalize all IDs to lowercase hex for consistent deduplication.
   const allMessages = createMemo(() => {
     const seen = new Set<string>();
     const apiMsgs = messages() || [];
     const local = localMessages();
     // Remove optimistic messages that now have a real counterpart from the API
-    // (same author, similar timestamp, optimistic flag)
     const filteredLocal = local.filter((lm) => {
       if (!lm._optimistic) return true;
       return !apiMsgs.some((am) =>
@@ -276,8 +278,15 @@ export const ChatView: Component<ChatViewProps> = (props) => {
         Math.abs(new Date(am.timestamp).getTime() - new Date(lm.timestamp).getTime()) < 10000,
       );
     });
-    // localMessages first so optimistic updates (delete, edit, react) take priority in dedup
-    const combined = [...filteredLocal, ...apiMsgs];
+    // Also remove non-optimistic local messages that now exist in API response
+    // (e.g., WS/poll message that the API has since indexed)
+    const apiIds = new Set(apiMsgs.map((m: any) => msgIdToHex(m.msg_id)));
+    const cleanLocal = filteredLocal.filter((lm) => {
+      if (lm._optimistic) return true; // keep optimistic (handled above)
+      return !apiIds.has(msgIdToHex(lm.msg_id));
+    });
+    // Local messages first so WS-delivered edits/deletes take priority over stale API data in dedup
+    const combined = [...cleanLocal, ...apiMsgs];
     const deduped = combined.filter((msg) => {
       const id = msgIdToHex(msg.msg_id);
       if (!id || seen.has(id)) return false;
@@ -347,6 +356,8 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   const pollNewMessages = async () => {
     const channelId = props.channelId;
     if (!channelId) return;
+    // Skip poll when WebSocket is connected — WS delivers messages in real-time
+    if (wsConnected()) return;
     const msgs = allMessages();
     if (msgs.length === 0) return;
     // Find the latest REAL message (skip optimistic ones with 'local-' ids)
@@ -361,12 +372,14 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       const resp = await client.getChannelMessages(channelId, 200, undefined, latestMsgId);
       if (resp.messages && resp.messages.length > 0) {
         setLocalMessages((prev) => {
-          // Dedup: check against BOTH localMessages AND API resource messages
-          const existingLocal = new Set(prev.map((m) => msgIdToHex(m.msg_id)));
-          const existingApi = new Set((messages() || []).map((m: any) => msgIdToHex(m.msg_id)));
+          // Dedup: check against ALL known messages (local + API)
+          const allKnown = new Set<string>();
+          for (const m of prev) allKnown.add(msgIdToHex(m.msg_id));
+          for (const m of (messages() || [])) allKnown.add(msgIdToHex((m as any).msg_id));
+
           const newMsgs = resp.messages.filter((m: any) => {
             const id = msgIdToHex(m.msg_id);
-            return !existingLocal.has(id) && !existingApi.has(id);
+            return !allKnown.has(id);
           });
           if (newMsgs.length === 0) return prev;
           const next = [...prev, ...newMsgs];
