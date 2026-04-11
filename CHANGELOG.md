@@ -5,6 +5,13 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.2] - 2026-04-11
+
+### Security
+- **Update Vite to 6.4.2** — fixes CVE-2026-39363 (high: arbitrary file read
+  via dev server WebSocket) and CVE-2026-39365 (medium: path traversal in
+  optimized deps `.map` handling).
+
 ## [1.15.1] - 2026-04-11
 
 ### Fixed
