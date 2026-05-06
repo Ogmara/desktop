@@ -5,6 +5,97 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — v1.16.0 work-in-progress (2026-05-06)
+
+> This is a checkpoint commit on the `v1.16.0-wip` branch. The Modern design
+> infrastructure is wired but not yet rendered — App.tsx, Sidebar.tsx,
+> ChatView.tsx, ChannelSettingsView.tsx and friends still need their parallel
+> updates from web v0.28.0–v0.29.0 before users see Modern. **Do not tag a
+> release from this branch yet.**
+
+### Added (foundation only)
+- **Modern design style** — added as the new default in `theme.ts`. Existing
+  users with `elevated` / `minimal` saved styles silently migrate to `modern`
+  on next read. The Modern CSS block (~875 lines) lands in
+  `src/styles/design-styles.css` under `[data-style="modern"]`.
+- **Color schemes** — six accent palettes (`default`, `amber`, `teal`,
+  `violet`, `coral`, `neutral-gray`) configurable in Settings (UI not yet
+  wired in this checkpoint). Stored as `ogmara.colorScheme` in localStorage.
+- **`src/lib/mobile-nav.ts`** — mobile sidebar↔detail pane state for the
+  one-pane mobile layout (768px breakpoint). Verbatim copy from web.
+- **`src/lib/network-activity.ts`** — `.net-bar` indicator showing in-flight
+  API calls. Patches `window.fetch` and is installed AFTER the Tauri-fetch
+  wrapper so it tracks Tauri-routed traffic correctly.
+- **`src/styles/chat-view.css`** — Modern chat-view rules (~880 lines), all
+  scoped under `[data-style="modern"]`. Imported in `index.tsx`.
+- **Color scheme + `.net-bar` rules in `global.css`** — also adds the mobile
+  one-pane navigation rules (`.app-body.mobile-list-open`, `.mobile-detail-open`,
+  `.content-back-btn`).
+
+### Changed (foundation only)
+- **Theme storage:** `DesignStyle` is now `'classic' | 'glassmorphism' |
+  'modern'`. The four-style enum (`['glassmorphism', 'elevated', 'minimal',
+  'classic']`) is replaced by `['modern', 'glassmorphism', 'classic']`.
+  Modern is the default for new users. Existing users who picked `elevated`
+  or `minimal` get migrated to `modern` automatically. The `CustomTheme`
+  per-token overrides feature is preserved (desktop-specific).
+- **Reactive design-style signal:** `currentDesignStyle()` and
+  `isModernStyle()` exported for components that need to render Modern
+  variants conditionally — these are the building blocks the upcoming
+  component merges depend on.
+
+### Fixed
+- **WebSocket payload base64 decode (`src/lib/payload.ts`)** — same bug
+  that web fixed in v0.27.x. WebSocket messages deliver `payload` as a
+  base64 string while API responses deliver bytes; the existing helpers
+  short-circuited on strings, so images sent in chat only appeared after
+  manually re-clicking the channel. New `tryDecodeBase64Payload()` helper
+  base64-decodes and MessagePack-decodes string payloads transparently.
+- **Anchor timestamp display (`src/components/StatusBar.tsx`)** — the L2
+  node returns `anchoring_since` and `last_anchor_age_seconds` as Unix
+  timestamps in seconds (despite the field name), not durations or
+  millisecond timestamps. The status bar now multiplies `anchoring_since`
+  by 1000 before passing to `new Date()` and computes
+  `Date.now()/1000 - lastTs` for `formatAge()`. Also added a `connecting`
+  state with a pulsing dot that appears while `networkStats()` is loading.
+
+### Security
+- **postcss override** — pinned to `>=8.5.10` in `package.json` `overrides`
+  block to address CVE-2026-41305 (transitive dev dep via Vite/tsup; not
+  shipped in the desktop bundle, fixed for completeness).
+
+### Known follow-ups (this release is incomplete)
+- App.tsx — Modern toolbar wrap, mobile back button, `.app-body` class,
+  `.net-bar` slot
+- Sidebar.tsx — Modern markup blocks (`<Show when={isModernStyle()}>`),
+  tabbed sidebar (Chat/News/Messages), DM preview rows, channel avatars
+- ChatView.tsx — Modern bubble layout, scroll-to-bottom FAB, channel header
+  strip, floating date label
+- ChannelSettingsView.tsx — avatar upload, member list with profiles,
+  posting-mode toggle (read-only / broadcast feature)
+- DmConversationView.tsx — Modern bubble layout
+- SettingsView.tsx — color-scheme picker, default-landing-view setting,
+  Modern preview thumbnail
+- NewsDetailView.tsx, ChannelJoinView.tsx, NewsView.tsx — minor cleanups
+- router.ts — `defaultLandingView` honoring on bare `/chat` route
+- settings-sync.ts — `RAW_SYNC_KEYS` covering `theme` / `designStyle` /
+  `colorScheme`
+- i18n locales — ~50–60 new keys × 7 locales for Modern UI strings and the
+  read-only / broadcast feature
+- Read-only / broadcast channel UI port (composer hide + banner + sidebar
+  📢 icon, paired with `l2-node` v0.31.0 and `@ogmara/sdk` v0.14.0)
+
+### Notes for next session
+- Wallet-connect race fix from web v0.27.x is **not applicable** to desktop
+  — there's no Klever Extension or K5 flow on desktop, only the built-in
+  vault. The `networkReady` Promise is web-only.
+- DeviceMappingBanner is **deliberately skipped** on desktop — vault auth
+  doesn't need device-to-wallet mapping, and the user confirmed desktop's
+  current auth path "is already working pretty fine."
+- Stale-nodeUrl migration is **deliberately skipped** — desktop already
+  uses `node.ogmara.org`; the web migration was for users with the older
+  `ogmara.org` value.
+
 ## [1.15.3] - 2026-04-11
 
 ### Fixed

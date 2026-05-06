@@ -6,20 +6,28 @@
  *
  * Design styles control the visual language (shapes, shadows, effects) independently
  * from the color theme (light/dark). Available styles:
- * - classic: Original flat design
+ * - modern: Telegram-inspired bubble layout, the default
  * - glassmorphism: Frosted glass panels, gradient background, glow accents
- * - elevated: Layered shadows, bold radius, clear depth hierarchy
- * - minimal: Pill shapes, tight palette, content-first
+ * - classic: Original flat design
+ *
+ * Color schemes optionally override the accent palette on top of the chosen
+ * design style. The default scheme uses each design style's native palette.
  */
 
-export type Theme = 'light' | 'dark' | 'system';
-export type DesignStyle = 'classic' | 'glassmorphism' | 'elevated' | 'minimal';
+import { createSignal } from 'solid-js';
 
-export const DESIGN_STYLES: DesignStyle[] = ['glassmorphism', 'elevated', 'minimal', 'classic'];
+export type Theme = 'light' | 'dark' | 'system';
+export type DesignStyle = 'classic' | 'glassmorphism' | 'modern';
+
+export const DESIGN_STYLES: DesignStyle[] = ['modern', 'glassmorphism', 'classic'];
+
+export type ColorScheme = 'default' | 'amber' | 'teal' | 'violet' | 'coral' | 'neutral-gray';
+export const COLOR_SCHEMES: ColorScheme[] = ['default', 'amber', 'teal', 'violet', 'coral', 'neutral-gray'];
 
 const STORAGE_KEY = 'ogmara.theme';
 const CUSTOM_THEME_KEY = 'ogmara.customTheme';
 const STYLE_KEY = 'ogmara.designStyle';
+const SCHEME_KEY = 'ogmara.colorScheme';
 
 /** Customizable color tokens — user can override these in Settings. */
 export interface CustomTheme {
@@ -50,18 +58,28 @@ const TOKEN_MAP: Record<keyof CustomTheme, string> = {
   textSecondary: '--color-text-secondary',
 };
 
-/** Get the current design style (validated against known values). */
+/** Get the current design style (validated against known values).
+ *  Default for new users is `modern`. Existing users keep their saved choice
+ *  IF it's still in the supported set — legacy `elevated` / `minimal` values
+ *  are migrated to `modern` on first read. */
 export function getDesignStyle(): DesignStyle {
   const stored = localStorage.getItem(STYLE_KEY);
   if (stored && DESIGN_STYLES.includes(stored as DesignStyle)) {
     return stored as DesignStyle;
   }
-  return 'glassmorphism';
+  return 'modern';
 }
+
+/** Reactive signal for the current design style — components can use this
+ *  to conditionally render structural variants (e.g. modern sidebar). */
+const [designStyleSignal, setDesignStyleSignal] = createSignal<DesignStyle>(getDesignStyle());
+export function currentDesignStyle(): DesignStyle { return designStyleSignal(); }
+export function isModernStyle(): boolean { return designStyleSignal() === 'modern'; }
 
 /** Set the design style and apply it. */
 export function setDesignStyle(style: DesignStyle): void {
   localStorage.setItem(STYLE_KEY, style);
+  setDesignStyleSignal(style);
   applyDesignStyle(style);
 }
 
@@ -101,11 +119,25 @@ export function clearCustomTheme(): void {
   }
 }
 
+/** Get the current color scheme (validated against known values). */
+export function getColorScheme(): ColorScheme {
+  const stored = localStorage.getItem(SCHEME_KEY);
+  if (stored && COLOR_SCHEMES.includes(stored as ColorScheme)) return stored as ColorScheme;
+  return 'default';
+}
+
+/** Set the color scheme and apply it. */
+export function setColorScheme(scheme: ColorScheme): void {
+  localStorage.setItem(SCHEME_KEY, scheme);
+  applyColorScheme(scheme);
+}
+
 /** Apply the theme to the document (called before first paint). */
 export function initTheme(): void {
   applyTheme(getTheme());
   applyCustomColors(getCustomTheme());
   applyDesignStyle(getDesignStyle());
+  applyColorScheme(getColorScheme());
 
   // Listen for system theme changes
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
@@ -128,6 +160,15 @@ function applyDesignStyle(style: DesignStyle): void {
     document.documentElement.removeAttribute('data-style');
   } else {
     document.documentElement.setAttribute('data-style', style);
+  }
+}
+
+/** Apply the color scheme as a data attribute on <html>. */
+function applyColorScheme(scheme: ColorScheme): void {
+  if (scheme === 'default') {
+    document.documentElement.removeAttribute('data-scheme');
+  } else {
+    document.documentElement.setAttribute('data-scheme', scheme);
   }
 }
 

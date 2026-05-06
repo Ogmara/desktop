@@ -74,11 +74,31 @@ export function decodePayload(payload: number[] | Uint8Array): DecodedPayload {
 }
 
 /**
+ * Try to decode a base64-encoded MessagePack payload string. WebSocket
+ * messages arrive with `payload` as a base64 string, while API responses
+ * deliver it as a byte array. This helper lets all downstream functions
+ * handle both transparently. Returns the decoded payload on success, or
+ * null if the string is plain text (e.g. an optimistic message).
+ */
+function tryDecodeBase64Payload(payload: string): DecodedPayload | null {
+  try {
+    const binary = atob(payload);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return decodePayload(bytes);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Extract just the content string from a payload byte array.
  * Convenience wrapper for use in FormattedText.
  */
 export function getPayloadContent(payload: number[] | Uint8Array | string): string {
-  if (typeof payload === 'string') return payload;
+  if (typeof payload === 'string') {
+    return tryDecodeBase64Payload(payload)?.content ?? payload;
+  }
   return decodePayload(payload).content;
 }
 
@@ -86,7 +106,9 @@ export function getPayloadContent(payload: number[] | Uint8Array | string): stri
  * Extract the title from a news post payload, if present.
  */
 export function getPayloadTitle(payload: number[] | Uint8Array | string): string | undefined {
-  if (typeof payload === 'string') return undefined;
+  if (typeof payload === 'string') {
+    return tryDecodeBase64Payload(payload)?.title;
+  }
   return decodePayload(payload).title;
 }
 
@@ -94,6 +116,8 @@ export function getPayloadTitle(payload: number[] | Uint8Array | string): string
  * Extract attachments from a payload, if present.
  */
 export function getPayloadAttachments(payload: number[] | Uint8Array | string): PayloadAttachment[] {
-  if (typeof payload === 'string') return [];
+  if (typeof payload === 'string') {
+    return tryDecodeBase64Payload(payload)?.attachments ?? [];
+  }
   return decodePayload(payload).attachments ?? [];
 }
