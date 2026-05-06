@@ -5,13 +5,11 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — v1.16.0 work-in-progress (2026-05-06)
+## [1.16.0] - 2026-05-06
 
-> Checkpoint on the `v1.16.0-wip` branch. Stages A + B + C are now complete
-> end-to-end: Modern design renders, read-only / broadcast channel UI is
-> live, all 7 locales have parity with web. Stage D (audit + version bump
-> + tag for CI) remains. **Do not tag a release from this branch yet** —
-> a pre-release smoke pass should run first.
+Modern design refresh + read-only / broadcast channels. Pairs with
+`l2-node` v0.31.0 and `@ogmara/sdk` v0.14.0. Brings desktop to feature
+parity with web v0.29.0.
 
 ### Stage B + C (this commit)
 

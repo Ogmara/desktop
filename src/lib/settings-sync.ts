@@ -6,6 +6,7 @@
 
 import { getSetting, setSetting } from './settings';
 import { getClient } from './api';
+import { DESIGN_STYLES, COLOR_SCHEMES, type DesignStyle, type ColorScheme } from './theme';
 
 /** JSON-encoded settings keys synced across devices (read/write via getSetting/setSetting). */
 const SYNC_KEYS = ['lang', 'notificationSound', 'compactLayout', 'fontSize'] as const;
@@ -103,10 +104,24 @@ export async function decryptAndApplySettings(
     // Raw-string theme keys: write directly to preserve theme.ts storage format.
     // theme.ts re-reads these values on its next access, so the change applies
     // on the next paint cycle without an explicit refresh.
-    if (RAW_SYNC_KEYS.includes(k as any) && typeof v === 'string') {
+    //
+    // Validate the value against the current accepted set BEFORE writing —
+    // a stale v1.15.x synced blob carrying `designStyle:"elevated"` would
+    // otherwise pollute localStorage with a value `getDesignStyle()` then
+    // ignores (silently migrating to `modern` on read), but which keeps
+    // riding into every subsequent sync upload.
+    if (RAW_SYNC_KEYS.includes(k as any) && typeof v === 'string' && isValidRawSyncValue(k, v)) {
       localStorage.setItem(`ogmara.${k}`, v);
     }
   }
+}
+
+/** Whether a synced raw-string value is in the current accepted set for `key`. */
+function isValidRawSyncValue(key: string, value: string): boolean {
+  if (key === 'theme') return value === 'light' || value === 'dark' || value === 'system';
+  if (key === 'designStyle') return DESIGN_STYLES.includes(value as DesignStyle);
+  if (key === 'colorScheme') return COLOR_SCHEMES.includes(value as ColorScheme);
+  return false;
 }
 
 /** Upload current settings to L2 node. */
