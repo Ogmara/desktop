@@ -14,6 +14,7 @@ import { navigate, routeParam } from '../lib/router';
 import { FormattedText } from '../components/FormattedText';
 import { getPayloadContent, getPayloadTitle, getPayloadAttachments, decodePayload } from '../lib/payload';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
+import { MentionPopover } from '../components/MentionPopover';
 import { sendTip, kleverAvailable, getExplorerUrl } from '../lib/klever';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
 import { ensureHexMsgId, formatLocalTime, truncateAddress } from '../lib/news-utils';
@@ -140,6 +141,9 @@ export const NewsDetailView: Component = () => {
 
   // Comment compose state
   const [commentText, setCommentText] = createSignal('');
+  // Resolved klever addresses chosen via the @-mention popover. Merged with
+  // any raw @klv1... addresses pasted into the comment on submit.
+  const [pendingCommentMentions, setPendingCommentMentions] = createSignal<string[]>([]);
   const [replyTo, setReplyTo] = createSignal<{ msgId: string; authorName: string } | null>(null);
   const [commentPending, setCommentPending] = createSignal(false);
   const [commentError, setCommentError] = createSignal('');
@@ -288,13 +292,18 @@ export const NewsDetailView: Component = () => {
     setCommentError('');
     try {
       const client = getClient();
+      // Merge popover-chosen mentions with any raw @klv1... in the text.
+      const raw = text.match(/@(klv1[a-z0-9]{58})/g) ?? [];
+      const merged = new Set([...pendingCommentMentions(), ...raw.map((m) => m.slice(1))]);
       await client.postComment(msgId(), text, {
         replyTo: replyTo()?.msgId,
         attachments: commentAttachments().length > 0 ? commentAttachments() : undefined,
+        mentions: merged.size > 0 ? Array.from(merged) : undefined,
       });
       setCommentText('');
       setReplyTo(null);
       setCommentAttachments([]);
+      setPendingCommentMentions([]);
       refetch();
     } catch (e: any) {
       setCommentError(e?.message || 'Failed to post comment');
@@ -528,6 +537,23 @@ export const NewsDetailView: Component = () => {
                   <button class="comment-reply-cancel" onClick={() => setReplyTo(null)}>✕</button>
                 </div>
               </Show>
+              <MentionPopover
+                textareaRef={commentInputRef}
+                onSelect={(hit, range) => {
+                  const el = commentInputRef;
+                  if (!el) return;
+                  const insert = `@${hit.display_name && hit.display_name.trim() ? hit.display_name : hit.address.slice(0, 12)}`;
+                  const v = commentText();
+                  const next = `${v.slice(0, range.start)}${insert} ${v.slice(range.end)}`;
+                  setCommentText(next);
+                  setPendingCommentMentions((prev) => Array.from(new Set([...prev, hit.address])));
+                  const newCursor = range.start + insert.length + 1;
+                  queueMicrotask(() => {
+                    el.focus();
+                    el.setSelectionRange(newCursor, newCursor);
+                  });
+                }}
+              />
               <textarea
                 class="comment-input"
                 ref={commentInputRef}

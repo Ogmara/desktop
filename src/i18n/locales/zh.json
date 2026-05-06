@@ -399,5 +399,8 @@
   "sidebar_public_channel": "公共频道",
   "status_connecting": "正在连接节点…",
   "today": "今天",
-  "yesterday": "昨天"
+  "yesterday": "昨天",
+  "mention_no_results": "无匹配用户",
+  "mention_popover_label": "提及建议",
+  "user_verified": "链上已验证"
 }

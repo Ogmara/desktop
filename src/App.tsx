@@ -37,6 +37,7 @@ import { listen } from '@tauri-apps/api/event';
 import { mobileListOpen, showMobileList, showMobileDetail, isMobileViewport } from './lib/mobile-nav';
 import { isLoading, slowLoading } from './lib/network-activity';
 import { isModernStyle } from './lib/theme';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Sidebar } from './components/Sidebar';
 import { Toolbar } from './components/Toolbar';
 import { ChatView } from './pages/ChatView';
@@ -233,6 +234,75 @@ export const App: Component = () => {
                 }
               }}
             />
+          </Show>
+
+          {/* Modern hides the toolbar entirely, so we render a floating
+              window-controls strip in the top-right corner of the app
+              window. Without this, users on Modern have no way to
+              minimize / maximize / close the Tauri window because there's
+              no native title bar (decorations: false in tauri.conf). */}
+          <Show when={isModernStyle()}>
+            <div class="modern-window-controls" data-tauri-drag-region="">
+              <button class="window-ctrl" title="Minimize"
+                onClick={() => { void getCurrentWindow().minimize(); }}>
+                <svg width="12" height="12" viewBox="0 0 12 12">
+                  <rect y="9" width="12" height="1.5" rx="0.75" fill="currentColor"/>
+                </svg>
+              </button>
+              <button class="window-ctrl" title="Maximize"
+                onClick={() => { void getCurrentWindow().toggleMaximize(); }}>
+                <svg width="12" height="12" viewBox="0 0 12 12">
+                  <rect x="1" y="1" width="10" height="10" rx="1.5" stroke="currentColor" stroke-width="1.5" fill="none"/>
+                </svg>
+              </button>
+              <button class="window-ctrl window-ctrl-close" title="Close"
+                onClick={() => { void getCurrentWindow().close(); }}>
+                <svg width="12" height="12" viewBox="0 0 12 12">
+                  <path d="M2 2L10 10M10 2L2 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+              </button>
+            </div>
+            <style>{`
+              .modern-window-controls {
+                position: fixed;
+                top: 0;
+                right: 0;
+                display: flex;
+                gap: 0;
+                z-index: 9000;
+                background: var(--color-bg-primary);
+                /* Match the rest of the app's drag region so users can still
+                   drag the window from this strip. The buttons themselves
+                   exempt themselves from drag via no-drag class. */
+                -webkit-app-region: drag;
+                padding: 4px;
+              }
+              .modern-window-controls .window-ctrl {
+                width: 36px;
+                height: 28px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: var(--color-text-secondary);
+                border-radius: var(--radius-sm);
+                transition: background 0.15s, color 0.15s;
+                -webkit-app-region: no-drag;
+              }
+              .modern-window-controls .window-ctrl:hover {
+                background: var(--color-bg-tertiary);
+                color: var(--color-text-primary);
+              }
+              .modern-window-controls .window-ctrl-close:hover {
+                background: var(--color-error);
+                color: white;
+              }
+              /* On narrow viewports (mobile-list mode) the controls would
+                 cover the sidebar's bell icon. Hide there — mobile users
+                 don't have window controls anyway (Tauri WebView). */
+              @media (max-width: 768px) {
+                .modern-window-controls { display: none; }
+              }
+            `}</style>
           </Show>
 
           {/* Network activity indicator — animates when API calls are in flight,

@@ -11,6 +11,7 @@ import { authStatus, getSigner, walletAddress, isRegistered } from '../lib/auth'
 // (avoids the duplicate-messages bug fixed in v1.15.1).
 import { onWsEvent, wsSubscribeChannels, wsUnsubscribeChannels, wsConnected } from '../lib/ws';
 import { canPost, CHANNEL_TYPE_READ_PUBLIC } from '@ogmara/sdk';
+import { MentionPopover } from '../components/MentionPopover';
 import { navigate } from '../lib/router';
 import { setSetting } from '../lib/settings';
 import { FormattedText } from '../components/FormattedText';
@@ -80,6 +81,9 @@ interface ChatViewProps {
 
 export const ChatView: Component<ChatViewProps> = (props) => {
   const [messageInput, setMessageInput] = createSignal('');
+  // Resolved klever addresses chosen via the @-mention popover. Merged with
+  // any raw @klv1... addresses pasted into the text on send.
+  const [pendingMentions, setPendingMentions] = createSignal<string[]>([]);
   const [replyTo, setReplyTo] = createSignal<{ msgId: string; author: string; preview: string } | null>(null);
   const [localMessages, setLocalMessages] = createSignal<any[]>([]);
   const [sending, setSending] = createSignal(false);
@@ -547,10 +551,13 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       const options: any = {};
       if (replyTo()) options.replyTo = replyTo()!.msgId;
       if (atts.length > 0) options.attachments = atts;
-      // Extract @mentions (klv1 addresses) from the message text
-      const mentionMatches = text.match(/@(klv1[a-z0-9]{58})/g);
-      if (mentionMatches) {
-        options.mentions = [...new Set(mentionMatches.map((m: string) => m.slice(1)))];
+      // Merge mentions from two sources:
+      //  1. raw @klv1... addresses present in the text (paste / power user)
+      //  2. addresses chosen via the @-mention popover (display name resolved)
+      const raw = text.match(/@(klv1[a-z0-9]{58})/g) ?? [];
+      const merged = new Set([...pendingMentions(), ...raw.map((m) => m.slice(1))]);
+      if (merged.size > 0) {
+        options.mentions = Array.from(merged);
       }
       await client.sendMessage(props.channelId, text, options);
 
@@ -568,6 +575,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       setReplyTo(null);
       setShowEmoji(false);
       setAttachments([]);
+      setPendingMentions([]);
     } catch (err: any) {
       console.error('sendMessage failed:', err);
       const msg = err?.message || String(err);
@@ -968,6 +976,30 @@ export const ChatView: Component<ChatViewProps> = (props) => {
 
         {/* Input area — hidden in broadcast (ReadPublic) channels for non-mod members */}
         <Show when={canPostHere()}>
+        {/* @-mention autocomplete popover — anchored to whichever textarea
+            is currently bound to inputRef (Modern or Legacy). Inserts
+            `@<DisplayName>` into the visible content while pushing the
+            resolved klv1... address into pendingMentions, which the send
+            handler merges with raw @klv1 mentions in the text. */}
+        <MentionPopover
+          textareaRef={inputRef}
+          onSelect={(hit, range) => {
+            const el = inputRef;
+            if (!el) return;
+            const insert = `@${hit.display_name && hit.display_name.trim() ? hit.display_name : hit.address.slice(0, 12)}`;
+            const v = messageInput();
+            const next = `${v.slice(0, range.start)}${insert} ${v.slice(range.end)}`;
+            setMessageInput(next);
+            setPendingMentions((prev) => Array.from(new Set([...prev, hit.address])));
+            const newCursor = range.start + insert.length + 1;
+            queueMicrotask(() => {
+              el.focus();
+              el.setSelectionRange(newCursor, newCursor);
+              el.style.height = 'auto';
+              el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+            });
+          }}
+        />
         <Show when={isModernStyle()} fallback={
           <div class="chat-input-area">
             <div class="chat-input">
