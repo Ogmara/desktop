@@ -26,6 +26,8 @@ export interface Settings {
   deviceRegistered: string;
   /** Push gateway URL. Empty = auto-derive from nodeUrl (same host, port 41722). */
   pushGatewayUrl: string;
+  /** Which view the app opens to after vault unlock — `news` or `chat`. */
+  defaultLandingView: 'chat' | 'news';
 }
 
 const defaults: Settings = {
@@ -48,6 +50,7 @@ const defaults: Settings = {
   nodeUrl: '',
   deviceRegistered: '',
   pushGatewayUrl: '',
+  defaultLandingView: 'news',
 };
 
 /** Load a setting from localStorage with fallback to default. */

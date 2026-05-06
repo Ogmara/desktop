@@ -10,7 +10,7 @@ import { Component, createResource, createSignal, createEffect, For, Show } from
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { authStatus, getSigner, l2Address, walletAddress, isRegistered } from '../lib/auth';
-import { navigate, goBack, routeParam } from '../lib/router';
+import { navigate, routeParam } from '../lib/router';
 import { FormattedText } from '../components/FormattedText';
 import { getPayloadContent, getPayloadTitle, getPayloadAttachments, decodePayload } from '../lib/payload';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
@@ -312,7 +312,7 @@ export const NewsDetailView: Component = () => {
     <div class="news-detail-view">
       {/* Back navigation */}
       <div class="detail-nav">
-        <button class="back-btn" onClick={() => goBack()}>← {t('news_back_to_feed')}</button>
+        <button class="back-btn" onClick={() => navigate('/news')}>← {t('news_back_to_feed')}</button>
       </div>
 
       <Show when={postData.loading}>

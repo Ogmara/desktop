@@ -20,6 +20,7 @@
  */
 
 import { createSignal } from 'solid-js';
+import { getSetting } from './settings';
 
 export type ViewName =
   | 'chat'
@@ -62,7 +63,10 @@ function parseHash(hash: string): Route {
     }
   }
 
-  const first = segments[0] || 'news';
+  // Default first segment honors the user's preferred landing view (Settings).
+  // News is the default for new users; users who pick Chat get their last
+  // channel restored automatically by the `case 'chat'` block below.
+  const first = segments[0] || (getSetting('defaultLandingView') === 'chat' ? 'chat' : 'news');
   const second = segments[1] || '';
   const third = segments[2] || '';
 
@@ -73,6 +77,15 @@ function parseHash(hash: string): Route {
       }
       if (second) {
         return { view: 'chat', params: { channelId: second }, query };
+      }
+      // No channelId in URL — restore the last-visited channel if available.
+      // This is what makes the Chat tab "remember" where the user left off,
+      // and pairs with the default-landing setting in Settings.
+      {
+        const last = getSetting('lastChannel');
+        if (last) {
+          return { view: 'chat', params: { channelId: String(last) }, query };
+        }
       }
       return { view: 'chat', params: {}, query };
 

@@ -7,8 +7,14 @@
 import { getSetting, setSetting } from './settings';
 import { getClient } from './api';
 
-/** Settings keys that are synced across devices. */
-const SYNC_KEYS = ['theme', 'lang', 'notificationSound', 'compactLayout', 'fontSize'] as const;
+/** JSON-encoded settings keys synced across devices (read/write via getSetting/setSetting). */
+const SYNC_KEYS = ['lang', 'notificationSound', 'compactLayout', 'fontSize'] as const;
+
+/** Theme-style keys stored as raw strings in localStorage (read/write via lib/theme.ts).
+ *  Kept on a separate path to avoid JSON-encoding breakage when the value is a
+ *  bare string like "dark" or "modern". Default-landing-view is a JSON-encoded
+ *  setting via getSetting/setSetting, so it stays in SYNC_KEYS. */
+const RAW_SYNC_KEYS = ['theme', 'designStyle', 'colorScheme'] as const;
 
 /** Derive an AES-256-GCM key from a hex private key using HKDF. */
 async function deriveKey(hexKey: string): Promise<CryptoKey> {
@@ -51,6 +57,12 @@ export async function encryptSettings(hexKey: string): Promise<{ encrypted_setti
   for (const key of SYNC_KEYS) {
     settings[key] = getSetting(key);
   }
+  // Theme-style keys are stored raw in localStorage (not JSON), so read them
+  // directly here. They round-trip as string-typed entries in the synced blob.
+  for (const key of RAW_SYNC_KEYS) {
+    const raw = localStorage.getItem(`ogmara.${key}`);
+    if (raw !== null) settings[key] = raw;
+  }
   const plaintext = new TextEncoder().encode(JSON.stringify(settings));
   const key = await deriveKey(hexKey);
   const nonce = crypto.getRandomValues(new Uint8Array(12));
@@ -84,9 +96,15 @@ export async function decryptAndApplySettings(
     throw new Error('Invalid settings format');
   }
   for (const [k, v] of Object.entries(settings)) {
-    // Only apply known keys with valid types
+    // JSON-encoded keys: write via setSetting
     if (SYNC_KEYS.includes(k as any) && (typeof v === 'string' || typeof v === 'boolean' || typeof v === 'number')) {
-      setSetting(k, v);
+      setSetting(k as any, v as any);
+    }
+    // Raw-string theme keys: write directly to preserve theme.ts storage format.
+    // theme.ts re-reads these values on its next access, so the change applies
+    // on the next paint cycle without an explicit refresh.
+    if (RAW_SYNC_KEYS.includes(k as any) && typeof v === 'string') {
+      localStorage.setItem(`ogmara.${k}`, v);
     }
   }
 }

@@ -2,17 +2,20 @@
  * DmConversationView — direct message conversation with a peer.
  */
 
-import { Component, createResource, createSignal, createMemo, For, Show, onCleanup, onMount } from 'solid-js';
+import { Component, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup, onMount } from 'solid-js';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { authStatus, walletAddress, getSigner, isRegistered } from '../lib/auth';
 import { onWsEvent } from '../lib/ws';
 import { navigate } from '../lib/router';
+import { showMobileList } from '../lib/mobile-nav';
+import { isModernStyle } from '../lib/theme';
 import { FormattedText } from '../components/FormattedText';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
 import { getPayloadContent, getPayloadAttachments } from '../lib/payload';
 import { EmojiPicker } from '../components/EmojiPicker';
 import { buildDirectMessage } from '@ogmara/sdk';
+import { resolveProfile, type CachedProfile } from '../lib/profile';
 
 interface DmConversationProps {
   peerAddress: string;
@@ -27,8 +30,39 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   const [showReactPicker, setShowReactPicker] = createSignal<string | null>(null);
   const [attachments, setAttachments] = createSignal<MediaAttachment[]>([]);
   const [sendError, setSendError] = createSignal<string | null>(null);
+
+  // Peer profile for header
+  const [peerProfile, setPeerProfile] = createSignal<CachedProfile>({});
+  createEffect(() => {
+    if (props.peerAddress) resolveProfile(props.peerAddress).then(setPeerProfile);
+  });
+  const peerName = () => peerProfile().display_name || `${props.peerAddress.slice(0, 8)}...${props.peerAddress.slice(-4)}`;
   const EDIT_WINDOW_MS = 30 * 60 * 1000;
   let inputRef: HTMLTextAreaElement | undefined;
+  let messagesRef: HTMLDivElement | undefined;
+
+  // Auto-scroll DM messages
+  let prevDmCount = 0;
+  let dmInitialLoad = true;
+  createEffect(() => {
+    const msgs = allMessages();
+    const count = msgs.length;
+    if (count === 0 || count === prevDmCount) { prevDmCount = count; return; }
+    const isFirst = dmInitialLoad;
+    prevDmCount = count;
+    dmInitialLoad = false;
+    setTimeout(() => {
+      if (!messagesRef) return;
+      if (isFirst) {
+        messagesRef.scrollTop = messagesRef.scrollHeight;
+      } else {
+        const { scrollTop, scrollHeight, clientHeight } = messagesRef;
+        if (scrollHeight - scrollTop - clientHeight < 150) {
+          messagesRef.scrollTo({ top: messagesRef.scrollHeight, behavior: 'smooth' });
+        }
+      }
+    }, 0);
+  });
 
   const [messages] = createResource(
     () => props.peerAddress,
@@ -118,7 +152,10 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
         payload: text,
       }]);
 
-      setTimeout(() => inputRef?.focus(), 50);
+      setTimeout(() => {
+        inputRef?.focus();
+        if (messagesRef) messagesRef.scrollTo({ top: messagesRef.scrollHeight, behavior: 'smooth' });
+      }, 50);
     } catch (err: any) {
       console.error('sendDm failed:', err);
       const msg = err?.message || String(err);
@@ -209,18 +246,29 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   return (
     <div class="dm-conv-view">
       <div class="dm-conv-header">
-        <button class="dm-back-btn" onClick={() => navigate('/dm')}>
-          ← {t('nav_dms')}
-        </button>
-        <span
-          class="dm-conv-peer"
-          onClick={() => navigate(`/user/${props.peerAddress}`)}
-        >
-          {truncateAddress(props.peerAddress)}
-        </span>
+        <Show when={isModernStyle()} fallback={
+          <>
+            <button class="dm-back-btn" onClick={() => navigate('/dm')}>← {t('nav_dms')}</button>
+            <span class="dm-conv-peer" onClick={() => navigate(`/user/${props.peerAddress}`)}>{truncateAddress(props.peerAddress)}</span>
+          </>
+        }>
+          <button class="channel-back-btn content-back-btn" onClick={() => showMobileList()}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><polyline points="12 19 5 12 12 5"/></svg>
+          </button>
+          <div style="width:36px; height:36px; border-radius:50%; flex-shrink:0; overflow:hidden; cursor:pointer" onClick={() => navigate(`/user/${props.peerAddress}`)}>
+            <Show when={peerProfile().avatar_cid} fallback={
+              <div style="width:36px; height:36px; border-radius:50%; background:var(--color-dm); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px">
+                {peerName().slice(0, 1).toUpperCase()}
+              </div>
+            }>
+              <img src={getClient().getMediaUrl(peerProfile().avatar_cid!)} alt="" style="width:36px; height:36px; border-radius:50%; object-fit:cover" />
+            </Show>
+          </div>
+          <span class="dm-conv-peer" onClick={() => navigate(`/user/${props.peerAddress}`)}>{peerName()}</span>
+        </Show>
       </div>
 
-      <div class="dm-conv-messages">
+      <div class="dm-conv-messages" ref={messagesRef}>
         <Show
           when={allMessages().length > 0}
           fallback={<div class="dm-conv-empty">{t('dm_no_messages')}</div>}
@@ -288,84 +336,56 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
       </Show>
 
       <Show when={authStatus() === 'ready'}>
-        <Show when={!editingMsg()}>
-          <div class="dm-media-bar">
-            <MediaUpload
-              attachments={attachments()}
-              onAttach={(a) => setAttachments((prev) => [...prev, a])}
-              onRemove={(i) => setAttachments((prev) => prev.filter((_, idx) => idx !== i))}
-              disabled={sending()}
-            />
-          </div>
-        </Show>
         <Show when={sendError()}>
-          <div class="dm-send-error" onClick={() => setSendError(null)}>
-            {sendError()}
-          </div>
+          <div class="dm-send-error" onClick={() => setSendError(null)}>{sendError()}</div>
         </Show>
-        <div class="dm-input-area">
-          <div class="dm-input-row">
-            <textarea
-              ref={inputRef}
-              class="dm-textarea"
-              rows={3}
-              placeholder={t('chat_placeholder')}
-              value={messageInput()}
-              onInput={(e) => setMessageInput(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && (messageInput().trim() || attachments().length > 0)) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              onPaste={(e) => {
-                const items = e.clipboardData?.items;
-                if (!items || !walletAddress()) return;
-                const imageItem = Array.from(items).find((i) => i.type.startsWith('image/'));
-                if (!imageItem) return;
-                e.preventDefault();
-                const file = imageItem.getAsFile();
-                if (!file) return;
-                getClient().uploadMedia(file, `paste-${Date.now()}.${file.type.split('/')[1] || 'png'}`)
-                  .then((result) => {
-                    setAttachments((prev) => [...prev, {
-                      cid: result.cid,
-                      mime_type: file.type,
-                      size_bytes: file.size,
-                      filename: `paste-${Date.now()}.${file.type.split('/')[1] || 'png'}`,
-                      thumbnail_cid: result.thumbnail_cid,
-                    }]);
-                  }).catch(() => { /* upload failed */ });
-              }}
-              disabled={sending() || !walletAddress()}
-            />
-            <div class="dm-input-actions">
-              <div class="dm-emoji-container">
-                <button
-                  class="dm-emoji-toggle"
-                  onClick={() => walletAddress() && setShowEmoji(!showEmoji())}
-                  title="Emoji"
-                  disabled={!walletAddress()}
-                >
-                  😊
-                </button>
-                <Show when={showEmoji()}>
-                  <EmojiPicker
-                    onSelect={insertEmoji}
-                    onClose={() => setShowEmoji(false)}
-                  />
-                </Show>
+        <Show when={isModernStyle()} fallback={
+          /* Classic DM input */
+          <>
+            <Show when={!editingMsg()}>
+              <div class="dm-media-bar">
+                <MediaUpload attachments={attachments()} onAttach={(a) => setAttachments((prev) => [...prev, a])} onRemove={(i) => setAttachments((prev) => prev.filter((_, idx) => idx !== i))} disabled={sending()} />
               </div>
-              <button
-                class="dm-send-btn"
-                onClick={handleSend}
-                disabled={sending() || (!messageInput().trim() && attachments().length === 0) || !walletAddress()}
-              >
-                {t('chat_send')}
+            </Show>
+            <div class="dm-input-area">
+              <div class="dm-input-row">
+                <textarea ref={inputRef} class="dm-textarea" rows={3} placeholder={t('chat_placeholder')} value={messageInput()}
+                  onInput={(e) => setMessageInput(e.currentTarget.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && (messageInput().trim() || attachments().length > 0)) { e.preventDefault(); handleSend(); } }}
+                  onPaste={(e) => { const items = e.clipboardData?.items; if (!items || !walletAddress()) return; const img = Array.from(items).find((i) => i.type.startsWith('image/')); if (!img) return; e.preventDefault(); const file = img.getAsFile(); if (!file) return; getClient().uploadMedia(file, `paste.${file.type.split('/')[1] || 'png'}`).then((r) => { setAttachments((p) => [...p, { cid: r.cid, mime_type: file.type, size_bytes: file.size, filename: `paste.${file.type.split('/')[1] || 'png'}`, thumbnail_cid: r.thumbnail_cid }]); }).catch(() => {}); }}
+                  disabled={sending() || !walletAddress()} />
+                <div class="dm-input-actions">
+                  <div class="dm-emoji-container">
+                    <button class="dm-emoji-toggle" onClick={() => walletAddress() && setShowEmoji(!showEmoji())} disabled={!walletAddress()}>😊</button>
+                    <Show when={showEmoji()}><EmojiPicker onSelect={insertEmoji} onClose={() => setShowEmoji(false)} /></Show>
+                  </div>
+                  <button class="dm-send-btn" onClick={handleSend} disabled={sending() || (!messageInput().trim() && attachments().length === 0) || !walletAddress()}>{t('chat_send')}</button>
+                </div>
+              </div>
+            </div>
+          </>
+        }>
+          {/* Modern DM input: [emoji] [attach] [textarea] [send] */}
+          <div class="dm-input-area">
+            <div class="dm-input-row">
+              <div class="dm-emoji-container">
+                <button class="input-icon-btn" onClick={() => walletAddress() && setShowEmoji(!showEmoji())} disabled={!walletAddress()}>😊</button>
+                <Show when={showEmoji()}><EmojiPicker onSelect={insertEmoji} onClose={() => setShowEmoji(false)} /></Show>
+              </div>
+              <button class="input-icon-btn" onClick={() => { const inp = document.createElement('input'); inp.type = 'file'; inp.onchange = (ev) => { const file = (ev.target as HTMLInputElement).files?.[0]; if (file) getClient().uploadMedia(file, file.name).then((r) => { setAttachments((p) => [...p, { cid: r.cid, mime_type: file.type || 'application/octet-stream', size_bytes: file.size, filename: file.name, thumbnail_cid: r.thumbnail_cid }]); }).catch(() => {}); }; inp.click(); }} disabled={!walletAddress()}>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+              </button>
+              <textarea ref={inputRef} class="dm-textarea" rows={1} placeholder={t('chat_placeholder')} value={messageInput()}
+                onInput={(e) => { setMessageInput(e.currentTarget.value); e.currentTarget.style.height = 'auto'; e.currentTarget.style.height = Math.min(e.currentTarget.scrollHeight, 160) + 'px'; }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && (messageInput().trim() || attachments().length > 0)) { e.preventDefault(); handleSend(); } }}
+                onPaste={(e) => { const items = e.clipboardData?.items; if (!items || !walletAddress()) return; const img = Array.from(items).find((i) => i.type.startsWith('image/')); if (!img) return; e.preventDefault(); const file = img.getAsFile(); if (!file) return; getClient().uploadMedia(file, `paste.${file.type.split('/')[1] || 'png'}`).then((r) => { setAttachments((p) => [...p, { cid: r.cid, mime_type: file.type, size_bytes: file.size, filename: `paste.${file.type.split('/')[1] || 'png'}`, thumbnail_cid: r.thumbnail_cid }]); }).catch(() => {}); }}
+                disabled={sending() || !walletAddress()} />
+              <button class="dm-send-btn" onClick={handleSend} disabled={sending() || (!messageInput().trim() && attachments().length === 0) || !walletAddress()} title={t('chat_send')}>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5" /><polyline points="5 12 12 5 19 12" /></svg>
               </button>
             </div>
           </div>
-        </div>
+        </Show>
       </Show>
 
       <style>{`

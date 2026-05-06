@@ -6,14 +6,18 @@
  */
 
 import { Component, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup } from 'solid-js';
-import { Portal } from 'solid-js/web';
-import { updateTrayBadge } from '../lib/trayBadge';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { authStatus, walletAddress } from '../lib/auth';
 import { navigate, route } from '../lib/router';
 import { getSetting, setSetting } from '../lib/settings';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
+import { isMobileViewport, showMobileDetail, showMobileList, mobileListOpen } from '../lib/mobile-nav';
+import { isModernStyle } from '../lib/theme';
+import { getTheme, setTheme } from '../lib/theme';
+import { disconnectWallet } from '../lib/auth';
+// Desktop-only: tray icon badge — reflects total unread count on the OS tray.
+import { updateTrayBadge } from '../lib/trayBadge';
 
 /** Default channel slug shown to all users (even unauthenticated). */
 const DEFAULT_CHANNEL_SLUG = 'ogmara';
@@ -84,9 +88,129 @@ function syncJoinedWithApi(apiChannels: { channel_id: number; channel_type: numb
   if (changed) persistJoined(current);
 }
 
+const SIDEBAR_MIN_W = 200;
+const SIDEBAR_MAX_W = 600;
+const SIDEBAR_DEFAULT_W = 320;
+
 export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   const [channelsOpen, setChannelsOpen] = createSignal(getSetting('channelsExpanded'));
   const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number; channelId: number; creator?: string } | null>(null);
+
+  const savedW = parseInt(localStorage.getItem('ogmara.sidebarWidth') || '', 10);
+  const [sidebarWidth, setSidebarWidth] = createSignal(
+    Number.isFinite(savedW) ? Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, savedW)) : SIDEBAR_DEFAULT_W,
+  );
+  let dragging = false;
+  const onResizeStart = (e: MouseEvent) => {
+    e.preventDefault();
+    dragging = true;
+    const onMove = (ev: MouseEvent) => {
+      if (!dragging) return;
+      setSidebarWidth(Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, ev.clientX)));
+    };
+    const onUp = () => {
+      dragging = false;
+      localStorage.setItem('ogmara.sidebarWidth', String(sidebarWidth()));
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
+  // Member profiles — shared between classic sidebar and modern sidebar
+  const [memberProfiles, setMemberProfiles] = createSignal<Map<string, CachedProfile>>(new Map());
+
+  // --- Modern style: burger menu + tabbed sidebar ---
+  type SidebarTab = 'chats' | 'feed' | 'dms';
+  const [activeTab, setActiveTab] = createSignal<SidebarTab>('chats');
+  const [searchQuery, setSearchQuery] = createSignal('');
+  const [burgerOpen, setBurgerOpen] = createSignal(false);
+  const [currentTheme, setCurrentTheme] = createSignal(getTheme());
+  const [burgerProfile, setBurgerProfile] = createSignal<CachedProfile>({});
+
+  if (typeof document !== 'undefined') {
+    const closeBurger = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest('.sidebar-burger-wrap')) setBurgerOpen(false);
+    };
+    document.addEventListener('click', closeBurger);
+    onCleanup(() => document.removeEventListener('click', closeBurger));
+  }
+
+  createEffect(() => {
+    const addr = walletAddress();
+    if (addr) resolveProfile(addr).then(setBurgerProfile);
+  });
+
+  const modernNavTo = (path: string) => {
+    setBurgerOpen(false);
+    navigate(path);
+    if (isMobileViewport()) showMobileDetail();
+  };
+
+  const toggleTheme = () => {
+    const next = currentTheme() === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    setCurrentTheme(next);
+  };
+
+  const handleLogout = async () => {
+    setBurgerOpen(false);
+    await disconnectWallet();
+    navigate('/news');
+  };
+
+  // Remember last route per tab so switching tabs restores the previous view
+  let lastChatRoute = `/chat/${getSetting('lastChannel') || ''}`;
+  let lastFeedRoute = '/news';
+  let lastDmRoute = '/dm';
+
+  // Track current route changes to update last-per-tab.
+  // Only stick on the LIST views (`/news`, `/dm`) — clicking the tab should
+  // always return to the feed/list, not to a previously-open detail or
+  // compose screen. (For chat we do stick on the channel because each
+  // channel is its own context the user wants to resume.)
+  createEffect(() => {
+    const r = route();
+    if (r.view === 'chat' && r.params.channelId) lastChatRoute = `/chat/${r.params.channelId}`;
+    if (r.view === 'news') lastFeedRoute = '/news';
+    if (r.view === 'dm-conversation' && r.params.address) lastDmRoute = `/dm/${r.params.address}`;
+  });
+
+  // DM conversations for modern sidebar
+  const [dmConversations] = createResource(
+    () => activeTab() === 'dms' && authStatus() === 'ready',
+    async (shouldFetch) => {
+      if (!shouldFetch) return [];
+      try {
+        const resp = await getClient().getDmConversations({ limit: 50 });
+        for (const conv of resp.conversations) {
+          if (!memberProfiles().has(conv.peer)) {
+            resolveProfile(conv.peer).then((p) => {
+              setMemberProfiles((prev) => { const next = new Map(prev); next.set(conv.peer, p); return next; });
+            });
+          }
+        }
+        return resp.conversations;
+      } catch { return []; }
+    },
+  );
+
+  const channelInitial = (ch: { display_name?: string; slug: string }) =>
+    (ch.display_name || ch.slug || '#').slice(0, 1).toUpperCase();
+
+  const filteredChannels = () => {
+    const all = channels() ?? [];
+    const q = searchQuery().trim().toLowerCase();
+    if (!q) return all;
+    return all.filter((ch) =>
+      (ch.display_name || '').toLowerCase().includes(q) || ch.slug.toLowerCase().includes(q),
+    );
+  };
 
   const handleContextMenu = (e: MouseEvent, channelId: number, creator?: string) => {
     e.preventDefault();
@@ -120,7 +244,6 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   // --- Private channel member list (collapsible per channel) ---
   const [expandedMembers, setExpandedMembers] = createSignal<Set<number>>(new Set());
   const [channelMembers, setChannelMembers] = createSignal<Record<number, { address: string; role: string }[]>>({});
-  const [memberProfiles, setMemberProfiles] = createSignal<Map<string, CachedProfile>>(new Map());
 
   const toggleMembers = async (channelId: number) => {
     const expanded = new Set(expandedMembers());
@@ -307,11 +430,6 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     const onChannelsChanged = () => setChannelVersion(v => v + 1);
     window.addEventListener('ogmara:channels-changed', onChannelsChanged);
     onCleanup(() => window.removeEventListener('ogmara:channels-changed', onChannelsChanged));
-
-    // Refresh immediately when app is restored from tray
-    const onAppRestored = () => { pollData(); };
-    window.addEventListener('ogmara:app-restored', onAppRestored);
-    onCleanup(() => window.removeEventListener('ogmara:app-restored', onAppRestored));
   }
 
   // Poll unread counts + refresh channel list every 30 seconds when authenticated
@@ -325,7 +443,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         client.getUnreadCounts().catch(() => ({ unread: {} })),
         client.getDmUnread().catch(() => ({ unread: {} })),
         client.getNotifications(lastSeenNotif || undefined, 50).catch(() => ({ notifications: [] })),
-        // Refresh channel list to sync cross-device changes (leave/delete/create)
+        // Refresh channel list
         refetchChannels(),
       ]);
       setUnreadCounts(unread.unread ?? {});
@@ -335,10 +453,11 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       const notifCount = (notifResp as any).notifications?.length ?? 0;
       setNotifUnread(notifCount);
 
-      // Update tray icon badge with total unread count
-      const channelTotal = Object.values(unread.unread ?? {}).reduce((a: number, b: number) => a + b, 0);
-      const totalUnread = channelTotal + dmTotal + notifCount;
-      updateTrayBadge(totalUnread);
+      // Desktop tray badge — sum of channel + DM + notification unreads.
+      const channelTotal = Object.values(unread.unread ?? {}).reduce(
+        (a: number, b: number) => a + b, 0,
+      );
+      updateTrayBadge(channelTotal + dmTotal + notifCount);
     } catch { /* ignore */ }
   };
   createEffect(() => {
@@ -365,12 +484,247 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     if (view === 'bookmarks') return r.view === 'bookmarks';
     if (view === 'search') return r.view === 'search';
     if (view === 'settings') return r.view === 'settings';
-    if (view === 'portfolio') return r.view === 'token-portfolio';
     return false;
   };
 
+  // --- Modern sidebar render ---
+  const modernSidebar = () => (
+    <aside
+      class={`sidebar ${isMobileViewport() ? 'mobile-open' : ''}`}
+      style={isMobileViewport()
+        ? { display: 'flex', 'flex-direction': 'column', width: '100%', height: '100%', position: 'relative' }
+        : { width: `${sidebarWidth()}px`, 'min-width': `${sidebarWidth()}px`, position: 'relative' }
+      }
+    >
+      <div class="sidebar-header" style="display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--color-border)">
+        <div class="sidebar-burger-wrap" style="position:relative; flex-shrink:0">
+          <Show
+            when={isMobileViewport() && !mobileListOpen()}
+            fallback={
+              <button style="width:38px; height:38px; border-radius:50%; color:var(--color-text-secondary); display:flex; align-items:center; justify-content:center"
+                onClick={(e) => { e.stopPropagation(); setBurgerOpen(!burgerOpen()); }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+                </svg>
+              </button>
+            }
+          >
+            <button style="width:38px; height:38px; border-radius:50%; color:var(--color-text-secondary); display:flex; align-items:center; justify-content:center"
+              onClick={() => showMobileList()}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 12H5"/><polyline points="12 19 5 12 12 5"/>
+              </svg>
+            </button>
+          </Show>
+          <Show when={burgerOpen()}>
+            <div style="position:absolute; top:42px; left:0; background:var(--color-bg-secondary); border:1px solid var(--color-border); border-radius:var(--radius-md); box-shadow:0 4px 16px rgba(0,0,0,0.35); z-index:10000; padding:4px; min-width:220px" role="menu">
+              <Show when={authStatus() === 'ready' && walletAddress()}>
+                <button style="display:flex; align-items:center; gap:8px; padding:8px 12px; width:100%; text-align:left; border-radius:var(--radius-sm); cursor:pointer"
+                  onClick={() => modernNavTo(`/user/${walletAddress()}`)}>
+                  <span style="width:36px; height:36px; border-radius:50%; background:var(--color-accent-bg); color:var(--color-accent-primary); display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; flex-shrink:0">
+                    {(burgerProfile().display_name || walletAddress() || '').slice(0, 2).toUpperCase()}
+                  </span>
+                  <div style="overflow:hidden">
+                    <div style="font-weight:600; font-size:var(--font-size-sm); color:var(--color-text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">
+                      {burgerProfile().display_name || `${walletAddress()?.slice(0, 8)}...${walletAddress()?.slice(-4)}`}
+                    </div>
+                    <div style="font-size:11px; color:var(--color-text-secondary)">{walletAddress()?.slice(0, 12)}…{walletAddress()?.slice(-6)}</div>
+                  </div>
+                </button>
+                <div style="height:1px; background:var(--color-border); margin:4px 0" />
+              </Show>
+              <Show when={authStatus() === 'ready'}>
+                <button class="modern-menu-item" onClick={() => modernNavTo(`/user/${walletAddress()}`)}>{t('menu_my_profile')}</button>
+                <button class="modern-menu-item" onClick={() => modernNavTo('/wallet')}>{t('menu_wallet')}</button>
+                <div style="height:1px; background:var(--color-border); margin:4px 0" />
+                <button class="modern-menu-item" onClick={() => modernNavTo('/channel/create')}>{t('menu_new_channel')}</button>
+                <div style="height:1px; background:var(--color-border); margin:4px 0" />
+                <button class="modern-menu-item" onClick={() => { localStorage.setItem('ogmara.lastSeenNotifTs', Date.now().toString()); modernNavTo('/notifications'); }}>{t('menu_notifications')}</button>
+              </Show>
+              <button class="modern-menu-item" onClick={() => modernNavTo('/search')}>{t('menu_search')}</button>
+              <button class="modern-menu-item" onClick={() => modernNavTo('/bookmarks')}>{t('menu_bookmarks')}</button>
+              <button class="modern-menu-item" onClick={() => modernNavTo('/settings')}>{t('menu_settings')}</button>
+              <button class="modern-menu-item" onClick={(e) => { e.stopPropagation(); toggleTheme(); }}>
+                {currentTheme() === 'dark' ? t('menu_theme_dark') : t('menu_theme_light')}
+              </button>
+              <Show when={authStatus() === 'ready'}>
+                <div style="height:1px; background:var(--color-border); margin:4px 0" />
+                <button class="modern-menu-item" style="color:#f44" onClick={handleLogout}>{t('menu_disconnect')}</button>
+              </Show>
+              <Show when={authStatus() !== 'ready'}>
+                <div style="height:1px; background:var(--color-border); margin:4px 0" />
+                <button class="modern-menu-item" onClick={() => modernNavTo('/wallet')}>{t('wallet_connect')}</button>
+              </Show>
+            </div>
+          </Show>
+        </div>
+        <div style="flex:1; display:flex; align-items:center; gap:6px; background:var(--color-bg-tertiary); border-radius:var(--radius-md); padding:6px 10px">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-secondary)" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" placeholder={t('nav_search')} value={searchQuery()} onInput={(e) => setSearchQuery(e.currentTarget.value)}
+            style="flex:1; background:none; border:none; outline:none; color:var(--color-text-primary); font-size:var(--font-size-sm); font-family:inherit" />
+          <Show when={searchQuery()}>
+            <button onClick={() => setSearchQuery('')} style="color:var(--color-text-secondary); font-size:14px; cursor:pointer">✕</button>
+          </Show>
+        </div>
+        <Show when={authStatus() === 'ready'}>
+          <button style="position:relative; width:38px; height:38px; border-radius:50%; color:var(--color-text-secondary); display:flex; align-items:center; justify-content:center; flex-shrink:0"
+            onClick={() => { localStorage.setItem('ogmara.lastSeenNotifTs', Date.now().toString()); setNotifUnread(0); go('/notifications'); }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            <Show when={notifUnread() > 0}>
+              <span style="position:absolute; top:4px; right:4px; min-width:16px; height:16px; border-radius:9999px; background:var(--color-accent-primary); color:var(--color-text-inverse); font-size:10px; font-weight:700; display:flex; align-items:center; justify-content:center; padding:0 4px">{notifUnread()}</span>
+            </Show>
+          </button>
+        </Show>
+      </div>
+
+      {/* Tab bar — pill buttons with accent-bg tint on active */}
+      <div style="display:flex; gap:4px; padding:8px 12px; border-bottom:1px solid var(--color-border)">
+        <button style={`flex:1; padding:8px 10px; font-size:var(--font-size-sm); font-weight:600; border-radius:9999px; transition:background 0.15s, color 0.15s; text-align:center; ${activeTab() === 'chats' ? 'background:var(--color-accent-bg); color:var(--color-accent-primary)' : 'background:transparent; color:var(--color-text-secondary)'}`}
+          onClick={() => { setActiveTab('chats'); if (lastChatRoute && lastChatRoute !== '/chat/') go(lastChatRoute); }}>{t('nav_chat')}</button>
+        <button style={`flex:1; padding:8px 10px; font-size:var(--font-size-sm); font-weight:600; border-radius:9999px; transition:background 0.15s, color 0.15s; text-align:center; ${activeTab() === 'feed' ? 'background:var(--color-accent-bg); color:var(--color-accent-primary)' : 'background:transparent; color:var(--color-text-secondary)'}`}
+          onClick={() => { setActiveTab('feed'); go(lastFeedRoute); }}>{t('nav_news')}</button>
+        <button style={`flex:1; padding:8px 10px; font-size:var(--font-size-sm); font-weight:600; border-radius:9999px; transition:background 0.15s, color 0.15s; text-align:center; ${activeTab() === 'dms' ? 'background:var(--color-accent-bg); color:var(--color-accent-primary)' : 'background:transparent; color:var(--color-text-secondary)'}`}
+          onClick={() => { setActiveTab('dms'); if (lastDmRoute !== '/dm') go(lastDmRoute); }}>{t('nav_dms')}</button>
+      </div>
+
+      {/* Tab content */}
+      <div style="flex:1; overflow-y:auto">
+        <Show when={activeTab() === 'chats'}>
+          <For each={filteredChannels()}>
+            {(channel) => {
+              const unread = () => unreadCounts()[String(channel.channel_id)] ?? 0;
+              const isActive = () => currentChannelId() === channel.channel_id;
+              return (
+                <button
+                  style={`display:flex; align-items:center; gap:10px; padding:10px 12px; width:100%; text-align:left; cursor:pointer; transition:background 0.1s; background:${isActive() ? 'var(--color-chat-active-bg)' : 'transparent'}`}
+                  onClick={() => go(`/chat/${channel.channel_id}`)}
+                  onContextMenu={(e) => handleContextMenu(e, channel.channel_id, channel.creator)}
+                >
+                  <div style="width:48px; height:48px; border-radius:50%; background:linear-gradient(135deg, var(--color-accent-primary), var(--color-accent-secondary)); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:20px; flex-shrink:0; overflow:hidden">
+                    <Show when={channel.logo_cid} fallback={<span>{channelInitial(channel)}</span>}>
+                      <img src={getClient().getMediaUrl(channel.logo_cid!)} alt="" style="width:48px; height:48px; border-radius:50%; object-fit:cover" />
+                    </Show>
+                  </div>
+                  <div style="flex:1; overflow:hidden">
+                    <div style="display:flex; justify-content:space-between; align-items:center">
+                      <span style="font-weight:600; font-size:var(--font-size-sm); color:var(--color-text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">
+                        <Show when={channel.channel_type === 2}>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px; vertical-align:-1px">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                          </svg>
+                        </Show>
+                        <Show when={channel.channel_type === 1}>
+                          <span style="margin-right:4px; vertical-align:-1px" title={t('sidebar_broadcast_channel')}>📢</span>
+                        </Show>
+                        {channel.display_name || channel.slug}
+                      </span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2px">
+                      <span style="font-size:var(--font-size-xs); color:var(--color-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">
+                        {channel.description || (channel.channel_type === 2
+                          ? t('sidebar_private_channel')
+                          : channel.channel_type === 1
+                            ? t('sidebar_broadcast_channel')
+                            : t('sidebar_public_channel'))}
+                      </span>
+                      <Show when={unread() > 0}>
+                        <span style="min-width:20px; height:20px; border-radius:9999px; background:var(--color-accent-primary); color:var(--color-text-inverse); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; padding:0 5px; flex-shrink:0; margin-left:4px">
+                          {unread()}
+                        </span>
+                      </Show>
+                    </div>
+                  </div>
+                </button>
+              );
+            }}
+          </For>
+        </Show>
+
+        <Show when={activeTab() === 'feed'}>
+          <div style="padding:40px 20px; text-align:center; color:var(--color-text-secondary)">
+            <div style="font-size:28px; margin-bottom:8px">📰</div>
+            <p>{t('news_title')}</p>
+          </div>
+        </Show>
+
+        <Show when={activeTab() === 'dms'}>
+          <Show when={authStatus() === 'ready'} fallback={
+            <div style="padding:40px 20px; text-align:center; color:var(--color-text-secondary)">
+              <div style="font-size:28px; margin-bottom:8px">✉️</div>
+              <p>{t('auth_connect_prompt')}</p>
+            </div>
+          }>
+            <Show when={dmConversations() && dmConversations()!.length > 0} fallback={
+              <div style="padding:40px 20px; text-align:center; color:var(--color-text-secondary)">
+                <div style="font-size:28px; margin-bottom:8px">✉️</div>
+                <p>{t('dm_empty')}</p>
+              </div>
+            }>
+              <For each={dmConversations()}>
+                {(conv) => {
+                  const isActive = () => route().view === 'dm-conversation' && route().params.address === conv.peer;
+                  const dmProf = () => memberProfiles?.().get(conv.peer);
+                  const dmName = () => dmProf()?.display_name || `${conv.peer.slice(0, 8)}...${conv.peer.slice(-4)}`;
+                  return (
+                    <button
+                      style={`display:flex; align-items:center; gap:10px; padding:10px 12px; width:100%; text-align:left; cursor:pointer; background:${isActive() ? 'var(--color-accent-bg)' : 'transparent'}`}
+                      onClick={() => go(`/dm/${conv.peer}`)}
+                    >
+                      <div style="width:42px; height:42px; border-radius:50%; background:var(--color-dm); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:var(--font-size-md); flex-shrink:0; overflow:hidden">
+                        <Show when={dmProf()?.avatar_cid} fallback={<span>{dmName().slice(0, 1).toUpperCase()}</span>}>
+                          <img src={getClient().getMediaUrl(dmProf()!.avatar_cid!)} alt="" style="width:42px; height:42px; border-radius:50%; object-fit:cover" />
+                        </Show>
+                      </div>
+                      <div style="flex:1; overflow:hidden">
+                        <div style="display:flex; justify-content:space-between; align-items:center">
+                          <span style="font-weight:600; font-size:var(--font-size-sm); color:var(--color-text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{dmName()}</span>
+                          <Show when={conv.last_message_at}>
+                            <span style="font-size:11px; color:var(--color-text-secondary); flex-shrink:0; margin-left:8px">{new Date(conv.last_message_at < 1e12 ? conv.last_message_at * 1000 : conv.last_message_at).toLocaleDateString()}</span>
+                          </Show>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2px">
+                          <span style="font-size:var(--font-size-xs); color:var(--color-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{conv.last_message_preview || '...'}</span>
+                          <Show when={conv.unread_count > 0}>
+                            <span style="min-width:20px; height:20px; border-radius:9999px; background:var(--color-accent-primary); color:var(--color-text-inverse); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; padding:0 5px; flex-shrink:0; margin-left:4px">{conv.unread_count}</span>
+                          </Show>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                }}
+              </For>
+            </Show>
+          </Show>
+        </Show>
+      </div>
+
+      <Show when={authStatus() !== 'ready'}>
+        <div style="padding:12px; border-top:1px solid var(--color-border)">
+          <button style="width:100%; padding:10px; background:var(--color-accent-primary); color:var(--color-text-inverse); border-radius:var(--radius-md); font-weight:600; cursor:pointer"
+            onClick={() => go('/wallet')}>{t('wallet_connect')}</button>
+        </div>
+      </Show>
+
+      <style>{`
+        .modern-menu-item {
+          display:block; width:100%; text-align:left; padding:8px 12px;
+          font-size:var(--font-size-sm); border-radius:var(--radius-sm); cursor:pointer;
+          color:var(--color-text-primary);
+        }
+        .modern-menu-item:hover { background:var(--color-bg-tertiary); }
+      `}</style>
+      <Show when={!isMobileViewport()}>
+        <div class="sidebar-resize-handle" onMouseDown={onResizeStart} />
+      </Show>
+    </aside>
+  );
+
   return (
-    <aside class={`sidebar ${window.innerWidth <= 768 ? 'mobile-open' : ''}`}>
+    <Show when={isModernStyle()} fallback={
+    <aside
+      class={`sidebar ${isMobileViewport() ? 'mobile-open' : ''}`}
+      style={isMobileViewport() ? undefined : { width: `${sidebarWidth()}px`, 'min-width': `${sidebarWidth()}px` }}
+    >
       {/* News */}
       <div class="sidebar-section">
         <button
@@ -416,7 +770,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
                     onClick={() => go(`/chat/${channel.channel_id}`)}
                     onContextMenu={(e) => handleContextMenu(e, channel.channel_id, channel.creator)}
                   >
-                    <span class="channel-hash">{channel.channel_type === 2 ? '🔒' : '#'}</span>
+                    <span class="channel-hash">{channel.channel_type === 2 ? '🔒' : channel.channel_type === 1 ? '📢' : '#'}</span>
                     <span class="channel-name">{channel.display_name || channel.slug}</span>
                     <Show when={(unreadCounts()[String(channel.channel_id)] ?? 0) > 0}>
                       <span class="unread-badge">{unreadCounts()[String(channel.channel_id)]}</span>
@@ -495,18 +849,6 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       {/* Divider */}
       <div class="sidebar-divider" />
 
-      {/* Wallet Portfolio */}
-      <Show when={authStatus() === 'ready'}>
-        <div class="sidebar-section">
-          <button
-            class={`sidebar-nav-item ${isView('portfolio') ? 'active' : ''}`}
-            onClick={() => go('/wallet/tokens')}
-          >
-            💰 {t('nav_wallet')}
-          </button>
-        </div>
-      </Show>
-
       {/* Bookmarks */}
       <div class="sidebar-section">
         <button
@@ -546,8 +888,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         </div>
       </Show>
 
-      {/* Channel context menu — rendered via Portal to escape sidebar overflow clipping */}
-      <Portal>
+      {/* Channel context menu */}
       <Show when={contextMenu()}>
         <div
           class="channel-context-menu"
@@ -599,10 +940,8 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
           </Show>
         </div>
       </Show>
-      </Portal>
 
-      {/* Member context menu — rendered via Portal to escape sidebar overflow clipping */}
-      <Portal>
+      {/* Member context menu (right-click on member in sidebar) */}
       <Show when={memberMenu()}>
         <div
           class="channel-context-menu"
@@ -644,12 +983,10 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
           </Show>
         </div>
       </Show>
-      </Portal>
 
       <style>{`
         .sidebar {
-          width: 240px;
-          min-width: 240px;
+          position: relative;
           background: var(--color-bg-secondary);
           border-right: 1px solid var(--color-border);
           display: flex;
@@ -763,8 +1100,8 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
           background: var(--color-bg-secondary);
           border: 1px solid var(--color-border);
           border-radius: var(--radius-md);
-          box-shadow: 0 4px 16px rgba(0,0,0,0.5);
-          z-index: 9999;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+          z-index: 100;
           padding: 4px;
           min-width: 160px;
         }
@@ -822,7 +1159,18 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         .member-dot.member-mod { background: var(--color-accent-primary); }
         .member-dot.member-owner { background: var(--color-success); }
         .member-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .sidebar-resize-handle {
+          position: absolute; top: 0; right: -3px; width: 6px; height: 100%;
+          cursor: col-resize; z-index: 20; background: transparent; transition: background 0.15s;
+        }
+        .sidebar-resize-handle:hover, .sidebar-resize-handle:active { background: var(--color-accent-primary); }
       `}</style>
+      <Show when={!isMobileViewport()}>
+        <div class="sidebar-resize-handle" onMouseDown={onResizeStart} />
+      </Show>
     </aside>
+    }>
+      {modernSidebar()}
+    </Show>
   );
 };

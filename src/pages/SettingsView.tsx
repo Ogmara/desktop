@@ -10,7 +10,7 @@
 
 import { Component, createSignal, createResource, Show } from 'solid-js';
 import { t, setLanguage, currentLanguage, SUPPORTED_LANGUAGES } from '../i18n/init';
-import { getTheme, setTheme, getCustomTheme, setCustomTheme, clearCustomTheme, getDesignStyle, setDesignStyle, DESIGN_STYLES, type Theme, type CustomTheme, type DesignStyle } from '../lib/theme';
+import { getTheme, setTheme, getCustomTheme, setCustomTheme, clearCustomTheme, getDesignStyle, setDesignStyle, DESIGN_STYLES, type Theme, type CustomTheme, type DesignStyle, getColorScheme, setColorScheme, COLOR_SCHEMES, type ColorScheme } from '../lib/theme';
 import { getSetting, setSetting } from '../lib/settings';
 import { authStatus, walletAddress } from '../lib/auth';
 import { navigate } from '../lib/router';
@@ -142,10 +142,19 @@ export const SettingsView: Component = () => {
   const [exportStatus, setExportStatus] = createSignal('');
   const [customTheme, setCustomThemeState] = createSignal<CustomTheme>(getCustomTheme());
   const [designStyle, setDesignStyleState] = createSignal<DesignStyle>(getDesignStyle());
+  const [colorScheme, setColorSchemeState] = createSignal<ColorScheme>(getColorScheme());
+  const [defaultLandingView, setDefaultLandingViewState] = createSignal<'chat' | 'news'>(
+    (getSetting('defaultLandingView') as 'chat' | 'news') || 'news',
+  );
 
   const handleDesignStyleChange = (value: DesignStyle) => {
     setDesignStyleState(value);
     setDesignStyle(value);
+  };
+
+  const handleColorSchemeChange = (value: ColorScheme) => {
+    setColorSchemeState(value);
+    setColorScheme(value);
   };
 
   const handleThemeChange = (value: Theme) => {
@@ -196,6 +205,17 @@ export const SettingsView: Component = () => {
             </label>
           ))}
         </div>
+        <h3 style="margin-top: var(--spacing-md)">{t('settings_color_scheme') || 'Color Scheme'}</h3>
+        <select
+          class="settings-select"
+          value={colorScheme()}
+          onChange={(e) => handleColorSchemeChange(e.currentTarget.value as ColorScheme)}
+        >
+          {COLOR_SCHEMES.map((s) => (
+            <option value={s}>{t(`color_scheme_${s.replace('-', '_')}`) || s}</option>
+          ))}
+        </select>
+
         <h3 style="margin-top: var(--spacing-md)">{t('settings_design_style') || 'Design Style'}</h3>
         <div class="settings-style-grid">
           {DESIGN_STYLES.map((style) => (
@@ -213,6 +233,25 @@ export const SettingsView: Component = () => {
               </div>
               <span class="style-card-label">{t(`settings_style_${style}`) || style.charAt(0).toUpperCase() + style.slice(1)}</span>
             </button>
+          ))}
+        </div>
+
+        <h3 style="margin-top: var(--spacing-md)">{t('settings_default_landing') || 'Default Landing View'}</h3>
+        <div class="settings-radio-group">
+          {(['chat', 'news'] as const).map((value) => (
+            <label class="settings-radio">
+              <input
+                type="radio"
+                name="defaultLandingView"
+                value={value}
+                checked={defaultLandingView() === value}
+                onChange={() => {
+                  setDefaultLandingViewState(value);
+                  setSetting('defaultLandingView', value);
+                }}
+              />
+              {t(`settings_default_landing_${value}`) || (value === 'chat' ? 'Chat' : 'News')}
+            </label>
           ))}
         </div>
 
@@ -408,7 +447,7 @@ export const SettingsView: Component = () => {
                 const saved = await invoke('save_export_file', { filename, content: json });
                 setExportStatus(saved ? t('settings_export_success') || 'Export saved!' : '');
               } catch (e: any) {
-                const url = (client as any)?.nodeUrl || '?';
+                const url = (getClient() as any)?.nodeUrl || '?';
                 setExportStatus(`Error: ${e?.message || e}\nURL: ${url}/api/v1/account/export\nStack: ${e?.stack?.slice(0, 200) || 'none'}`);
               }
             }}
