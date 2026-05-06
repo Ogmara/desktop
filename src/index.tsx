@@ -7,8 +7,10 @@ import { initTheme } from './lib/theme';
 import { setContractAddress, setKleverNetwork } from './lib/klever';
 import { getClient } from './lib/api';
 import { getSetting } from './lib/settings';
+import { installNetworkActivityTracker } from './lib/network-activity';
 import './styles/global.css';
 import './styles/design-styles.css';
+import './styles/chat-view.css';
 
 // Override global fetch for external URLs only (bypasses CORS for API calls).
 // Internal/local requests (Vite HMR, local assets) use the original browser fetch.
@@ -58,6 +60,12 @@ if ((window as any).__TAURI_INTERNALS__) {
     return originalFetch(input, init);
   };
 }
+
+// Install the network-activity tracker AFTER the Tauri-fetch wrapper above
+// so the tracker wraps the Tauri implementation (not the original browser
+// fetch). The tracker only updates UI signals based on the URL pattern;
+// Tauri behavior is preserved.
+installNetworkActivityTracker();
 
 // Initialize i18n before rendering
 initI18n();
