@@ -402,5 +402,8 @@
   "sidebar_public_channel": "Public channel",
   "status_connecting": "Connecting to node…",
   "today": "Today",
-  "yesterday": "Yesterday"
+  "yesterday": "Yesterday",
+  "mention_no_results": "No matching users",
+  "mention_popover_label": "Mention suggestions",
+  "user_verified": "Verified on-chain"
 }

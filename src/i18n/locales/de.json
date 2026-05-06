@@ -399,5 +399,8 @@
   "sidebar_public_channel": "Öffentlicher Kanal",
   "status_connecting": "Verbinde mit Knoten…",
   "today": "Heute",
-  "yesterday": "Gestern"
+  "yesterday": "Gestern",
+  "mention_no_results": "Keine passenden Nutzer",
+  "mention_popover_label": "Vorschläge erwähnen",
+  "user_verified": "On-Chain verifiziert"
 }

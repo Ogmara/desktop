@@ -399,5 +399,8 @@
   "sidebar_public_channel": "Canal público",
   "status_connecting": "Conectando al nodo…",
   "today": "Hoy",
-  "yesterday": "Ayer"
+  "yesterday": "Ayer",
+  "mention_no_results": "Sin coincidencias",
+  "mention_popover_label": "Sugerencias de mención",
+  "user_verified": "Verificado en cadena"
 }

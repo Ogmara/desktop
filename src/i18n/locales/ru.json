@@ -399,5 +399,8 @@
   "sidebar_public_channel": "Публичный канал",
   "status_connecting": "Подключение к узлу…",
   "today": "Сегодня",
-  "yesterday": "Вчера"
+  "yesterday": "Вчера",
+  "mention_no_results": "Нет совпадений",
+  "mention_popover_label": "Подсказки упоминания",
+  "user_verified": "Подтверждено в сети"
 }

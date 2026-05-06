@@ -399,5 +399,8 @@
   "sidebar_public_channel": "パブリック",
   "status_connecting": "ノードに接続中…",
   "today": "今日",
-  "yesterday": "昨日"
+  "yesterday": "昨日",
+  "mention_no_results": "該当するユーザーなし",
+  "mention_popover_label": "メンション候補",
+  "user_verified": "オンチェーン認証済み"
 }

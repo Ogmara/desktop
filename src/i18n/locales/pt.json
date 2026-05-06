@@ -399,5 +399,8 @@
   "sidebar_public_channel": "Canal público",
   "status_connecting": "Conectando ao nó…",
   "today": "Hoje",
-  "yesterday": "Ontem"
+  "yesterday": "Ontem",
+  "mention_no_results": "Sem correspondências",
+  "mention_popover_label": "Sugestões de menção",
+  "user_verified": "Verificado on-chain"
 }

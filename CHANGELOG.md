@@ -7,9 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.16.0] - 2026-05-06
 
-Modern design refresh + read-only / broadcast channels. Pairs with
-`l2-node` v0.31.0 and `@ogmara/sdk` v0.14.0. Brings desktop to feature
-parity with web v0.29.0.
+Modern design refresh + read-only / broadcast channels + `@`-mention
+autocomplete + sidebar minimum-width fix. Pairs with `l2-node` v0.32.0,
+`@ogmara/sdk` v0.15.0, `@ogmara/sdk-rust` v0.5.0. Brings desktop to
+feature parity with web v0.30.0.
+
+### Added (Phase 2 — `@`-mention autocomplete)
+- **`MentionPopover` component** (`src/components/MentionPopover.tsx`,
+  copied verbatim from web). Telegram-style picker that opens when the
+  cursor enters a fresh `@<prefix>` token. 150ms debounced server
+  search, 30s in-memory cache, ↑/↓/Enter/Tab/Esc keyboard nav, ARIA
+  listbox. On select, replaces `@<prefix>` with `@<DisplayName>` and
+  pushes the resolved `klv1...` into `pendingMentions`.
+- **Wired into `ChatView` chat composer** — same pattern as web.
+  Modern + Legacy textareas share the `inputRef` so a single popover
+  serves both. `pendingMentions` merged with raw `@klv1...` regex on
+  send.
+- **Wired into `NewsDetailView` comment composer** — passes merged
+  mentions to `client.postComment(..., { mentions })`.
+- **3 new i18n keys** in all 7 locales (en, de, es, pt, ja, zh, ru):
+  `mention_no_results`, `mention_popover_label`, `user_verified`.
+
+### Fixed (Bug 1 — sidebar minimum width)
+- **`SIDEBAR_MIN_W` bumped 200 → 280** in `components/Sidebar.tsx`. At
+  200px the Modern header (`burger + search input + bell`) was so
+  cramped that the right pane appeared to overlap the sidebar's
+  search bar. 280px matches Telegram desktop's minimum and keeps every
+  header control fully visible. Existing users with `ogmara.sidebarWidth=200`
+  saved auto-bump to 280 on next load via the existing
+  `Math.max(SIDEBAR_MIN_W, …)` guard — no migration needed.
+
+### Fixed (Bug 3 — Modern hides the close-to-tray X)
+- **Floating window-controls strip** added in `App.tsx` for Modern
+  style. Modern hides the entire Toolbar (which carried the
+  minimize/maximize/close buttons in Classic + Glassmorphism), so the
+  Tauri window had no way to be minimized to the tray, maximized, or
+  closed unless the user invoked the system menu. The new strip
+  renders fixed in the top-right corner with the same icons as the
+  Toolbar's window-controls block. Hidden below 768px viewport because
+  Tauri WebView on mobile doesn't expose a desktop window anyway.
+
+### Notes
+- DM and `ComposeView` (news posts) composers are NOT wired —
+  `DirectMessage` payloads are end-to-end encrypted (no plaintext
+  mentions field) and `NewsPostPayload` doesn't have a `mentions` field
+  per protocol spec §3.5. Those would require a wire-format extension.
 
 ### Stage B + C (this commit)
 
