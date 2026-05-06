@@ -2,7 +2,13 @@
  * App — root component with hash-based routing, lock screen, and auth context.
  *
  * Desktop-specific: includes vault/PIN lock overlay before the main app,
- * and uses Tauri window dragging on the toolbar.
+ * uses Tauri window dragging on the toolbar, and listens for the
+ * `app-restored` system-tray event to refresh data after the window is
+ * brought back from the tray.
+ *
+ * Modern design (data-style="modern"): the toolbar is hidden in favor of
+ * the Modern Sidebar's built-in tabs; the body uses `mobile-nav.ts` for
+ * the one-pane sidebar↔detail flip on narrow windows.
  */
 
 import { Component, createSignal, createEffect, Show, Switch, Match, onMount, onCleanup } from 'solid-js';
@@ -28,6 +34,9 @@ import {
 import { initAuth, authStatus, walletJustCreated } from './lib/auth';
 import { initWs, wsConnected } from './lib/ws';
 import { listen } from '@tauri-apps/api/event';
+import { mobileListOpen, showMobileList, showMobileDetail, isMobileViewport } from './lib/mobile-nav';
+import { isLoading, slowLoading } from './lib/network-activity';
+import { isModernStyle } from './lib/theme';
 import { Sidebar } from './components/Sidebar';
 import { Toolbar } from './components/Toolbar';
 import { ChatView } from './pages/ChatView';
@@ -51,8 +60,6 @@ import { StatusBar } from './components/StatusBar';
 import { ImageLightbox } from './components/FormattedText';
 import { route, navigate } from './lib/router';
 
-const isMobile = () => window.innerWidth <= 768;
-
 type AppState = 'loading' | 'locked' | 'unlocked';
 
 export const App: Component = () => {
@@ -61,7 +68,6 @@ export const App: Component = () => {
   const [lockEnabled, setLockEnabled] = createSignal(false);
   const [showPinSetup, setShowPinSetup] = createSignal(false);
   const [showPinPrompt, setShowPinPrompt] = createSignal(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = createSignal(isMobile());
 
   onMount(async () => {
     await initializeVault();
@@ -176,6 +182,14 @@ export const App: Component = () => {
     return null;
   };
 
+  // Body class for the mobile one-pane layout. On non-mobile this is just
+  // `app-body`; on narrow windows it adds `mobile-list-open` or
+  // `mobile-detail-open` so global.css can flip which pane is visible.
+  const bodyClass = () => {
+    if (!isMobileViewport()) return 'app-body';
+    return mobileListOpen() ? 'app-body mobile-list-open' : 'app-body mobile-detail-open';
+  };
+
   return (
     <>
       {/* Loading screen */}
@@ -209,14 +223,48 @@ export const App: Component = () => {
       {/* Main app */}
       <Show when={appState() === 'unlocked'}>
         <div class="app-layout">
-          <Toolbar
-            onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed())}
-          />
-          <div class="app-body">
-            <Show when={!sidebarCollapsed()}>
-              <Sidebar onNavigate={() => { if (isMobile()) setSidebarCollapsed(true); }} />
+          {/* Modern hides the toolbar in favor of the Modern Sidebar's
+              built-in tab bar. Classic + Glassmorphism keep the toolbar. */}
+          <Show when={!isModernStyle()}>
+            <Toolbar
+              onToggleSidebar={() => {
+                if (isMobileViewport()) {
+                  if (mobileListOpen()) showMobileDetail(); else showMobileList();
+                }
+              }}
+            />
+          </Show>
+
+          {/* Network activity indicator — animates when API calls are in flight,
+              shows a "connecting…" label after 1.2s of slow loading. */}
+          <div
+            class={`net-bar ${isLoading() ? 'active' : ''} ${slowLoading() ? 'slow' : ''}`}
+            role="status"
+            aria-live="polite"
+          >
+            <div class="net-bar-track">
+              <div class="net-bar-fill" />
+            </div>
+            <Show when={slowLoading()}>
+              <span class="net-bar-label">{t('status_connecting') || 'Connecting to node…'}</span>
             </Show>
+          </div>
+
+          <div class={bodyClass()}>
+            <Sidebar onNavigate={() => { if (isMobileViewport()) showMobileDetail(); }} />
             <main class="main-content">
+              {/* Global mobile back button — Modern style on narrow viewport
+                  for views that don't have their own header/back button. */}
+              <Show when={isModernStyle() && isMobileViewport() && !mobileListOpen()
+                && ['news', 'bookmarks', 'search', 'settings', 'wallet', 'token-portfolio', 'notifications', 'compose', 'user', 'follow-list'].includes(route().view)}>
+                <div style="display:flex; align-items:center; padding:8px 12px; background:var(--color-bg-secondary); border-bottom:1px solid var(--color-border)">
+                  <button style="width:38px; height:38px; border-radius:50%; color:var(--color-text-secondary); display:flex; align-items:center; justify-content:center; cursor:pointer"
+                    onClick={() => showMobileList()}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><polyline points="12 19 5 12 12 5"/></svg>
+                  </button>
+                </div>
+              </Show>
+
               <Switch>
                 <Match when={route().view === 'chat'}>
                   <ChatView channelId={channelId()} />

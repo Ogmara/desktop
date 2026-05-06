@@ -7,11 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — v1.16.0 work-in-progress (2026-05-06)
 
-> This is a checkpoint commit on the `v1.16.0-wip` branch. The Modern design
-> infrastructure is wired but not yet rendered — App.tsx, Sidebar.tsx,
-> ChatView.tsx, ChannelSettingsView.tsx and friends still need their parallel
-> updates from web v0.28.0–v0.29.0 before users see Modern. **Do not tag a
-> release from this branch yet.**
+> Checkpoint on the `v1.16.0-wip` branch. Stages A + B + C are now complete
+> end-to-end: Modern design renders, read-only / broadcast channel UI is
+> live, all 7 locales have parity with web. Stage D (audit + version bump
+> + tag for CI) remains. **Do not tag a release from this branch yet** —
+> a pre-release smoke pass should run first.
+
+### Stage B + C (this commit)
+
+#### Components
+- **`src/App.tsx`** — Modern toolbar wrap (`<Show when={!isModernStyle()}>`),
+  `.net-bar` slot wired with `isLoading`/`slowLoading` from
+  `lib/network-activity`, `bodyClass()` derived signal handling
+  `mobile-list-open` / `mobile-detail-open` for the one-pane mobile flow,
+  Modern global mobile back button. All vault/lock/PIN/tray flows
+  preserved verbatim. `DeviceMappingBanner` deliberately omitted per scope.
+- **`src/components/Sidebar.tsx`** — full port of web's Sidebar (1166 lines
+  vs prior 828). Tabbed sidebar (Chat/News/Messages), DM preview rows,
+  channel avatars, modern member list, theme toggle, disconnect button.
+  Tray-badge integration preserved: `pollData` still calls
+  `updateTrayBadge(channelTotal + dmTotal + notifCount)` after web's poll
+  block. Existing context menus (channel + member) still work via Solid
+  signals; Portal wrapping deferred to a follow-up.
+- **`src/pages/ChatView.tsx`** — full port (1322 → 1526 lines). Modern
+  bubble layout, scroll-to-bottom FAB, channel header strip, floating
+  date label, read-only / broadcast banner, posting-mode-aware composer
+  hide. The `wsConnected` polling guard from v1.15.1 is preserved. The
+  Tauri clipboard plugin paste fallback (webkit2gtk on Linux) is kept on
+  both the Legacy and Modern paste handlers.
+- **`src/pages/DmConversationView.tsx`** — verbatim port from web (520 →
+  540 lines). Modern bubble layout, mobile back button, profile cache.
+- **`src/pages/ChannelSettingsView.tsx`** — verbatim port from web (393 →
+  817 lines). Channel avatar upload, member list with profiles,
+  posting-mode toggle (Public ⇄ ReadPublic, gated on `can_edit_info`,
+  hidden for Private channels and until channel_type is loaded). Pairs
+  with `l2-node` v0.31.0 and `@ogmara/sdk` v0.14.0.
+- **`src/pages/SettingsView.tsx`** — surgical merge: web's color-scheme
+  picker + default-landing-view radio + Modern preview added to the
+  Appearance section, while desktop's `CustomTheme` overrides, app lock,
+  PIN setup, vault export, and Tauri-invoke `fetch_and_save` /
+  `save_export_file` flows are all preserved. Fixed a pre-existing
+  `client` undefined ref in the export error handler.
+- **`src/pages/NewsDetailView.tsx`** — `goBack()` → `navigate('/news')`
+  to match web's explicit return behavior; `goBack` import dropped.
+
+#### Library
+- **`src/lib/router.ts`** — bare `/chat` URL now restores the user's
+  `lastChannel` setting (matches web's "remember where I left off"
+  behavior). Bare hash (`#/`) honors the new `defaultLandingView`
+  setting — `news` (default) or `chat`. The desktop-only `token-portfolio`
+  route block is preserved.
+- **`src/lib/settings.ts`** — added `defaultLandingView: 'chat' | 'news'`
+  to the `Settings` type, default `'news'`. Survives settings sync.
+- **`src/lib/settings-sync.ts`** — split sync keys into `SYNC_KEYS`
+  (JSON-encoded via `getSetting`/`setSetting`) and `RAW_SYNC_KEYS`
+  (string-encoded directly in localStorage for `theme`, `designStyle`,
+  `colorScheme`). `theme` moved to RAW path; `defaultLandingView` rides
+  in SYNC because it goes through `setSetting` already.
+
+#### i18n
+- **All 7 locales** (en, de, es, pt, ja, zh, ru) — 57 missing keys per
+  locale brought across from web verbatim: channel-avatar UX,
+  posting-mode strings, color-scheme labels, sidebar broadcast/private/
+  public channel labels, settings_color_scheme, settings_default_landing,
+  settings_style_modern, today/yesterday, status_connecting, menu_*
+  burger-menu strings, channel_verified. The 5 `device_link_*` keys are
+  also included for safety (unused since `DeviceMappingBanner` was not
+  ported, but harmless if added later).
+
+### Decisions implemented (per planner Q&A)
+- 1: Drop Minimal + Elevated, Modern is default → done in `theme.ts` (B0)
+- 2: Default-landing-view setting → done in `SettingsView.tsx` + `router.ts`
+- 3: Skip `DeviceMappingBanner` → not ported; `verifyDeviceMapping` /
+  `relinkDevice` not added to `auth.ts`
+- 4: Stale-nodeUrl migration skipped (desktop already on `node.ogmara.org`)
+- 5: `__ogmaraRepair` DevTools helper skipped (tied to skipped repair flow)
+- 6: `ogmara.sidebarWidth` key shared with web (no namespace prefix)
+
+### Known follow-ups
+- Pre-existing TypeScript errors carried over from web (Channel.logo_cid
+  not in SDK type, `addModerator` 3-arg / 2-arg call mismatch, etc.) —
+  same set web ships with. To be fixed at the SDK level in a separate PR.
+- Smoke test on Linux + Windows tray badge behavior under Modern style
+- Audit pipeline (code + security + spec compliance) before tagging
+- Pre-commit lint baseline: 45 errors (was 43 before port; net +2 are all
+  pre-existing in web).
 
 ### Added (foundation only)
 - **Modern design style** — added as the new default in `theme.ts`. Existing
