@@ -11,7 +11,7 @@ import { getPayloadContent, getPayloadTitle, decodePayload } from '../lib/payloa
 
 export const SearchView: Component = () => {
   const [query, setQuery] = createSignal(queryParam('q') || '');
-  const [results, setResults] = createSignal<{ posts: any[]; channels: any[] }>({ posts: [], channels: [] });
+  const [results, setResults] = createSignal<{ posts: any[]; channels: any[]; users: any[] }>({ posts: [], channels: [], users: [] });
   const [searching, setSearching] = createSignal(false);
   const [hasSearched, setHasSearched] = createSignal(false);
 
@@ -39,10 +39,17 @@ export const SearchView: Component = () => {
       const isHashtag = q.startsWith('#');
       const searchTerm = isHashtag ? q.slice(1).toLowerCase() : q.toLowerCase();
 
-      // Fetch all posts — the L2 node doesn't support server-side filtering yet
-      const [newsResp, channelsResp] = await Promise.all([
+      // Fetch posts, channels, and users in parallel. Posts and channels
+      // are filtered client-side; user search is server-side via the
+      // dedicated `/api/v1/users/search` endpoint added in l2-node v0.32.0.
+      const [newsResp, channelsResp, usersResp] = await Promise.all([
         client.listNews(1, 100).catch(() => ({ posts: [] })),
         client.listChannels(1, 50).catch(() => ({ channels: [] })),
+        // Skip user search for hashtag queries — `#tag` doesn't make sense
+        // as a display-name prefix and the server would just return [].
+        isHashtag
+          ? Promise.resolve({ users: [] })
+          : client.searchUsers(searchTerm, 20).catch(() => ({ users: [] })),
       ]);
 
       let posts = newsResp.posts || [];
@@ -76,9 +83,9 @@ export const SearchView: Component = () => {
         );
       });
 
-      setResults({ posts, channels: matchedChannels });
+      setResults({ posts, channels: matchedChannels, users: usersResp.users || [] });
     } catch {
-      setResults({ posts: [], channels: [] });
+      setResults({ posts: [], channels: [], users: [] });
     } finally {
       setSearching(false);
     }
@@ -106,6 +113,40 @@ export const SearchView: Component = () => {
       </div>
 
       <Show when={hasSearched()}>
+        {/* User results */}
+        <Show when={results().users.length > 0}>
+          <section class="search-section">
+            <h3>{t('search_users')}</h3>
+            <For each={results().users}>
+              {(u) => (
+                <button class="search-user" onClick={() => navigate(`/user/${u.address}`)}>
+                  <span class="search-user-avatar">
+                    <Show
+                      when={u.avatar_cid}
+                      fallback={(u.display_name || u.address).slice(0, 1).toUpperCase()}
+                    >
+                      <img
+                        src={getClient().getMediaUrl(u.avatar_cid)}
+                        alt=""
+                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                      />
+                    </Show>
+                  </span>
+                  <span class="search-user-text">
+                    <span class="search-user-name">
+                      {u.display_name || truncateAddress(u.address)}
+                      <Show when={u.verified}>
+                        <span class="search-user-verified" title={t('user_verified')}>✓</span>
+                      </Show>
+                    </span>
+                    <span class="search-user-addr">{truncateAddress(u.address)}</span>
+                  </span>
+                </button>
+              )}
+            </For>
+          </section>
+        </Show>
+
         {/* Channel results */}
         <Show when={results().channels.length > 0}>
           <section class="search-section">
@@ -155,7 +196,7 @@ export const SearchView: Component = () => {
           </section>
         </Show>
 
-        <Show when={results().posts.length === 0 && results().channels.length === 0 && !searching()}>
+        <Show when={results().posts.length === 0 && results().channels.length === 0 && results().users.length === 0 && !searching()}>
           <div class="search-empty">{t('search_no_results')}</div>
         </Show>
       </Show>
@@ -234,6 +275,36 @@ export const SearchView: Component = () => {
         .search-post-time { font-size: var(--font-size-xs); color: var(--color-text-secondary); }
         .search-post-body { line-height: 1.6; }
         .search-empty { text-align: center; color: var(--color-text-secondary); padding: var(--spacing-xl); }
+        .search-user {
+          display: flex;
+          align-items: center;
+          gap: var(--spacing-sm);
+          padding: var(--spacing-sm) var(--spacing-md);
+          border-radius: var(--radius-md);
+          width: 100%;
+          text-align: left;
+          margin-bottom: var(--spacing-xs);
+        }
+        .search-user:hover { background: var(--color-bg-secondary); }
+        .search-user-avatar {
+          width: 36px;
+          height: 36px;
+          border-radius: 50%;
+          background: var(--color-accent-primary);
+          color: var(--color-text-inverse);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-weight: 700;
+          font-size: var(--font-size-sm);
+          flex-shrink: 0;
+          overflow: hidden;
+        }
+        .search-user-avatar img { width: 100%; height: 100%; object-fit: cover; }
+        .search-user-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+        .search-user-name { font-weight: 600; font-size: var(--font-size-sm); }
+        .search-user-verified { color: var(--color-success); margin-left: 4px; font-size: 11px; }
+        .search-user-addr { font-size: var(--font-size-xs); color: var(--color-text-secondary); font-family: monospace; }
       `}</style>
     </div>
   );
