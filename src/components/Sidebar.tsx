@@ -89,11 +89,14 @@ function syncJoinedWithApi(apiChannels: { channel_id: number; channel_type: numb
 }
 
 // Sidebar minimum is set so the Modern header (burger + search input + bell)
-// always has room to render legibly without compression overlap. 280px was
-// still too narrow — the search input was forced below its usable width and
-// the right pane's header still appeared crowded. 320px matches Telegram
-// desktop's actual minimum and keeps every control fully clickable.
-const SIDEBAR_MIN_W = 320;
+// always has room to render legibly with visual breathing room around each
+// control. Earlier values (200, 280, 320) all left the bell button flush
+// against the sidebar's right edge — and because the 1px border between
+// sidebar and right pane is barely distinguishable from the surrounding
+// dark-blue surfaces, users perceived the bell as "spilling" into the main
+// pane. 360px gives the bell ~28px of clear space from the divider, which
+// reads as proper separation.
+const SIDEBAR_MIN_W = 360;
 const SIDEBAR_MAX_W = 600;
 const SIDEBAR_DEFAULT_W = 320;
 
@@ -501,7 +504,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         : { width: `${sidebarWidth()}px`, 'min-width': `${sidebarWidth()}px`, position: 'relative' }
       }
     >
-      <div class="sidebar-header" style="display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--color-border)">
+      <div class="sidebar-header" style="display:flex; align-items:center; gap:8px; padding:8px 16px 8px 12px; border-bottom:1px solid var(--color-border)">
         <div class="sidebar-burger-wrap" style="position:relative; flex-shrink:0">
           <Show
             when={isMobileViewport() && !mobileListOpen()}
