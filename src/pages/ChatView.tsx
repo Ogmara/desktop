@@ -3,7 +3,7 @@
  * profile resolution, and optimistic message display.
  */
 
-import { Component, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup } from 'solid-js';
+import { Component, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup, untrack } from 'solid-js';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { authStatus, getSigner, walletAddress, isRegistered } from '../lib/auth';
@@ -73,6 +73,40 @@ function getDateLabel(timestamp: string | number): string {
   if (diff === 0) return t('today') || 'Today';
   if (diff === 86400000) return t('yesterday') || 'Yesterday';
   return date.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+/** Per-channel role cache. Avoids refetching 200 members on every switch.
+ * TTL is long enough for fast back-and-forth navigation, short enough that
+ * a freshly-promoted moderator picks up their elevated role within ~minutes.
+ * `ROLE_CACHE_MAX` caps the map so a long-running session that visits many
+ * channels doesn't accumulate entries indefinitely (oldest evicted on insert). */
+const ROLE_CACHE_TTL = 30_000;
+const ROLE_CACHE_MAX = 200;
+type RoleEntry = { role: 'creator' | 'moderator' | 'member'; expires: number };
+const roleCache = new Map<string, RoleEntry>();
+function roleCacheKey(channelId: number, address: string): string {
+  return `${channelId}:${address}`;
+}
+function roleCacheGet(channelId: number, address: string): RoleEntry['role'] | null {
+  const k = roleCacheKey(channelId, address);
+  const e = roleCache.get(k);
+  if (!e) return null;
+  if (e.expires < Date.now()) { roleCache.delete(k); return null; }
+  // Promote on read so LRU eviction prefers truly stale entries.
+  roleCache.delete(k);
+  roleCache.set(k, e);
+  return e.role;
+}
+function roleCacheSet(channelId: number, address: string, role: RoleEntry['role']): void {
+  const k = roleCacheKey(channelId, address);
+  roleCache.delete(k);
+  roleCache.set(k, { role, expires: Date.now() + ROLE_CACHE_TTL });
+  // Evict oldest insertion until under cap. `Map` iterates insertion order.
+  while (roleCache.size > ROLE_CACHE_MAX) {
+    const oldest = roleCache.keys().next().value;
+    if (oldest === undefined) break;
+    roleCache.delete(oldest);
+  }
 }
 
 interface ChatViewProps {
@@ -205,6 +239,10 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     const distFromBottom = scrollHeight - scrollTop - clientHeight;
     setShowScrollBtn(distFromBottom >= SCROLL_NEAR_BOTTOM_PX);
     if (distFromBottom < SCROLL_NEAR_BOTTOM_PX) setNewMsgCount(0);
+    // Lazy-load older messages when user scrolls near the top.
+    if (scrollTop < SCROLL_LOAD_OLDER_PX && hasMoreOlder() && !loadingOlder()) {
+      loadOlderMessages();
+    }
     const rows = messagesRef.querySelectorAll('[data-msg-id]');
     let topDate: string | null = null;
     for (const row of rows) {
@@ -224,6 +262,23 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   let prevMsgCount = 0;
   let initialLoad = true;
   const [lastReadTs, setLastReadTs] = createSignal<number | null>(null);
+  // Dynamic page sizing: 50 by default, grow to fit unread + 20 lines of context.
+  // Capped at 200 to keep first-paint fast; user can scroll up for more.
+  const INITIAL_PAGE = 50;
+  const OLDER_PAGE = 50;
+  const MAX_INITIAL = 200;
+  // Hard ceiling on `localMessages` to prevent unbounded growth in a long
+  // session of repeated scroll-ups. Higher than `MAX_LOCAL_MESSAGES` (which
+  // governs WS receive) because user-initiated scroll-up is intentional and
+  // shouldn't drop messages they just brought in.
+  const MAX_TOTAL_MESSAGES = 1000;
+  const SCROLL_LOAD_OLDER_PX = 80;
+  const [hasMoreOlder, setHasMoreOlder] = createSignal(true);
+  const [loadingOlder, setLoadingOlder] = createSignal(false);
+  // AbortController for the in-flight initial fetch, so a fast channel-switch
+  // cancels the previous request instead of letting it pile up on the main
+  // thread and clobber state out of order.
+  let initFetchAbort: AbortController | null = null;
   const [messages] = createResource(
     () => ({ channelId: props.channelId, auth: authStatus() }),
     async ({ channelId }) => {
@@ -235,17 +290,102 @@ export const ChatView: Component<ChatViewProps> = (props) => {
         prevMsgCount = 0;
         initialLoad = true;
         setLastReadTs(null);
+        setHasMoreOlder(true);
+        // Reset loading flag so the new channel's first scroll-to-top can
+        // load older messages even if the previous channel had a fetch in
+        // flight when we switched away.
+        setLoadingOlder(false);
       }
+      // Mark prior in-flight fetch as stale. The SDK doesn't accept an
+      // AbortSignal yet — the underlying fetch still runs to completion,
+      // but we discard its result via `myToken.aborted` so state doesn't
+      // get clobbered out of order on rapid channel switches.
+      if (initFetchAbort) initFetchAbort.abort();
+      initFetchAbort = new AbortController();
+      const myAbort = initFetchAbort;
       try {
         const client = getClient();
-        const resp = await client.getChannelMessages(channelId, 200);
+        // Probe channel unread count so we can size the initial page so that
+        // the first unread message is visible *with* some older context, not
+        // pushed off the top. Only meaningful for signed-in users.
+        let limit = INITIAL_PAGE;
+        if (authStatus() === 'ready') {
+          try {
+            const unreadResp = await client.getUnreadCounts();
+            if (myAbort.signal.aborted) return [];
+            const n = unreadResp?.unread?.[String(channelId)] ?? 0;
+            if (n > 0) limit = Math.min(MAX_INITIAL, Math.max(INITIAL_PAGE, n + 20));
+          } catch { /* fall back to default page size */ }
+        }
+        const resp = await client.getChannelMessages(channelId, limit);
+        if (myAbort.signal.aborted) return [];
         if (resp.last_read_ts !== undefined) setLastReadTs(resp.last_read_ts);
-        return resp.messages;
+        // Defensive: hard-cap the response at the requested limit. Protects
+        // against a malicious or buggy node returning more rows than asked,
+        // which would otherwise blow up render and the profile-resolver fan-out.
+        const capped = (resp.messages || []).slice(0, limit);
+        // If we got fewer messages than asked for, there's nothing older.
+        if (capped.length < limit) setHasMoreOlder(false);
+        return capped;
       } catch {
         return [];
       }
     },
   );
+
+  /** Load an older page and prepend it without flicker. */
+  const loadOlderMessages = async () => {
+    const channelId = props.channelId;
+    if (!channelId || loadingOlder() || !hasMoreOlder()) return;
+    const all = allMessages();
+    if (all.length === 0) return;
+    // Find the oldest non-optimistic msg to use as the `before` cursor
+    let oldestId: string | null = null;
+    for (const m of all) {
+      const id = msgIdToHex(m.msg_id);
+      if (id && !id.startsWith('local-')) { oldestId = id; break; }
+    }
+    if (!oldestId) return;
+    setLoadingOlder(true);
+    // Capture scroll metrics so we can preserve viewport position after prepend
+    const el = messagesRef;
+    const prevScrollHeight = el?.scrollHeight ?? 0;
+    const prevScrollTop = el?.scrollTop ?? 0;
+    try {
+      const client = getClient();
+      const resp = await client.getChannelMessages(channelId, OLDER_PAGE, oldestId);
+      // Channel-switch race guard: if the user navigated to a different
+      // channel while we were waiting for the response, drop the result —
+      // otherwise we'd prepend channel A's history into channel B's state.
+      if (props.channelId !== channelId) return;
+      // Defensive: hard-cap response at the requested limit (server can be
+      // malicious or buggy and return more than asked).
+      const older = (resp.messages || []).slice(0, OLDER_PAGE);
+      if (older.length < OLDER_PAGE) setHasMoreOlder(false);
+      if (older.length === 0) return;
+      setLocalMessages((prev) => {
+        const seen = new Set(prev.map((m) => msgIdToHex(m.msg_id)));
+        const fresh = older.filter((m: any) => !seen.has(msgIdToHex(m.msg_id)));
+        const merged = [...fresh, ...prev];
+        // Cap total. Trim the *newest* end (which is API-resourced and will
+        // be re-fetched on a future channel revisit) rather than the just-
+        // loaded older page the user explicitly requested.
+        return merged.length > MAX_TOTAL_MESSAGES
+          ? merged.slice(0, MAX_TOTAL_MESSAGES)
+          : merged;
+      });
+      // Restore scroll position so the user stays anchored on the same row
+      requestAnimationFrame(() => {
+        if (!el) return;
+        const delta = el.scrollHeight - prevScrollHeight;
+        el.scrollTop = prevScrollTop + delta;
+      });
+    } catch {
+      /* leave hasMoreOlder true so user can retry by scrolling */
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
 
   const [pinnedMessages] = createResource(
     () => ({ channelId: props.channelId, auth: authStatus() }),
@@ -270,14 +410,20 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     },
   );
 
-  // Fetch current user's channel role for permission gating
+  // Fetch current user's channel role for permission gating.
+  // Cache hits avoid a 200-member fetch on every channel switch — role rarely
+  // changes mid-session, and refetching adds latency and pressure on the node.
   createEffect(() => {
     const id = props.channelId;
     const me = walletAddress();
     if (!id || !me) { setMyRole('member'); return; }
+    const cached = roleCacheGet(id, me);
+    if (cached) { setMyRole(cached); return; }
     getClient().getChannelMembers(id, { limit: 200 }).then((resp) => {
       const member = resp.members.find((m) => m.address === me);
-      setMyRole(member?.role as any ?? 'member');
+      const role = (member?.role as any) ?? 'member';
+      roleCacheSet(id, me, role);
+      setMyRole(role);
     }).catch(() => setMyRole('member'));
   });
 
@@ -341,9 +487,17 @@ export const ChatView: Component<ChatViewProps> = (props) => {
             setNewMsgCount((c) => c + 1);
           }
         }
-        // Mark channel as read while viewing so unread badge doesn't appear
+        // Mark channel as read while viewing so unread badge doesn't appear.
+        // Deferred to a microtask so the network request doesn't share the
+        // current frame with the WS handler's reactive updates. Re-check
+        // `authStatus()` inside the microtask so a logout-in-flight doesn't
+        // sign the read-marker with a stale signer.
         if (authStatus() === 'ready') {
-          getClient().markChannelRead(props.channelId!).catch(() => {});
+          const cid = props.channelId!;
+          queueMicrotask(() => {
+            if (authStatus() !== 'ready') return;
+            getClient().markChannelRead(cid).catch(() => {});
+          });
         }
       }
     }
@@ -359,11 +513,16 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       wsSubscribeChannels([id]);
       // Remember last opened channel for the Chat nav link
       setSetting('lastChannel', parseInt(id, 10));
-      // Mark channel as read when entering
-      if (authStatus() === 'ready') {
+      // Defer side effects so the channel-switch click doesn't share a frame
+      // with the network request + reactive cascade. Keeps fast channel
+      // hopping responsive. The auth re-check inside the microtask guards
+      // against a logout-in-flight signing the read-marker with a stale
+      // signer for the wrong wallet.
+      queueMicrotask(() => {
+        if (authStatus() !== 'ready') return;
         try { getClient().markChannelRead(parseInt(id, 10)).catch(() => {}); }
         catch { /* SDK method may not exist on older builds */ }
-      }
+      });
       setTimeout(() => inputRef()?.focus(), 50);
     }
     prevChannelId = id;
@@ -402,16 +561,23 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   createEffect(() => {
     const msgs = allMessages();
     const authors = new Set(msgs.map((m) => m.author));
-    authors.forEach((addr) => {
-      if (!profiles().has(addr)) {
-        resolveProfile(addr).then((p) => {
-          setProfiles((prev) => {
-            const next = new Map(prev);
-            next.set(addr, p);
-            return next;
+    // Read `profiles()` via `untrack` so the effect only re-runs when the
+    // message list changes — not on every individual setProfiles() resolve.
+    // Without this, resolving N authors would re-iterate the full list N
+    // times, an O(N²) feedback loop on every channel switch.
+    untrack(() => {
+      const have = profiles();
+      authors.forEach((addr) => {
+        if (!have.has(addr)) {
+          resolveProfile(addr).then((p) => {
+            setProfiles((prev) => {
+              const next = new Map(prev);
+              next.set(addr, p);
+              return next;
+            });
           });
-        });
-      }
+        }
+      });
     });
   });
 
@@ -471,12 +637,17 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     if (!latestMsgId) return;
     try {
       const client = getClient();
-      const resp = await client.getChannelMessages(channelId, 200, undefined, latestMsgId);
-      if (resp.messages && resp.messages.length > 0) {
+      const resp = await client.getChannelMessages(channelId, 50, undefined, latestMsgId);
+      // Channel-switch race guard: drop poll results if the user moved on
+      // mid-fetch, otherwise we'd land them in the wrong channel's state.
+      if (props.channelId !== channelId) return;
+      // Defensive: hard-cap at 50 in case the server returns more than asked.
+      const incoming = (resp.messages || []).slice(0, 50);
+      if (incoming.length > 0) {
         setLocalMessages((prev) => {
           // Dedup: only add messages not already in localMessages
           const existingIds = new Set(prev.map((m) => msgIdToHex(m.msg_id)));
-          const newMsgs = resp.messages.filter((m: any) => !existingIds.has(msgIdToHex(m.msg_id)));
+          const newMsgs = incoming.filter((m: any) => !existingIds.has(msgIdToHex(m.msg_id)));
           if (newMsgs.length === 0) return prev;
           const next = [...prev, ...newMsgs];
           return next.length > MAX_LOCAL_MESSAGES ? next.slice(-MAX_LOCAL_MESSAGES) : next;

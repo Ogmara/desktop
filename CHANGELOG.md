@@ -5,6 +5,40 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.0] - 2026-05-07
+
+### Changed
+- **Dynamic, unread-aware message loading** — channels no longer fetch
+  a fixed 200 messages on every switch. Initial fetch is `clamp(50,
+  unreadCount + 20, 200)`, so a channel with 120 unread messages
+  loads 140 (all unread plus 20 lines of context above the divider),
+  while a quiet channel loads only 50. Older history is fetched on
+  scroll-to-top in 50-message pages, with viewport position
+  preserved across the prepend so the user stays anchored. Eliminates
+  the multi-second freeze on rapid channel switching, especially in
+  high-traffic channels.
+
+### Performance
+- **Cancel in-flight fetches on channel switch** — the messages
+  resource now wires an `AbortController` so requests for a previous
+  channel are aborted when the user clicks a new one. Prevents
+  out-of-order state updates and reduces wasted network/CPU.
+- **Cache per-channel role lookup** — `getChannelMembers({limit:200})`
+  was firing on every channel open just to determine the viewer's
+  role for permission gating. Now cached in-memory for 30 s keyed by
+  `channelId+walletAddress`. Removes one full-fan-out request per
+  switch on cache hit.
+- **Break the profile-resolver feedback loop** — the effect that
+  resolves author profiles read `profiles().has(addr)` and also
+  called `setProfiles()` from inside its own `.then()` handler,
+  causing the effect to re-run on every individual resolution
+  — O(N²) on author count per channel switch. The read is now
+  wrapped in `untrack()` so the effect only re-runs when
+  `allMessages()` changes.
+- **Defer `markChannelRead` to a microtask** — the read marker no
+  longer shares a frame with the channel-switch click handler.
+- Incremental poll fetch trimmed from 200 → 50 messages.
+
 ## [1.16.1] - 2026-05-07
 
 ### Fixed
