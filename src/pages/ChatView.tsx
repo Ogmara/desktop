@@ -98,7 +98,10 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   const EDIT_WINDOW_MS = 30 * 60 * 1000;
   const GROUP_WINDOW_MS = 2 * 60 * 1000;
   const SCROLL_NEAR_BOTTOM_PX = 150;
-  let inputRef: HTMLTextAreaElement | undefined;
+  // Signal-backed ref so the MentionPopover's effect re-runs once the
+  // textarea is mounted (refs assigned to plain `let` variables aren't
+  // reactive). Setter is called from `ref={(el) => setInputRef(el)}`.
+  const [inputRef, setInputRef] = createSignal<HTMLTextAreaElement>();
   let messagesRef: HTMLDivElement | undefined;
   const [showScrollBtn, setShowScrollBtn] = createSignal(false);
   const [newMsgCount, setNewMsgCount] = createSignal(0);
@@ -361,7 +364,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
         try { getClient().markChannelRead(parseInt(id, 10)).catch(() => {}); }
         catch { /* SDK method may not exist on older builds */ }
       }
-      setTimeout(() => inputRef?.focus(), 50);
+      setTimeout(() => inputRef()?.focus(), 50);
     }
     prevChannelId = id;
   });
@@ -585,7 +588,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     } finally {
       setSending(false);
       // Focus after sending is cleared (textarea is no longer disabled)
-      setTimeout(() => inputRef?.focus(), 0);
+      setTimeout(() => inputRef()?.focus(), 0);
     }
   };
 
@@ -593,20 +596,21 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     const content = getPayloadContent(msg.payload);
     const preview = content.length > 80 ? content.slice(0, 80) + '...' : content;
     setReplyTo({ msgId: msgIdToHex(msg.msg_id), author: msg.author, preview });
-    inputRef?.focus();
+    inputRef()?.focus();
   };
 
   const insertEmoji = (emoji: string) => {
-    if (!inputRef) return;
-    const start = inputRef.selectionStart ?? messageInput().length;
-    const end = inputRef.selectionEnd ?? start;
+    const el = inputRef();
+    if (!el) return;
+    const start = el.selectionStart ?? messageInput().length;
+    const end = el.selectionEnd ?? start;
     const current = messageInput();
     setMessageInput(current.slice(0, start) + emoji + current.slice(end));
     // Restore cursor after emoji
     setTimeout(() => {
-      inputRef?.focus();
+      el.focus();
       const pos = start + emoji.length;
-      inputRef?.setSelectionRange(pos, pos);
+      el.setSelectionRange(pos, pos);
     }, 0);
   };
 
@@ -633,7 +637,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   const startEdit = (msg: any) => {
     setEditingMsg({ msgId: msgIdToHex(msg.msg_id), content: getPayloadContent(msg.payload) });
     setMessageInput(getPayloadContent(msg.payload));
-    inputRef?.focus();
+    inputRef()?.focus();
   };
 
   const cancelEdit = () => {
@@ -984,7 +988,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
         <MentionPopover
           textareaRef={inputRef}
           onSelect={(hit, range) => {
-            const el = inputRef;
+            const el = inputRef();
             if (!el) return;
             const insert = `@${hit.display_name && hit.display_name.trim() ? hit.display_name : hit.address.slice(0, 12)}`;
             const v = messageInput();
@@ -1004,7 +1008,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
           <div class="chat-input-area">
             <div class="chat-input">
               <textarea
-                ref={inputRef}
+                ref={(el) => setInputRef(el)}
                 class="chat-textarea"
                 rows={3}
                 placeholder={authStatus() === 'ready' ? t('chat_placeholder') : t('auth_connect_prompt')}
@@ -1117,7 +1121,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                 e.currentTarget.value = '';
               }} />
               <textarea
-                ref={inputRef}
+                ref={(el) => setInputRef(el)}
                 class="chat-textarea"
                 rows={1}
                 placeholder={authStatus() === 'ready' ? t('chat_placeholder') : t('auth_connect_prompt')}

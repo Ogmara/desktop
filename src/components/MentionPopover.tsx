@@ -39,11 +39,16 @@ export interface MentionRange {
 
 interface MentionPopoverProps {
   /**
-   * The textarea/input being watched. The popover attaches input + keydown
-   * listeners to this element. SolidJS refs are functions; pass the raw
-   * element from the composer.
+   * Accessor for the textarea/input being watched. Pass the GETTER of a
+   * SolidJS signal, not a `let` variable — refs assigned after mount via
+   * `<textarea ref={fn} />` aren't reactive when stored in plain locals,
+   * which means our effect would see `undefined` forever. Use:
+   *
+   *   const [inputRef, setInputRef] = createSignal<HTMLTextAreaElement>();
+   *   <textarea ref={(el) => setInputRef(el)} />
+   *   <MentionPopover textareaRef={inputRef} ... />
    */
-  textareaRef: HTMLTextAreaElement | HTMLInputElement | undefined;
+  textareaRef: () => HTMLTextAreaElement | HTMLInputElement | undefined;
   /**
    * Called when the user picks a result. The caller is responsible for
    * splicing the text into the input value and pushing `hit.address` into
@@ -146,7 +151,7 @@ export const MentionPopover: Component<MentionPopoverProps> = (props) => {
   };
 
   const onInput = () => {
-    const el = props.textareaRef;
+    const el = props.textareaRef();
     if (!el) return;
     const value = el.value;
     const cursor = el.selectionStart ?? value.length;
@@ -198,25 +203,23 @@ export const MentionPopover: Component<MentionPopoverProps> = (props) => {
     }
   };
 
-  // Re-attach listeners whenever the textarea ref changes. Solid runs
-  // createEffect on every dependency change — `props.textareaRef` is a
-  // value, so this fires on initial mount only, but defensively re-binds
-  // if the parent ever swaps the ref.
+  // Re-attach listeners whenever the textarea ref signal changes. Solid
+  // runs createEffect on every dependency change — calling
+  // `props.textareaRef()` here SUBSCRIBES to the signal, so the effect
+  // re-runs once the parent's ref is bound after mount.
   createEffect(() => {
-    const el = props.textareaRef;
+    const el = props.textareaRef();
     if (!el) return;
     const inputListener = onInput as EventListener;
     const keyListener = onKeyDown as unknown as EventListener;
+    const blurListener = () => setTimeout(() => close(), 150);
     el.addEventListener('input', inputListener);
     el.addEventListener('keydown', keyListener);
-    el.addEventListener('blur', () => {
-      // Delay close so a click on a result row still fires before blur
-      // tears down the popover.
-      setTimeout(() => close(), 150);
-    });
+    el.addEventListener('blur', blurListener);
     onCleanup(() => {
       el.removeEventListener('input', inputListener);
       el.removeEventListener('keydown', keyListener);
+      el.removeEventListener('blur', blurListener);
     });
   });
 
