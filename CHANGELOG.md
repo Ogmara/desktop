@@ -59,10 +59,15 @@ feature parity with web v0.30.0.
   accessor; `ChatView` and `NewsDetailView` use signal-backed refs
   (`createSignal<HTMLTextAreaElement>()` + `ref={(el) => setRef(el)}`)
   so the popover's effect re-runs once the textarea mounts.
-- **Sidebar minimum width** bumped 280 → 320 (matches Telegram
-  desktop's actual minimum). 280 was still cramped enough that the
-  search input was forced below usable width and the right pane felt
-  crowded.
+- **Sidebar minimum width** bumped 280 → 360. 320 was an interim value
+  that still left the bell button flush against the right divider —
+  and because the 1px border between sidebar and right pane is barely
+  visible against the similar dark-blue backgrounds, users perceived
+  the bell as overlapping into the main pane even when it structurally
+  wasn't. 360px gives the bell ~28px of clear space from the divider
+  and reads as proper visual separation. Also added 4px extra
+  right-padding on `.sidebar-header` so the bell sits inset rather
+  than flush.
 
 ### Notes
 - DM and `ComposeView` (news posts) composers are NOT wired —
