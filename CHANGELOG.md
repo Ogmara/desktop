@@ -5,6 +5,18 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.1] - 2026-05-07
+
+### Fixed
+- **CI builds for macOS / Windows / Linux installers were failing on
+  every tag since v1.16.0** with `npm ci` rejecting the lockfile:
+  `lock file's postcss@8.5.8 does not satisfy postcss@8.5.14`. The
+  `package.json` `overrides` block correctly pinned `postcss >=8.5.10`,
+  but `package-lock.json` was never regenerated, so the strict `npm ci`
+  in the GitHub Actions workflow rejected the mismatch and aborted
+  before any build started. Lockfile regenerated; v1.17.0's features
+  ship as v1.17.1 since v1.17.0 produced no installers.
+
 ## [1.17.0] - 2026-05-07
 
 ### Changed
