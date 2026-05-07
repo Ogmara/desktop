@@ -5,6 +5,24 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.1] - 2026-05-07
+
+### Fixed
+- **News Feed "New Post" button hidden under window controls** —
+  v1.16.0 added the floating window-controls strip in Modern, but only
+  the chat / DM / news-detail headers got the 132px right-padding to
+  avoid the overlap. The News Feed (`.news-header`) and other
+  page-level `<h2>` titles (search, bookmarks, notifications,
+  settings, wallet, compose) didn't, so any right-aligned button or
+  element on those pages sat under the strip. Extended the CSS rule
+  in `App.tsx` to cover all of them.
+- **Search results omitted users** — desktop `SearchView` only queried
+  `listNews()` and `listChannels()`. Now also calls
+  `client.searchUsers(query, 20)` (from `@ogmara/sdk` v0.15.0+) and
+  renders a "Users" results section above channels with avatar,
+  display name, verified checkmark, and truncated address. Click
+  navigates to the user profile page. Skipped for `#hashtag` queries.
+
 ## [1.16.0] - 2026-05-06
 
 Modern design refresh + read-only / broadcast channels + `@`-mention

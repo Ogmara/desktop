@@ -302,18 +302,23 @@ export const App: Component = () => {
               @media (max-width: 768px) {
                 .modern-window-controls { display: none; }
               }
-              /* The channel-bar's action icons (search / dot-menu) sit at
-                 the far right edge of the right pane. The window-controls
-                 strip floats over the same region, so we reserve enough
-                 right padding on the channel-bar to push those icons left
-                 of the strip. 132px = 3 buttons * 36px wide + 24px gap.
-                 Only applied on Modern + non-mobile (where the strip
-                 actually renders). Same treatment for the news / DM
-                 detail header bars that share the same screen position. */
+              /* Any page-top header that places content (titles, action
+                 buttons, search/menu icons) flush at the right edge sits
+                 underneath the floating window-controls strip in Modern.
+                 Reserve 132px of right padding (3 buttons × 36px + 24px
+                 breathing room) so that content is pushed left of the
+                 strip. Only on Modern + non-mobile where the strip renders. */
               @media (min-width: 769px) {
                 [data-style="modern"] .channel-bar,
                 [data-style="modern"] .dm-header,
-                [data-style="modern"] .news-detail-header {
+                [data-style="modern"] .news-detail-header,
+                [data-style="modern"] .news-header,
+                [data-style="modern"] .search-view > h2,
+                [data-style="modern"] .bookmarks-view > h2,
+                [data-style="modern"] .notifications-view > h2,
+                [data-style="modern"] .settings-view > h2,
+                [data-style="modern"] .wallet-view > h2,
+                [data-style="modern"] .compose-view > h2 {
                   padding-right: 132px;
                 }
               }
