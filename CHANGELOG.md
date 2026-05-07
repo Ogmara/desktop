@@ -46,6 +46,23 @@ feature parity with web v0.30.0.
   renders fixed in the top-right corner with the same icons as the
   Toolbar's window-controls block. Hidden below 768px viewport because
   Tauri WebView on mobile doesn't expose a desktop window anyway.
+- **Channel-bar right-padding 132px** added in Modern non-mobile so
+  the right-pane header's action icons (channel search, dot-menu)
+  don't get covered by the floating window-controls strip. Same
+  treatment applied to `.dm-header` and `.news-detail-header` for
+  consistency. Padding scales with the strip's width (3 buttons × 36px
+  + 24px gap).
+
+### Fixed (smoke-test bugs from 2026-05-07 round)
+- **`@`-mention popover never opened** — same SolidJS ref-timing bug
+  fixed in web v0.30.1. `MentionPopover.textareaRef` is now an
+  accessor; `ChatView` and `NewsDetailView` use signal-backed refs
+  (`createSignal<HTMLTextAreaElement>()` + `ref={(el) => setRef(el)}`)
+  so the popover's effect re-runs once the textarea mounts.
+- **Sidebar minimum width** bumped 280 → 320 (matches Telegram
+  desktop's actual minimum). 280 was still cramped enough that the
+  search input was forced below usable width and the right pane felt
+  crowded.
 
 ### Notes
 - DM and `ComposeView` (news posts) composers are NOT wired —

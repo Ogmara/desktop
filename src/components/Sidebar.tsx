@@ -89,10 +89,11 @@ function syncJoinedWithApi(apiChannels: { channel_id: number; channel_type: numb
 }
 
 // Sidebar minimum is set so the Modern header (burger + search input + bell)
-// always has room to render legibly. 200px was too narrow — search collapsed
-// and the right pane appeared to overlap. 280px matches Telegram desktop's
-// minimum and keeps every header control fully visible.
-const SIDEBAR_MIN_W = 280;
+// always has room to render legibly without compression overlap. 280px was
+// still too narrow — the search input was forced below its usable width and
+// the right pane's header still appeared crowded. 320px matches Telegram
+// desktop's actual minimum and keeps every control fully clickable.
+const SIDEBAR_MIN_W = 320;
 const SIDEBAR_MAX_W = 600;
 const SIDEBAR_DEFAULT_W = 320;
 

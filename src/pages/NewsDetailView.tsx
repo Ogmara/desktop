@@ -148,7 +148,8 @@ export const NewsDetailView: Component = () => {
   const [commentPending, setCommentPending] = createSignal(false);
   const [commentError, setCommentError] = createSignal('');
   const [commentAttachments, setCommentAttachments] = createSignal<MediaAttachment[]>([]);
-  let commentInputRef: HTMLTextAreaElement | undefined;
+  // Signal-backed ref so MentionPopover's effect re-runs after mount.
+  const [commentInputRef, setCommentInputRef] = createSignal<HTMLTextAreaElement>();
 
   const EDIT_WINDOW_MS = 30 * 60 * 1000;
 
@@ -314,7 +315,7 @@ export const NewsDetailView: Component = () => {
 
   const handleReplyToComment = (commentMsgId: string, authorName: string) => {
     setReplyTo({ msgId: commentMsgId, authorName });
-    commentInputRef?.focus();
+    commentInputRef()?.focus();
   };
 
   return (
@@ -540,7 +541,7 @@ export const NewsDetailView: Component = () => {
               <MentionPopover
                 textareaRef={commentInputRef}
                 onSelect={(hit, range) => {
-                  const el = commentInputRef;
+                  const el = commentInputRef();
                   if (!el) return;
                   const insert = `@${hit.display_name && hit.display_name.trim() ? hit.display_name : hit.address.slice(0, 12)}`;
                   const v = commentText();
@@ -556,7 +557,7 @@ export const NewsDetailView: Component = () => {
               />
               <textarea
                 class="comment-input"
-                ref={commentInputRef}
+                ref={(el) => setCommentInputRef(el)}
                 rows={3}
                 placeholder={t('news_comment_placeholder')}
                 value={commentText()}
