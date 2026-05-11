@@ -5,6 +5,22 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.3] - 2026-05-11
+
+### Fixed
+- **Regression from v1.17.2: opening a sidebar context menu in Modern
+  broke the main window layout.** When v1.17.2 moved the menus out of
+  the classic-fallback `<aside>` into a shared helper, it didn't move
+  the `.channel-context-menu` / `.context-menu-item` CSS rules — those
+  still lived inside the classic aside's `<style>` block, which never
+  renders in Modern. With no `position: fixed` and no `display: block`
+  on items, the menu became a flex child of `.app-body`, consumed
+  layout space, and pushed the main content into a narrow column on
+  the right with the menu items strung horizontally across the top.
+  Co-located the needed CSS rules inside `sharedContextMenus()` via
+  an inline `<style>` so they always apply, regardless of which style
+  is active.
+
 ## [1.17.2] - 2026-05-11
 
 ### Fixed
