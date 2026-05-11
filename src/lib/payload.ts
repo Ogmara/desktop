@@ -79,13 +79,34 @@ export function decodePayload(payload: number[] | Uint8Array): DecodedPayload {
  * deliver it as a byte array. This helper lets all downstream functions
  * handle both transparently. Returns the decoded payload on success, or
  * null if the string is plain text (e.g. an optimistic message).
+ *
+ * `atob()` is lenient — any string that uses only base64-valid characters
+ * (e.g. "Hello") decodes to garbage bytes without throwing, and the
+ * subsequent msgpack decode then fails into `{ content: '' }`. Returning
+ * that here would make optimistic messages render as empty bubbles and
+ * break `startEdit` (which would prefill an empty input, causing the edit
+ * Send to silently bail). So we treat a result with no recognizable
+ * payload fields as "not actually a base64 payload" and fall back to
+ * treating the string as plain text.
  */
 function tryDecodeBase64Payload(payload: string): DecodedPayload | null {
   try {
     const binary = atob(payload);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return decodePayload(bytes);
+    const decoded = decodePayload(bytes);
+    // No recognizable payload fields — the input was probably plain text
+    // that happens to use only base64-valid characters. Caller should fall
+    // back to treating the string as the literal content.
+    if (
+      !decoded.content &&
+      !decoded.title &&
+      !decoded.media_cid &&
+      (!decoded.attachments || decoded.attachments.length === 0)
+    ) {
+      return null;
+    }
+    return decoded;
   } catch {
     return null;
   }

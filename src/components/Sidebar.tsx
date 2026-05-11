@@ -727,7 +727,112 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     </aside>
   );
 
+  // Channel & member context menus shared between Modern and Classic styles.
+  // Previously these lived inside the classic-fallback aside, so Modern users
+  // got the right-click event handler but no menu UI ever mounted — meaning
+  // no way to leave/delete a channel, no way to kick/ban a member, etc.
+  const sharedContextMenus = () => (
+    <>
+      {/* Channel context menu */}
+      <Show when={contextMenu()}>
+        <div
+          class="channel-context-menu"
+          style={{ left: `${contextMenu()!.x}px`, top: `${contextMenu()!.y}px` }}
+        >
+          <button class="context-menu-item" onClick={handleMarkRead}>
+            ✓ {t('channel_mark_read')}
+          </button>
+          <button class="context-menu-item" onClick={() => {
+            const ctx = contextMenu();
+            setContextMenu(null);
+            if (ctx) navigate(`/chat/${ctx.channelId}/settings`);
+          }}>
+            ⚙ {t('channel_settings')}
+          </button>
+          <button class="context-menu-item context-menu-danger" onClick={async () => {
+            const ctx = contextMenu();
+            setContextMenu(null);
+            if (!ctx) return;
+            if (!window.confirm(t('channel_leave_confirm'))) return;
+            try {
+              await getClient().leaveChannel(ctx.channelId);
+              removeJoinedChannel(ctx.channelId);
+              window.dispatchEvent(new Event('ogmara:channels-changed'));
+              navigate('/news');
+            } catch (e: any) {
+              alert(e?.message || 'Failed to leave channel');
+            }
+          }}>
+            ✕ {t('channel_leave')}
+          </button>
+          <Show when={contextMenu()?.creator === walletAddress()}>
+            <button class="context-menu-item context-menu-danger" onClick={async () => {
+              const ctx = contextMenu();
+              setContextMenu(null);
+              if (!ctx) return;
+              if (!window.confirm(t('channel_delete_confirm'))) return;
+              try {
+                await getClient().deleteChannel(ctx.channelId);
+                removeJoinedChannel(ctx.channelId);
+                window.dispatchEvent(new Event('ogmara:channels-changed'));
+                navigate('/news');
+              } catch (e: any) {
+                alert(e?.message || 'Failed to delete channel');
+              }
+            }}>
+              🗑 {t('channel_delete')}
+            </button>
+          </Show>
+        </div>
+      </Show>
+
+      {/* Member context menu (right-click on member in sidebar) */}
+      <Show when={memberMenu()}>
+        <div
+          class="channel-context-menu"
+          style={{ left: `${memberMenu()!.x}px`, top: `${memberMenu()!.y}px` }}
+        >
+          <button class="context-menu-item" onClick={() => handleMemberAction('profile')}>
+            👤 {t('channel_view_profile')}
+          </button>
+          {/* Kick/ban: visible to mods and owner, but not on yourself or the owner */}
+          <Show when={
+            isModOrOwner(memberMenu()!.channelId) &&
+            memberMenu()!.address !== walletAddress() &&
+            memberMenu()!.role !== 'creator'
+          }>
+            <div class="ctx-divider" />
+            <button class="context-menu-item context-menu-warn" onClick={() => handleMemberAction('kick')}>
+              ⚡ {t('channel_kick')}
+            </button>
+            <button class="context-menu-item context-menu-danger" onClick={() => handleMemberAction('ban')}>
+              ⛔ {t('channel_ban')}
+            </button>
+          </Show>
+          {/* Promote/demote: owner only, not on yourself */}
+          <Show when={
+            isOwner(memberMenu()!.channelId) &&
+            memberMenu()!.address !== walletAddress()
+          }>
+            <div class="ctx-divider" />
+            <Show when={memberMenu()!.role !== 'moderator'}>
+              <button class="context-menu-item" onClick={() => handleMemberAction('promote')}>
+                ⬆ {t('channel_promote_mod')}
+              </button>
+            </Show>
+            <Show when={memberMenu()!.role === 'moderator'}>
+              <button class="context-menu-item context-menu-warn" onClick={() => handleMemberAction('demote')}>
+                ⬇ {t('channel_demote_mod')}
+              </button>
+            </Show>
+          </Show>
+        </div>
+      </Show>
+    </>
+  );
+
   return (
+    <>
     <Show when={isModernStyle()} fallback={
     <aside
       class={`sidebar ${isMobileViewport() ? 'mobile-open' : ''}`}
@@ -896,101 +1001,9 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         </div>
       </Show>
 
-      {/* Channel context menu */}
-      <Show when={contextMenu()}>
-        <div
-          class="channel-context-menu"
-          style={{ left: `${contextMenu()!.x}px`, top: `${contextMenu()!.y}px` }}
-        >
-          <button class="context-menu-item" onClick={handleMarkRead}>
-            ✓ {t('channel_mark_read')}
-          </button>
-          <button class="context-menu-item" onClick={() => {
-            const ctx = contextMenu();
-            setContextMenu(null);
-            if (ctx) navigate(`/chat/${ctx.channelId}/settings`);
-          }}>
-            ⚙ {t('channel_settings')}
-          </button>
-          <button class="context-menu-item context-menu-danger" onClick={async () => {
-            const ctx = contextMenu();
-            setContextMenu(null);
-            if (!ctx) return;
-            if (!window.confirm(t('channel_leave_confirm'))) return;
-            try {
-              await getClient().leaveChannel(ctx.channelId);
-              removeJoinedChannel(ctx.channelId);
-              window.dispatchEvent(new Event('ogmara:channels-changed'));
-              navigate('/news');
-            } catch (e: any) {
-              alert(e?.message || 'Failed to leave channel');
-            }
-          }}>
-            ✕ {t('channel_leave')}
-          </button>
-          <Show when={contextMenu()?.creator === walletAddress()}>
-            <button class="context-menu-item context-menu-danger" onClick={async () => {
-              const ctx = contextMenu();
-              setContextMenu(null);
-              if (!ctx) return;
-              if (!window.confirm(t('channel_delete_confirm'))) return;
-              try {
-                await getClient().deleteChannel(ctx.channelId);
-                removeJoinedChannel(ctx.channelId);
-                window.dispatchEvent(new Event('ogmara:channels-changed'));
-                navigate('/news');
-              } catch (e: any) {
-                alert(e?.message || 'Failed to delete channel');
-              }
-            }}>
-              🗑 {t('channel_delete')}
-            </button>
-          </Show>
-        </div>
-      </Show>
+      {/* Context menus are rendered at top-level (see end of return) so they
+          appear in both Modern and Classic styles. */}
 
-      {/* Member context menu (right-click on member in sidebar) */}
-      <Show when={memberMenu()}>
-        <div
-          class="channel-context-menu"
-          style={{ left: `${memberMenu()!.x}px`, top: `${memberMenu()!.y}px` }}
-        >
-          <button class="context-menu-item" onClick={() => handleMemberAction('profile')}>
-            👤 {t('channel_view_profile')}
-          </button>
-          {/* Kick/ban: visible to mods and owner, but not on yourself or the owner */}
-          <Show when={
-            isModOrOwner(memberMenu()!.channelId) &&
-            memberMenu()!.address !== walletAddress() &&
-            memberMenu()!.role !== 'creator'
-          }>
-            <div class="ctx-divider" />
-            <button class="context-menu-item context-menu-warn" onClick={() => handleMemberAction('kick')}>
-              ⚡ {t('channel_kick')}
-            </button>
-            <button class="context-menu-item context-menu-danger" onClick={() => handleMemberAction('ban')}>
-              ⛔ {t('channel_ban')}
-            </button>
-          </Show>
-          {/* Promote/demote: owner only, not on yourself */}
-          <Show when={
-            isOwner(memberMenu()!.channelId) &&
-            memberMenu()!.address !== walletAddress()
-          }>
-            <div class="ctx-divider" />
-            <Show when={memberMenu()!.role !== 'moderator'}>
-              <button class="context-menu-item" onClick={() => handleMemberAction('promote')}>
-                ⬆ {t('channel_promote_mod')}
-              </button>
-            </Show>
-            <Show when={memberMenu()!.role === 'moderator'}>
-              <button class="context-menu-item context-menu-warn" onClick={() => handleMemberAction('demote')}>
-                ⬇ {t('channel_demote_mod')}
-              </button>
-            </Show>
-          </Show>
-        </div>
-      </Show>
 
       <style>{`
         .sidebar {
@@ -1180,5 +1193,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     }>
       {modernSidebar()}
     </Show>
+    {sharedContextMenus()}
+    </>
   );
 };

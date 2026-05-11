@@ -821,6 +821,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     const newContent = messageInput().trim();
     if (!edit || !newContent || !props.channelId) return;
     setSending(true);
+    setSendError(null);
     try {
       const client = getClient();
       await client.editMessage(props.channelId, edit.msgId, newContent);
@@ -835,8 +836,15 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       });
       setEditingMsg(null);
       setMessageInput('');
-    } catch (e) {
-      console.warn('Edit message failed:', e);
+    } catch (err: any) {
+      // Surface the failure in the existing send-error banner so the user
+      // gets feedback instead of a silent no-op. Previously this only
+      // logged to console.warn, which is why edit failures in Modern
+      // (where the only edit affordance is the right-click menu) felt
+      // like the click did nothing at all.
+      console.error('editMessage failed:', err);
+      setSendError(err?.message || 'Edit failed');
+      setTimeout(() => setSendError(null), 6000);
     } finally { setSending(false); }
   };
 
