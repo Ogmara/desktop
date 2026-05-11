@@ -281,9 +281,15 @@ export const ChannelSettingsView: Component<ChannelSettingsProps> = (props) => {
   };
 
   // --- Invite link ---
+  // Hardcoded to the canonical public host rather than `window.location.origin`,
+  // because in the Tauri shell that origin is `http://localhost:1420` (dev) or
+  // `tauri://localhost` (production) — neither is shareable. The web build
+  // ships at `https://ogmara.org`, so the same URL works for any recipient
+  // regardless of which device the link was copied from.
+  const PUBLIC_INVITE_BASE = 'https://ogmara.org';
   const [linkCopied, setLinkCopied] = createSignal(false);
   const handleCopyLink = () => {
-    const url = `${window.location.origin}/app/#/join/${channelIdNum()}`;
+    const url = `${PUBLIC_INVITE_BASE}/app/#/join/${channelIdNum()}`;
     navigator.clipboard.writeText(url).then(() => {
       setLinkCopied(true);
       setTimeout(() => setLinkCopied(false), 2000);

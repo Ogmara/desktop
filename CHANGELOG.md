@@ -5,6 +5,45 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.2] - 2026-05-11
+
+### Fixed
+- **Modern sidebar: right-click context menu missing.** The two `<Show>`
+  blocks rendering the channel menu (mark-read / settings / leave /
+  delete) and the member menu (profile / kick / ban / promote / demote)
+  lived inside the *classic* fallback `<aside>` in `Sidebar.tsx`, so the
+  Modern style wired up the `onContextMenu` handler but no menu UI ever
+  mounted — leaving Modern users with no way to leave or delete a
+  channel, or to moderate members. Extracted both `<Show>` blocks into a
+  `sharedContextMenus()` helper rendered at the top level of the
+  component, so both styles get them.
+- **Optimistic messages render as empty bubbles in public channels.**
+  `tryDecodeBase64Payload` in `payload.ts` ran `atob()` on plain text;
+  any string using only base64-valid characters (e.g. `"Hello"`)
+  succeeds with garbage bytes, the subsequent msgpack decode then fails
+  into `{ content: '' }`, and the caller's `?.content ?? payload`
+  returned the empty string (because `??` only triggers on
+  null/undefined). Users saw a bubble with only a timestamp until they
+  left and re-entered the channel. **Fixed** by returning `null` from
+  `tryDecodeBase64Payload` when the decode yields no recognizable
+  payload fields, so callers fall back to treating the string as the
+  literal content.
+- **Edit message via right-click silently failed.** A side effect of
+  the empty-bubble bug above: `startEdit` prefilled the composer with
+  `getPayloadContent(payload)` which returned `''`; clicking Send hit
+  `handleEdit`'s `if (!newContent) return` and bailed without any
+  user-facing signal. The payload fix resolves the root cause.
+  `handleEdit` now also surfaces errors to the existing `sendError`
+  banner (and `console.error`) instead of just `console.warn`,
+  matching the `handleSend` error pattern.
+- **"Copy channel invite link" produced a localhost URL.**
+  `ChannelSettingsView` built the join URL from
+  `${window.location.origin}/app/#/join/<id>`. In the Tauri shell that
+  origin is `http://localhost:1420` (dev) or `tauri://localhost`
+  (production), neither of which is shareable. Hardcoded the canonical
+  public host `https://ogmara.org` for the desktop build so the same
+  URL works for any recipient.
+
 ## [1.17.1] - 2026-05-07
 
 ### Fixed
