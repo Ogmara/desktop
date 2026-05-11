@@ -731,8 +731,42 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   // Previously these lived inside the classic-fallback aside, so Modern users
   // got the right-click event handler but no menu UI ever mounted — meaning
   // no way to leave/delete a channel, no way to kick/ban a member, etc.
+  //
+  // The inline <style> block here is critical: the `.channel-context-menu`
+  // rules used to live inside the classic aside's <style>, which never
+  // renders in Modern. Without `position: fixed` and `display: block` on
+  // items, the menu becomes a flex child of `.app-body` and consumes layout
+  // space, breaking the main window. Co-locating the CSS with the menus
+  // ensures it applies in any style.
   const sharedContextMenus = () => (
     <>
+      <style>{`
+        .channel-context-menu {
+          position: fixed;
+          background: var(--color-bg-secondary);
+          border: 1px solid var(--color-border);
+          border-radius: var(--radius-md);
+          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+          z-index: 100;
+          padding: 4px;
+          min-width: 160px;
+        }
+        .context-menu-item {
+          display: block;
+          width: 100%;
+          text-align: left;
+          padding: var(--spacing-sm) var(--spacing-md);
+          font-size: var(--font-size-sm);
+          border-radius: var(--radius-sm);
+          cursor: pointer;
+          color: var(--color-text-primary);
+        }
+        .context-menu-item:hover { background: var(--color-bg-tertiary); }
+        .context-menu-warn { color: var(--color-text-secondary); }
+        .context-menu-danger { color: #f44; }
+        .context-menu-danger:hover { background: rgba(255,68,68,0.1); }
+        .ctx-divider { height: 1px; background: var(--color-border); margin: 4px 0; }
+      `}</style>
       {/* Channel context menu */}
       <Show when={contextMenu()}>
         <div
