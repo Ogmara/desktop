@@ -23,10 +23,13 @@ const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'imag
 /** Video MIME types that render as inline <video> elements. */
 const VIDEO_TYPES = ['video/mp4', 'video/webm', 'video/ogg'];
 
-/** Regex for hashtags: # followed by word chars (letters, digits, underscore). */
-const HASHTAG_RE = /#([\w\u00C0-\u024F]+)/g;
+/** Regex for hashtags: # followed by word chars (letters, digits, underscore).
+ *  Also matches @-mentions in either `@klv1<bech32>` or `@<DisplayName>` form
+ *  (the mention popover writes the display name into the text and stores the
+ *  resolved address separately in the envelope's mentions[] array). */
+const TOKEN_RE = /(#[\w\u00C0-\u024F]+)|(@klv1[a-z0-9]+)|(@[\w\u00C0-\u024F]+)/g;
 
-/** Render text with newlines preserved and hashtags clickable. */
+/** Render text with newlines preserved and hashtags/mentions clickable. */
 function renderTextWithBreaksAndHashtags(text: string): JSX.Element {
   // Split on newlines first
   const lines = text.split('\n');
@@ -35,23 +38,44 @@ function renderTextWithBreaksAndHashtags(text: string): JSX.Element {
   for (let i = 0; i < lines.length; i++) {
     if (i > 0) elements.push(<br />);
     const line = lines[i];
-    // Parse hashtags within each line
     let lastIndex = 0;
-    HASHTAG_RE.lastIndex = 0;
+    TOKEN_RE.lastIndex = 0;
     let match: RegExpExecArray | null;
-    while ((match = HASHTAG_RE.exec(line)) !== null) {
+    while ((match = TOKEN_RE.exec(line)) !== null) {
       if (match.index > lastIndex) {
         elements.push(<>{line.slice(lastIndex, match.index)}</>);
       }
-      const tag = match[1];
-      elements.push(
-        <button
-          class="msg-hashtag"
-          onClick={() => navigate(`/search?q=${encodeURIComponent('#' + tag)}`)}
-        >
-          #{tag}
-        </button>,
-      );
+      if (match[1]) {
+        // Hashtag \u2014 clickable, navigates to a tag search.
+        const tag = match[1].slice(1);
+        elements.push(
+          <button
+            class="msg-hashtag"
+            onClick={() => navigate(`/search?q=${encodeURIComponent('#' + tag)}`)}
+          >
+            #{tag}
+          </button>,
+        );
+      } else if (match[2]) {
+        // @klv1... \u2014 full address, navigate straight to the user.
+        const addr = match[2].slice(1);
+        elements.push(
+          <button
+            class="msg-mention"
+            onClick={() => navigate(`/user/${addr}`)}
+            title={addr}
+          >
+            @{addr.slice(0, 10)}\u2026
+          </button>,
+        );
+      } else if (match[3]) {
+        // @<DisplayName> \u2014 popover-inserted display reference. We don't
+        // know the resolved address from the text alone, so render as a
+        // non-navigating pill. The canonical mention is in payload.mentions[].
+        elements.push(
+          <span class="msg-mention">{match[3]}</span>,
+        );
+      }
       lastIndex = match.index + match[0].length;
     }
     if (lastIndex < line.length) {
@@ -253,6 +277,26 @@ export const FormattedText: Component<Props> = (props) => {
           font-family: inherit;
         }
         .msg-hashtag:hover { text-decoration: underline; }
+        /* @-mention pill — visually distinct from the surrounding text so
+           readers spot pings at a glance. Inline-block so it sits inside the
+           flow but with its own background. Uses the same accent token as
+           hashtags so the visual language stays consistent. */
+        .msg-mention {
+          display: inline;
+          color: var(--color-accent-primary);
+          background: color-mix(in srgb, var(--color-accent-primary) 18%, transparent);
+          font-weight: 600;
+          padding: 1px 4px;
+          border-radius: var(--radius-sm);
+          cursor: pointer;
+          font-size: inherit;
+          font-family: inherit;
+          line-height: inherit;
+        }
+        .msg-mention:hover {
+          background: color-mix(in srgb, var(--color-accent-primary) 30%, transparent);
+          text-decoration: none;
+        }
 
         .lightbox-overlay {
           position: fixed;

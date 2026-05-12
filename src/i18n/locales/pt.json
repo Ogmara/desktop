@@ -402,5 +402,13 @@
   "yesterday": "Ontem",
   "mention_no_results": "Sem correspondências",
   "mention_popover_label": "Sugestões de menção",
-  "user_verified": "Verificado on-chain"
+  "user_verified": "Verificado on-chain",
+  "share": "Compartilhar",
+  "share_news_link": "Copiar link da publicação",
+  "share_message_link": "Copiar link da mensagem",
+  "share_link_copied": "Link copiado!",
+  "share_link_failed": "Não foi possível copiar o link",
+  "share_link_unavailable": "Mensagem não encontrada",
+  "chat_mention_you": "Você foi mencionado",
+  "sidebar_mentioned_here": "Você foi mencionado aqui"
 }

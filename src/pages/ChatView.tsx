@@ -17,10 +17,12 @@ import { setSetting } from '../lib/settings';
 import { FormattedText } from '../components/FormattedText';
 import { EmojiPicker } from '../components/EmojiPicker';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
-import { getPayloadContent, getPayloadAttachments, decodePayload } from '../lib/payload';
+import { getPayloadContent, getPayloadAttachments, getPayloadMentions, decodePayload } from '../lib/payload';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
 import { showMobileList } from '../lib/mobile-nav';
 import { isModernStyle } from '../lib/theme';
+import { buildChatShareUrl, copyToClipboard } from '../lib/share';
+import { queryParam, route } from '../lib/router';
 
 /** Convert a msg_id (hex string, byte array, or Uint8Array) to a consistent hex string. */
 function msgIdToHex(msgId: unknown): string {
@@ -181,6 +183,16 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     onCleanup(() => document.removeEventListener('click', closeUserMenu));
   }
 
+  /** Brief toast shown when a share-link copy succeeds/fails. */
+  const [shareToast, setShareToast] = createSignal<string | null>(null);
+  let shareToastTimer: ReturnType<typeof setTimeout> | null = null;
+  const flashShareToast = (msg: string) => {
+    setShareToast(msg);
+    if (shareToastTimer) clearTimeout(shareToastTimer);
+    shareToastTimer = setTimeout(() => setShareToast(null), 2000);
+  };
+  onCleanup(() => { if (shareToastTimer) clearTimeout(shareToastTimer); });
+
   const handleUserAction = async (action: string) => {
     const ctx = userMenu();
     if (!ctx || !props.channelId) return;
@@ -193,6 +205,13 @@ export const ChatView: Component<ChatViewProps> = (props) => {
         case 'profile':
           navigate(`/user/${ctx.address}`);
           break;
+        case 'copy-link': {
+          const url = buildChatShareUrl(props.channelId, ctx.msgId);
+          if (!url) { flashShareToast(t('share_link_failed')); break; }
+          const ok = await copyToClipboard(url);
+          flashShareToast(ok ? t('share_link_copied') : t('share_link_failed'));
+          break;
+        }
         case 'reply':
           if (targetMsg) handleReply(targetMsg);
           break;
@@ -709,6 +728,42 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     }
   });
 
+  // Deep-link consumer: when the URL carries `?msg=<hex>`, scroll to that
+  // message once it's loaded. If it's older than the initial page, paginate
+  // backwards up to a small limit before giving up.
+  //
+  // State is keyed by (channelId, target) so switching channels and returning
+  // to the same `?msg=` value re-tries the lookup instead of silently no-oping.
+  let deepLinkAttempts = 0;
+  let deepLinkSatisfiedKey: string | null = null;
+  const MAX_DEEPLINK_PAGINATES = 3;
+  createEffect(() => {
+    route();
+    const targetRaw = queryParam('msg');
+    const channelAtEntry = props.channelId;
+    const target = targetRaw && /^[0-9a-fA-F]{64}$/.test(targetRaw) ? targetRaw : null;
+    if (!target) { deepLinkSatisfiedKey = null; deepLinkAttempts = 0; return; }
+    const key = `${channelAtEntry}:${target}`;
+    if (deepLinkSatisfiedKey === key) return;
+    if (messages.loading) return;
+    setTimeout(() => {
+      if (props.channelId !== channelAtEntry) return;
+      const el = document.querySelector(`[data-msg-id="${CSS.escape(target)}"]`) as HTMLElement | null;
+      if (el) {
+        scrollToMessage(target);
+        deepLinkSatisfiedKey = key;
+        deepLinkAttempts = 0;
+      } else if (hasMoreOlder() && deepLinkAttempts < MAX_DEEPLINK_PAGINATES && !loadingOlder()) {
+        deepLinkAttempts++;
+        loadOlderMessages();
+      } else {
+        deepLinkSatisfiedKey = key;
+        deepLinkAttempts = 0;
+        flashShareToast(t('share_link_unavailable'));
+      }
+    }, 100);
+  });
+
   const handleSend = async () => {
     // Route to edit handler when in edit mode
     if (editingMsg()) { await handleEdit(); return; }
@@ -980,6 +1035,11 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                 const prevMsgTs = prevMsg ? normalizeTs(prevMsg.timestamp) : 0;
                 const showUnreadDivider = readTs !== null && msgTs > readTs && (prevMsgTs <= readTs || !prevMsg) && !isOwn;
                 const msgHex = msgIdToHex(msg.msg_id);
+                // Highlight bubbles where the viewer (wallet address) is @-mentioned
+                // — but skip own messages so self-mentions don't light up.
+                const viewerAddr = walletAddress();
+                const mentionedHere = !isOwn && !msg.deleted && !msg.muted && !!viewerAddr
+                  && getPayloadMentions(msg.payload).includes(viewerAddr);
 
                 return (
                   <>
@@ -992,8 +1052,9 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                     <Show when={isModernStyle()} fallback={
                       /* ---------- CLASSIC / OTHER STYLES ---------- */
                       <div
-                        class={`message ${isOwn ? 'own' : ''} ${msg.deleted ? 'deleted' : ''} ${msg.muted ? 'muted' : ''} ${isContinuation ? 'continuation' : ''}`}
+                        class={`message ${isOwn ? 'own' : ''} ${msg.deleted ? 'deleted' : ''} ${msg.muted ? 'muted' : ''} ${isContinuation ? 'continuation' : ''} ${mentionedHere ? 'mentioned' : ''}`}
                         data-msg-id={msgHex}
+                        title={mentionedHere ? t('chat_mention_you') : undefined}
                         onContextMenu={(e) => { e.preventDefault(); openUserMenu(e.clientX, e.clientY, msg.author, msgHex); }}
                         onTouchStart={(e) => handleTouchStart(e, msg)} onTouchEnd={cancelLongPress} onTouchMove={cancelLongPress}
                       >
@@ -1056,7 +1117,10 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                             </Show>
                           </div>
                         </Show>
-                        <div class={`message-bubble ${isOwn ? 'own' : ''} ${msg.deleted ? 'deleted' : ''}`}>
+                        <div
+                          class={`message-bubble ${isOwn ? 'own' : ''} ${msg.deleted ? 'deleted' : ''} ${mentionedHere ? 'mentioned' : ''}`}
+                          title={mentionedHere ? t('chat_mention_you') : undefined}
+                        >
                           <Show when={reply && !msg.deleted}>
                             <div class="reply-preview" onClick={() => scrollToMessage(reply!.msgId)}>
                               <span class="reply-preview-author">{displayName(reply!.author)}</span>
@@ -1456,6 +1520,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
           </Show>
           <div class="ctx-divider" />
           <button class="ctx-item" onClick={() => handleUserAction('profile')}>👤 {t('channel_view_profile')}</button>
+          <button class="ctx-item" onClick={() => handleUserAction('copy-link')}>🔗 {t('share_message_link')}</button>
           <Show when={isMod()}>
             <button class="ctx-item" onClick={() => handleUserAction('pin')}>📌 {t('channel_pin_message')}</button>
           </Show>
@@ -1469,6 +1534,10 @@ export const ChatView: Component<ChatViewProps> = (props) => {
             <button class="ctx-item ctx-danger" onClick={() => handleUserAction('ban')}>⛔ {t('channel_ban')}</button>
           </Show>
         </div>
+      </Show>
+
+      <Show when={shareToast()}>
+        <div class="share-toast">{shareToast()}</div>
       </Show>
 
       <style>{`
@@ -1718,6 +1787,64 @@ export const ChatView: Component<ChatViewProps> = (props) => {
         @keyframes msg-flash {
           0% { background: var(--color-accent-primary); border-radius: var(--radius-sm); }
           100% { background: transparent; }
+        }
+
+        /* @-mention highlight: when a message @-mentions the viewer, render
+           the bubble with a clearly different fill, an accent stripe on the
+           left, and a soft outer glow so it's obvious at a glance. Uses
+           existing theme accent tokens so it works in both light and dark. */
+        .message.mentioned {
+          background: color-mix(in srgb, var(--color-accent-primary) 16%, transparent);
+          border-left: 3px solid var(--color-accent-primary);
+          padding-left: calc(var(--spacing-md) - 3px);
+          border-radius: var(--radius-sm);
+        }
+        .message-bubble.mentioned {
+          /* Stronger tint than non-mention bubbles, plus a thicker accent
+             border. The pseudo-element below paints a left stripe so the
+             highlight is unmistakable even when the bubble sits flush with
+             the avatar column. */
+          position: relative;
+          background: color-mix(in srgb, var(--color-accent-primary) 28%, var(--color-bg-secondary));
+          border: 1px solid color-mix(in srgb, var(--color-accent-primary) 65%, transparent);
+          box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent-primary) 35%, transparent),
+                      0 2px 12px color-mix(in srgb, var(--color-accent-primary) 18%, transparent);
+        }
+        .message-bubble.mentioned::before {
+          content: '';
+          position: absolute;
+          left: 0;
+          top: 0;
+          bottom: 0;
+          width: 3px;
+          background: var(--color-accent-primary);
+          border-top-left-radius: inherit;
+          border-bottom-left-radius: inherit;
+        }
+        .message-bubble.mentioned.own {
+          background: color-mix(in srgb, var(--color-accent-primary) 35%, var(--color-accent-secondary, var(--color-accent-primary)));
+        }
+
+        /* Transient bottom-of-screen toast for share-link copy feedback. */
+        .share-toast {
+          position: fixed;
+          left: 50%;
+          bottom: 80px;
+          transform: translateX(-50%);
+          background: var(--color-bg-secondary);
+          color: var(--color-text-primary);
+          border: 1px solid var(--color-border);
+          padding: var(--spacing-sm) var(--spacing-md);
+          border-radius: var(--radius-md);
+          box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+          z-index: 200;
+          font-size: var(--font-size-sm);
+          pointer-events: none;
+          animation: share-toast-in 0.2s ease-out;
+        }
+        @keyframes share-toast-in {
+          from { opacity: 0; transform: translate(-50%, 10px); }
+          to   { opacity: 1; transform: translate(-50%, 0); }
         }
 
         .reply-indicator {

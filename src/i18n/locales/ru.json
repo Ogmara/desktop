@@ -402,5 +402,13 @@
   "yesterday": "Вчера",
   "mention_no_results": "Нет совпадений",
   "mention_popover_label": "Подсказки упоминания",
-  "user_verified": "Подтверждено в сети"
+  "user_verified": "Подтверждено в сети",
+  "share": "Поделиться",
+  "share_news_link": "Скопировать ссылку на пост",
+  "share_message_link": "Скопировать ссылку на сообщение",
+  "share_link_copied": "Ссылка скопирована!",
+  "share_link_failed": "Не удалось скопировать ссылку",
+  "share_link_unavailable": "Сообщение не найдено",
+  "chat_mention_you": "Вас упомянули",
+  "sidebar_mentioned_here": "Вас упомянули здесь"
 }

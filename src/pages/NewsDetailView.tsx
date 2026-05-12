@@ -6,7 +6,7 @@
  * with a reply form for authenticated users.
  */
 
-import { Component, createResource, createSignal, createEffect, For, Show } from 'solid-js';
+import { Component, createResource, createSignal, createEffect, onCleanup, For, Show } from 'solid-js';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { authStatus, getSigner, l2Address, walletAddress, isRegistered } from '../lib/auth';
@@ -19,6 +19,7 @@ import { sendTip, kleverAvailable, getExplorerUrl } from '../lib/klever';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
 import { ensureHexMsgId, formatLocalTime, truncateAddress } from '../lib/news-utils';
 import { ReactionPicker } from '../components/ReactionPicker';
+import { buildNewsShareUrl, copyToClipboard } from '../lib/share';
 
 /** Single comment in the thread. */
 const CommentCard: Component<{ comment: any; onReply: (msgId: string, author: string) => void }> = (props) => {
@@ -131,6 +132,19 @@ export const NewsDetailView: Component = () => {
   const [bookmarked, setBookmarked] = createSignal(false);
   const [reposted, setReposted] = createSignal(false);
   const [actionError, setActionError] = createSignal('');
+  // Transient feedback for share-link copy
+  const [shareToast, setShareToast] = createSignal('');
+  let shareToastTimer: ReturnType<typeof setTimeout> | null = null;
+  onCleanup(() => { if (shareToastTimer) clearTimeout(shareToastTimer); });
+  const handleShare = async () => {
+    const id = msgId();
+    if (!id) return;
+    const url = buildNewsShareUrl(id);
+    const ok = !!url && await copyToClipboard(url);
+    setShareToast(ok ? t('share_link_copied') : t('share_link_failed'));
+    if (shareToastTimer) clearTimeout(shareToastTimer);
+    shareToastTimer = setTimeout(() => setShareToast(''), 2000);
+  };
 
   // Tip state
   const [showTip, setShowTip] = createSignal(false);
@@ -435,6 +449,13 @@ export const NewsDetailView: Component = () => {
               {bookmarked() ? '★' : '☆'} {bookmarked() ? t('news_bookmarked') : t('news_bookmark')}
             </button>
             <button
+              class="action-btn"
+              onClick={handleShare}
+              title={t('share_news_link')}
+            >
+              🔗 {t('share')}
+            </button>
+            <button
               class="tip-btn"
               onClick={() => {
                 if (!requireAuthOrRedirect()) return;
@@ -613,8 +634,27 @@ export const NewsDetailView: Component = () => {
         </div>
       </Show>
 
+      <Show when={shareToast()}>
+        <div class="share-toast">{shareToast()}</div>
+      </Show>
+
       <style>{`
         .news-detail-view { padding: var(--spacing-md); overflow-y: auto; height: 100%; max-width: 720px; }
+        .share-toast {
+          position: fixed;
+          left: 50%;
+          bottom: 80px;
+          transform: translateX(-50%);
+          background: var(--color-bg-secondary);
+          color: var(--color-text-primary);
+          border: 1px solid var(--color-border);
+          padding: var(--spacing-sm) var(--spacing-md);
+          border-radius: var(--radius-md);
+          box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+          z-index: 200;
+          font-size: var(--font-size-sm);
+          pointer-events: none;
+        }
         .detail-nav { margin-bottom: var(--spacing-md); }
         .back-btn {
           color: var(--color-accent-primary);

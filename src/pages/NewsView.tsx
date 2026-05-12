@@ -2,7 +2,7 @@
  * NewsView — news feed with reactions, bookmarks, reposts (auth-gated).
  */
 
-import { Component, createResource, createSignal, createEffect, createMemo, For, Show } from 'solid-js';
+import { Component, createResource, createSignal, createEffect, createMemo, onCleanup, For, Show } from 'solid-js';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { authStatus, getSigner, l2Address, walletAddress } from '../lib/auth';
@@ -13,6 +13,7 @@ import { sendTip, kleverAvailable, getExplorerUrl } from '../lib/klever';
 import { resolveProfile } from '../lib/profile';
 import { ensureHexMsgId, formatLocalTime, truncateAddress } from '../lib/news-utils';
 import { ReactionPicker } from '../components/ReactionPicker';
+import { buildNewsShareUrl, copyToClipboard } from '../lib/share';
 
 export const NewsView: Component = () => {
   const [loadError, setLoadError] = createSignal('');
@@ -292,6 +293,9 @@ const NewsCard: Component<{ post: any }> = (props) => {
   const [bookmarked, setBookmarked] = createSignal(false);
   const [reposted, setReposted] = createSignal(false);
   const [actionError, setActionError] = createSignal('');
+  const [shareCopied, setShareCopied] = createSignal(false);
+  let shareCopiedTimer: ReturnType<typeof setTimeout> | null = null;
+  onCleanup(() => { if (shareCopiedTimer) clearTimeout(shareCopiedTimer); });
   const [profile, setProfile] = createSignal<{ display_name?: string; avatar_cid?: string; verified?: boolean }>({});
   const [showTip, setShowTip] = createSignal(false);
   const [tipAmount, setTipAmount] = createSignal('1');
@@ -518,6 +522,23 @@ const NewsCard: Component<{ post: any }> = (props) => {
           <Show when={!isComment() && (props.post.comment_count ?? 0) > 0}>
             <span class="reaction-count">{props.post.comment_count}</span>
           </Show>
+        </button>
+        <button
+          class={`action-btn ${shareCopied() ? 'bookmarked' : ''}`}
+          onClick={async (e) => {
+            e.stopPropagation();
+            const url = buildNewsShareUrl(ensureHexMsgId(props.post.msg_id));
+            if (!url) return;
+            const ok = await copyToClipboard(url);
+            if (ok) {
+              setShareCopied(true);
+              if (shareCopiedTimer) clearTimeout(shareCopiedTimer);
+              shareCopiedTimer = setTimeout(() => setShareCopied(false), 1500);
+            }
+          }}
+          title={t('share_news_link')}
+        >
+          🔗 {shareCopied() ? t('share_link_copied') : t('share')}
         </button>
         <button
           class="tip-btn"

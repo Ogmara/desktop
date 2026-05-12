@@ -402,5 +402,13 @@
   "yesterday": "Ayer",
   "mention_no_results": "Sin coincidencias",
   "mention_popover_label": "Sugerencias de mención",
-  "user_verified": "Verificado en cadena"
+  "user_verified": "Verificado en cadena",
+  "share": "Compartir",
+  "share_news_link": "Copiar enlace a la publicación",
+  "share_message_link": "Copiar enlace al mensaje",
+  "share_link_copied": "¡Enlace copiado!",
+  "share_link_failed": "No se pudo copiar el enlace",
+  "share_link_unavailable": "Mensaje no encontrado",
+  "chat_mention_you": "Te mencionaron",
+  "sidebar_mentioned_here": "Te mencionaron aquí"
 }
