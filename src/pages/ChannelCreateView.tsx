@@ -204,7 +204,27 @@ export const ChannelCreateView: Component = () => {
           border-color: var(--color-accent-primary);
         }
         .create-textarea { resize: none; line-height: 1.4; }
-        .create-select { cursor: pointer; }
+        /* Tauri's WebKitGTK webview on Linux ignores most CSS on native <select>
+           elements and renders them with system colors (white/grey), making the
+           selected option unreadable in dark mode. Strip the native chrome and
+           paint our own dropdown arrow so the field matches the form's theme. */
+        .create-select {
+          cursor: pointer;
+          appearance: none;
+          -webkit-appearance: none;
+          -moz-appearance: none;
+          /* Right-aligned chevron drawn via SVG, tinted with the primary text color */
+          background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%23bfc7d4' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='1,1 6,7 11,1'/></svg>");
+          background-repeat: no-repeat;
+          background-position: right var(--spacing-md) center;
+          padding-right: calc(var(--spacing-md) * 2 + 12px);
+        }
+        /* Option list itself is OS-controlled, but most webviews honour a
+           background+color on <option> for the popup panel. */
+        .create-select option {
+          background: var(--color-bg-secondary);
+          color: var(--color-text-primary);
+        }
         .create-hint { font-size: var(--font-size-xs); color: var(--color-text-secondary); }
         .create-error {
           padding: var(--spacing-sm);

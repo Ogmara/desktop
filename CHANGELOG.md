@@ -5,6 +5,19 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.1] - 2026-05-12
+
+### Fixed
+- **Channel-type dropdown unreadable in Linux Tauri build.** The native
+  `<select>` element in the "Create Channel" form was being rendered by
+  WebKitGTK with system colors (white background + grey text) instead
+  of the form's `--color-bg-tertiary` + primary-text tokens, making the
+  selected option illegible in dark mode. Strip native chrome with
+  `appearance: none` and paint our own SVG chevron so the field matches
+  the rest of the form. Style `<option>` for the dropdown popup too —
+  honoured by most webviews (the popup panel is OS-controlled but
+  background/color usually apply).
+
 ## [1.18.0] - 2026-05-12
 
 ### Added
