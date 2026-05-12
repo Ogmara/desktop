@@ -405,5 +405,13 @@
   "yesterday": "Yesterday",
   "mention_no_results": "No matching users",
   "mention_popover_label": "Mention suggestions",
-  "user_verified": "Verified on-chain"
+  "user_verified": "Verified on-chain",
+  "share": "Share",
+  "share_news_link": "Copy link to post",
+  "share_message_link": "Copy link to message",
+  "share_link_copied": "Link copied!",
+  "share_link_failed": "Couldn't copy link",
+  "share_link_unavailable": "Message not found",
+  "chat_mention_you": "You were mentioned",
+  "sidebar_mentioned_here": "You were mentioned here"
 }

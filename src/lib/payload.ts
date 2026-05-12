@@ -142,3 +142,14 @@ export function getPayloadAttachments(payload: number[] | Uint8Array | string): 
   }
   return decodePayload(payload).attachments ?? [];
 }
+
+/**
+ * Extract the `mentions` list from a payload, if present.
+ * Returns an empty array when the payload has none or fails to decode.
+ */
+export function getPayloadMentions(payload: number[] | Uint8Array | string): string[] {
+  if (typeof payload === 'string') {
+    return tryDecodeBase64Payload(payload)?.mentions ?? [];
+  }
+  return decodePayload(payload).mentions ?? [];
+}

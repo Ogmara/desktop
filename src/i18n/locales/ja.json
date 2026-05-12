@@ -402,5 +402,13 @@
   "yesterday": "昨日",
   "mention_no_results": "該当するユーザーなし",
   "mention_popover_label": "メンション候補",
-  "user_verified": "オンチェーン認証済み"
+  "user_verified": "オンチェーン認証済み",
+  "share": "共有",
+  "share_news_link": "投稿のリンクをコピー",
+  "share_message_link": "メッセージのリンクをコピー",
+  "share_link_copied": "リンクをコピーしました!",
+  "share_link_failed": "リンクをコピーできませんでした",
+  "share_link_unavailable": "メッセージが見つかりません",
+  "chat_mention_you": "あなたがメンションされました",
+  "sidebar_mentioned_here": "ここであなたがメンションされました"
 }

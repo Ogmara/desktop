@@ -402,5 +402,13 @@
   "yesterday": "昨天",
   "mention_no_results": "无匹配用户",
   "mention_popover_label": "提及建议",
-  "user_verified": "链上已验证"
+  "user_verified": "链上已验证",
+  "share": "分享",
+  "share_news_link": "复制帖子链接",
+  "share_message_link": "复制消息链接",
+  "share_link_copied": "链接已复制!",
+  "share_link_failed": "无法复制链接",
+  "share_link_unavailable": "未找到消息",
+  "chat_mention_you": "您被提及",
+  "sidebar_mentioned_here": "您在此被提及"
 }
