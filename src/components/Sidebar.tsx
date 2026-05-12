@@ -61,19 +61,33 @@ export function removeJoinedChannel(channelId: number): void {
 /**
  * Sync the joined set with the API channel list.
  * - Private channels in the list → user IS a member (L2 node pre-filters) → auto-add
- * - First-time migration: seed with all visible channels
+ * - First-time migration: seed with ALL visible channels
+ *
+ * Why seed with everything on first init: the joined-set is purely a
+ * client-side sidebar visibility filter — there is no on-chain or server-side
+ * "joined" state for public channels. After a fresh device / cleared local
+ * storage the filter starts empty, so without seeding the sidebar shows
+ * nothing even though the API returned a full catalog. Users could only
+ * see channels by manually visiting `/chat/<id>` or finding them via Search.
+ * The old behaviour of only seeding the `ogmara` default channel left
+ * networks without that channel with a permanently empty sidebar after a
+ * fresh setup. Seeding with the full visible set restores the expected
+ * "I can see what I have access to" UX; the user can still explicitly
+ * leave channels afterwards.
  */
 function syncJoinedWithApi(apiChannels: { channel_id: number; channel_type: number; slug: string }[]): void {
   const current = new Set(joinedSignal());
   let changed = false;
 
   if (!storageInitialized() && apiChannels.length > 0) {
-    // First-time: only seed the default "ogmara" channel, not all channels.
-    // Users discover and join other channels via Search.
-    const defaultCh = apiChannels.find((ch) => ch.slug === DEFAULT_CHANNEL_SLUG);
-    if (defaultCh) {
-      current.add(defaultCh.channel_id);
-      changed = true;
+    // First-time migration on this device — seed with everything the API
+    // returns (private channels are already pre-filtered to members; public
+    // channels form the platform's visible catalog).
+    for (const ch of apiChannels) {
+      if (!current.has(ch.channel_id)) {
+        current.add(ch.channel_id);
+        changed = true;
+      }
     }
   } else {
     // Auto-add private channels the API returns (user must be a member)
