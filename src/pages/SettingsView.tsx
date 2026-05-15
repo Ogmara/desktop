@@ -11,7 +11,17 @@
 import { Component, createSignal, createResource, Show } from 'solid-js';
 import { t, setLanguage, currentLanguage, SUPPORTED_LANGUAGES } from '../i18n/init';
 import { getTheme, setTheme, getCustomTheme, setCustomTheme, clearCustomTheme, getDesignStyle, setDesignStyle, DESIGN_STYLES, type Theme, type CustomTheme, type DesignStyle, getColorScheme, setColorScheme, COLOR_SCHEMES, type ColorScheme } from '../lib/theme';
-import { getSetting, setSetting } from '../lib/settings';
+import { getSetting, setSetting, currentCurrency, setCurrentCurrency } from '../lib/settings';
+import { SUPPORTED_CURRENCIES } from '../lib/prices';
+
+const CURRENCY_LABELS: Record<string, string> = {
+  usd: 'USD — US Dollar',
+  eur: 'EUR — Euro',
+  brl: 'BRL — Brazilian Real',
+  gbp: 'GBP — British Pound',
+  jpy: 'JPY — Japanese Yen',
+  cny: 'CNY — Chinese Yuan',
+};
 import { authStatus, walletAddress } from '../lib/auth';
 import { navigate } from '../lib/router';
 import { getClient } from '../lib/api';
@@ -146,6 +156,7 @@ export const SettingsView: Component = () => {
   const [defaultLandingView, setDefaultLandingViewState] = createSignal<'chat' | 'news'>(
     (getSetting('defaultLandingView') as 'chat' | 'news') || 'news',
   );
+  const [currency, setCurrencyState] = createSignal<string>(currentCurrency());
 
   const handleDesignStyleChange = (value: DesignStyle) => {
     setDesignStyleState(value);
@@ -291,6 +302,26 @@ export const SettingsView: Component = () => {
         <button class="settings-wallet-btn" style="margin-top: var(--spacing-sm)" onClick={() => { clearCustomTheme(); setCustomThemeState({}); }}>
           {t('settings_reset_colors') || 'Reset to Default'}
         </button>
+
+        <h3 style="margin-top: var(--spacing-md)">{t('settings_display_currency')}</h3>
+        <p class="settings-desc" style="font-size: var(--font-size-xs); color: var(--color-text-secondary); margin-bottom: var(--spacing-xs)">
+          {t('settings_display_currency_desc')}
+        </p>
+        <select
+          class="settings-select"
+          value={currency()}
+          onChange={(e) => {
+            const val = e.currentTarget.value;
+            setCurrencyState(val);
+            // Reactive setter — fires the settings signal so the
+            // wallet's fiat column re-renders without a route remount.
+            setCurrentCurrency(val);
+          }}
+        >
+          {SUPPORTED_CURRENCIES.map((code) => (
+            <option value={code}>{CURRENCY_LABELS[code] || code.toUpperCase()}</option>
+          ))}
+        </select>
 
         <h3 style="margin-top: var(--spacing-md)">{t('settings_media')}</h3>
         <div class="settings-radio-group">

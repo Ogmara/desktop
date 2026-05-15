@@ -6,7 +6,32 @@
  * This module decodes it to extract the content string and other fields.
  */
 
-import { decode } from '@msgpack/msgpack';
+import { decode, encode } from '@msgpack/msgpack';
+import { stripBidi } from './sanitize';
+
+/**
+ * Caps for the msgpack decoder when reading untrusted payloads.
+ *
+ * `@msgpack/msgpack` defaults every `max*` option to UINT32_MAX (4 GB).
+ * A malicious or corrupted payload that declares a 32-bit length prefix
+ * can force the decoder to allocate gigabytes of heap before any of our
+ * application-level checks run. The caps below match the L2 node's
+ * payload limits (`MAX_NEWS_CONTENT = 65536`, `MAX_ATTACHMENTS = 20`,
+ * `MAX_MENTIONS = 50`) with comfortable headroom — anything larger
+ * could not have been produced by a valid Ogmara server in the first
+ * place.
+ */
+const SAFE_DECODE_OPTIONS = {
+  maxStrLength: 1 << 20,    // 1 MB string — well above MAX_NEWS_CONTENT
+  maxBinLength: 1 << 16,    // 64 KB binary (msg_id is 32 B, sig 64 B)
+  maxArrayLength: 256,      // attachments + mentions caps × headroom
+  maxMapLength: 64,         // payload fields count
+  maxExtLength: 1 << 16,
+};
+
+function safeDecode(bytes: Uint8Array): unknown {
+  return decode(bytes, SAFE_DECODE_OPTIONS);
+}
 
 /** Media attachment decoded from the payload. */
 export interface PayloadAttachment {
@@ -15,6 +40,21 @@ export interface PayloadAttachment {
   size_bytes: number;
   filename?: string;
   thumbnail_cid?: string;
+}
+
+/**
+ * Display-safe filename for an attachment. Strips Unicode bidi /
+ * control codepoints so a hostile uploader can't visually reverse
+ * the displayed name (or trick the browser via the `download=`
+ * attribute). Falls back to a short CID slice when filename is
+ * absent. Pass the result wherever the filename reaches JSX text
+ * or the `download` attribute.
+ */
+export function safeAttachmentName(att: { filename?: string; cid: string }, fallbackLen = 12): string {
+  const raw = att.filename || '';
+  const cleaned = stripBidi(raw);
+  if (cleaned) return cleaned;
+  return att.cid.slice(0, fallbackLen);
 }
 
 /** Decoded payload with common fields across message types. */
@@ -37,7 +77,7 @@ export interface DecodedPayload {
 export function decodePayload(payload: number[] | Uint8Array): DecodedPayload {
   try {
     const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
-    const decoded = decode(bytes) as Record<string, unknown>;
+    const decoded = safeDecode(bytes) as Record<string, unknown>;
     // DM payloads store content as Vec<u8> (bytes), not String.
     // After MessagePack decode, this arrives as Uint8Array.
     let content: string;
@@ -152,4 +192,94 @@ export function getPayloadMentions(payload: number[] | Uint8Array | string): str
     return tryDecodeBase64Payload(payload)?.mentions ?? [];
   }
   return decodePayload(payload).mentions ?? [];
+}
+
+/**
+ * Build a fresh msgpack-encoded chat payload for the optimistic local
+ * copy of a just-sent message. Mirrors the structure produced by the
+ * SDK's chat envelope so `getPayloadContent` / `getPayloadAttachments`
+ * decode it the same way they decode messages echoed back by the L2
+ * node — the user sees the image/video in the message bubble instantly
+ * instead of an empty timestamp until the WS event arrives.
+ */
+export function buildOptimisticChatPayload(data: {
+  content: string;
+  attachments?: PayloadAttachment[];
+  mentions?: string[];
+  replyTo?: string | null;
+}): Uint8Array {
+  const payload: Record<string, unknown> = { content: data.content };
+  if (data.attachments && data.attachments.length > 0) {
+    payload.attachments = data.attachments;
+  }
+  if (data.mentions && data.mentions.length > 0) {
+    payload.mentions = data.mentions;
+  }
+  if (data.replyTo) {
+    // SDK wire format stores reply_to as the target message's msg_id —
+    // always 32 bytes (Keccak-256), i.e. exactly 64 hex characters. We
+    // mirror that exact shape so optimistic and server-echoed messages
+    // decode identically.
+    //
+    // Strict validation: exactly 64 hex chars (optional `0x` prefix).
+    // An even-length-only check would happily turn a 4-char "dead"
+    // string into a 2-byte reply_to → bound to the wrong message id
+    // until the server echo overwrites the row. Better to drop a
+    // malformed value entirely than render a fake reply target.
+    const hex = data.replyTo.replace(/^0x/, '');
+    if (/^[0-9a-fA-F]{64}$/.test(hex)) {
+      const bytes = new Uint8Array(32);
+      for (let i = 0; i < 64; i += 2) {
+        bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+      }
+      payload.reply_to = bytes;
+    }
+    // Otherwise drop reply_to silently — better to render a message
+    // without a reply preview than with a garbled one.
+  }
+  return encode(payload);
+}
+
+/**
+ * Return a copy of a msgpack payload with `content` replaced by the
+ * provided string and every other field (attachments, mentions, tags,
+ * reply_to, …) preserved verbatim.
+ *
+ * Used by the chat-edit optimistic-update path: previously the code
+ * stuffed the new content directly into `msg.payload` as a plain
+ * string, which made `getPayloadAttachments` return `[]` and any
+ * attached image/video disappear from the bubble until the server's
+ * WebSocket update repaired it. Re-encoding here keeps the original
+ * binary structure intact so attachments survive the edit visually.
+ *
+ * Returns `null` if the input can't be decoded — caller should fall
+ * back to its existing behaviour.
+ */
+export function rewriteContentInPayload(
+  payload: number[] | Uint8Array | string,
+  newContent: string,
+): Uint8Array | null {
+  try {
+    let bytes: Uint8Array | null = null;
+    if (typeof payload === 'string') {
+      // Base64-decode WebSocket-shape payloads. Plain strings (optimistic
+      // messages that never round-tripped a server) have no msgpack
+      // structure to preserve — caller's existing behaviour is correct.
+      try {
+        const binary = atob(payload);
+        bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      } catch { return null; }
+    } else {
+      bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+    }
+    if (!bytes) return null;
+    const decoded = safeDecode(bytes) as Record<string, unknown>;
+    if (!decoded || typeof decoded !== 'object') return null;
+    // Preserve every field as-is; only swap content.
+    const next: Record<string, unknown> = { ...decoded, content: newContent };
+    return encode(next);
+  } catch {
+    return null;
+  }
 }

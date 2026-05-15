@@ -17,6 +17,7 @@
 import * as SecureStore from './secureStore';
 import { WalletSigner } from '@ogmara/sdk';
 import { encryptWithKey, decryptWithKey } from './appLock';
+import { cancelAllPending as cancelPendingTxConfirms } from './txConfirm';
 
 const VAULT_RAW_KEY = 'ogmara.vault.private_key';
 const VAULT_ENCRYPTED_KEY = 'ogmara.vault.encrypted_key';
@@ -207,6 +208,9 @@ export function vaultIsUnlocked(): boolean {
 export function vaultLock(): void {
   cachedSigner = null;
   cachedKeyHex = null;
+  // Reject any in-flight tx-confirm prompts so they don't stay open over
+  // the lock screen and resolve against a now-empty signer after re-unlock.
+  cancelPendingTxConfirms();
 }
 
 /** Wipe the wallet from memory and all storage. */

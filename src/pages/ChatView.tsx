@@ -17,7 +17,7 @@ import { setSetting } from '../lib/settings';
 import { FormattedText } from '../components/FormattedText';
 import { EmojiPicker } from '../components/EmojiPicker';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
-import { getPayloadContent, getPayloadAttachments, getPayloadMentions, decodePayload } from '../lib/payload';
+import { getPayloadContent, getPayloadAttachments, getPayloadMentions, decodePayload, rewriteContentInPayload, buildOptimisticChatPayload, safeAttachmentName } from '../lib/payload';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
 import { showMobileList } from '../lib/mobile-nav';
 import { isModernStyle } from '../lib/theme';
@@ -144,6 +144,12 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   const [floatingDate, setFloatingDate] = createSignal<string | null>(null);
   let floatingDateTimer: ReturnType<typeof setTimeout> | null = null;
   const [ctxEmojiExpanded, setCtxEmojiExpanded] = createSignal(false);
+  // Header search — toggled by the magnifying-glass icon in the channel
+  // bar. When open, the title row is replaced with an input field and
+  // the message list is filtered by substring (case-insensitive) match
+  // against decoded payload text.
+  const [searchOpen, setSearchOpen] = createSignal(false);
+  const [searchQuery, setSearchQuery] = createSignal('');
   let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Viewport clamping for context menu
@@ -576,6 +582,25 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     return deduped;
   });
 
+  // Messages actually rendered. When header search is open and the query
+  // is non-empty, filter by case-insensitive substring match against the
+  // decoded payload content. When closed or empty, returns `allMessages`
+  // unchanged so date separators and grouping stay intact for normal use.
+  const displayMessages = createMemo(() => {
+    const all = allMessages();
+    if (!searchOpen()) return all;
+    const q = searchQuery().trim().toLowerCase();
+    if (!q) return all;
+    return all.filter((msg) => {
+      try {
+        const text = getPayloadContent(msg.payload) || '';
+        return text.toLowerCase().includes(q);
+      } catch {
+        return false;
+      }
+    });
+  });
+
   // Resolve profiles for all unique authors
   createEffect(() => {
     const msgs = allMessages();
@@ -790,13 +815,26 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       }
       await client.sendMessage(props.channelId, text, options);
 
-      // Optimistic: add message locally for instant display
+      // Optimistic: add message locally for instant display.
+      //
+      // We msgpack-encode a payload that mirrors the server's wire shape
+      // (content + attachments + mentions + reply_to). Without the
+      // encode step, `payload` was a plain string and
+      // `getPayloadAttachments` returned [] — so an image / video send
+      // showed an empty bubble (just a timestamp) until the user left
+      // and re-opened the channel and the WS event repaired it.
       const addr = walletAddress() || '';
+      const optimisticPayload = buildOptimisticChatPayload({
+        content: text,
+        attachments: atts,
+        mentions: options.mentions,
+        replyTo: replyTo()?.msgId ?? null,
+      });
       setLocalMessages((prev) => [...prev, {
         msg_id: `local-${Date.now()}`,
         author: addr,
         timestamp: Date.now(),
-        payload: text, // string payloads are handled by getPayloadContent
+        payload: optimisticPayload,
         _optimistic: true,
       }]);
 
@@ -880,13 +918,20 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     try {
       const client = getClient();
       await client.editMessage(props.channelId, edit.msgId, newContent);
-      // Optimistic update — add/update in localMessages so it wins in dedup
+      // Optimistic update — add/update in localMessages so it wins in dedup.
+      // We rebuild the payload via msgpack so attachments, mentions, tags
+      // and any other fields survive the edit visually; previously this
+      // assigned a plain string to `payload`, which made
+      // `getPayloadAttachments` return [] and the image/video would
+      // disappear from the bubble until the server WS update repaired it.
       setLocalMessages((prev) => {
-        const updates = { payload: newContent, edited: true, last_edited_at: Date.now() };
+        const original = prev.find((m) => msgIdToHex(m.msg_id) === edit.msgId)
+          ?? allMessages().find((m) => msgIdToHex(m.msg_id) === edit.msgId);
+        const rewritten = original ? rewriteContentInPayload(original.payload, newContent) : null;
+        const newPayload = rewritten ?? newContent; // fall back to plain text if re-encode fails
+        const updates = { payload: newPayload, edited: true, last_edited_at: Date.now() };
         const exists = prev.some((m) => msgIdToHex(m.msg_id) === edit.msgId);
         if (exists) return prev.map((m) => msgIdToHex(m.msg_id) === edit.msgId ? { ...m, ...updates } : m);
-        // Find original message in allMessages to clone
-        const original = allMessages().find((m) => msgIdToHex(m.msg_id) === edit.msgId);
         return original ? [...prev, { ...original, ...updates }] : prev;
       });
       setEditingMsg(null);
@@ -979,28 +1024,53 @@ export const ChatView: Component<ChatViewProps> = (props) => {
             <button class="channel-back-btn content-back-btn" onClick={() => showMobileList()}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><polyline points="12 19 5 12 12 5"/></svg>
             </button>
-            <div class="channel-bar-info" onClick={() => navigate(`/chat/${props.channelId}/settings`)}>
-              <div class="channel-bar-avatar">
-                <Show
-                  when={channelInfo()?.channel?.logo_cid}
-                  fallback={<span>{(channelInfo()?.channel?.display_name || 'C').slice(0, 1).toUpperCase()}</span>}
-                >
-                  <img class="channel-bar-avatar-img" src={getClient().getMediaUrl(channelInfo()!.channel!.logo_cid!)} alt="" />
-                </Show>
+            <Show when={!searchOpen()} fallback={
+              <div class="channel-bar-search">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input
+                  ref={(el: HTMLInputElement) => setTimeout(() => el?.focus(), 30)}
+                  class="channel-search-input"
+                  type="text"
+                  placeholder={t('chat_search_placeholder')}
+                  value={searchQuery()}
+                  onInput={(e) => setSearchQuery(e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') { setSearchOpen(false); setSearchQuery(''); }
+                  }}
+                />
+                <button class="channel-action-btn" title={t('cancel')}
+                  onClick={() => { setSearchOpen(false); setSearchQuery(''); }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
               </div>
-              <div class="channel-bar-text">
-                <div class="channel-bar-title">{channelInfo()?.channel?.display_name || channelInfo()?.channel?.slug || `Channel #${props.channelId}`}</div>
-                <div class="channel-bar-meta">
-                  <span class="channel-bar-members">{t('chat_member_count', { count: channelInfo()?.member_count || '?' })}</span>
+            }>
+              <div class="channel-bar-info" onClick={() => navigate(`/chat/${props.channelId}/settings`)}>
+                <div class="channel-bar-avatar">
+                  <Show
+                    when={channelInfo()?.channel?.logo_cid}
+                    fallback={<span>{(channelInfo()?.channel?.display_name || 'C').slice(0, 1).toUpperCase()}</span>}
+                  >
+                    <img class="channel-bar-avatar-img" src={getClient().getMediaUrl(channelInfo()!.channel!.logo_cid!)} alt="" />
+                  </Show>
+                </div>
+                <div class="channel-bar-text">
+                  <div class="channel-bar-title">{channelInfo()?.channel?.display_name || channelInfo()?.channel?.slug || `Channel #${props.channelId}`}</div>
+                  <div class="channel-bar-meta">
+                    <span class="channel-bar-members">{t('chat_member_count', { count: channelInfo()?.member_count || '?' })}</span>
+                  </div>
                 </div>
               </div>
-            </div>
-            <div class="channel-bar-actions">
-              <button class="channel-action-btn" title={t('nav_search')}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
-              <button class="channel-action-btn" onClick={() => navigate(`/chat/${props.channelId}/settings`)} title={t('channel_settings')}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
-              </button>
-            </div>
+            </Show>
+            <Show when={!searchOpen()}>
+              <div class="channel-bar-actions">
+                <button class="channel-action-btn" title={t('nav_search')} onClick={() => setSearchOpen(true)}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                </button>
+                <button class="channel-action-btn" onClick={() => navigate(`/chat/${props.channelId}/settings`)} title={t('channel_settings')}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+                </button>
+              </div>
+            </Show>
           </div>
         </Show>
 
@@ -1012,12 +1082,12 @@ export const ChatView: Component<ChatViewProps> = (props) => {
           </Show>
         <div class="chat-messages" ref={messagesRef} onScroll={handleScroll}>
           <Show
-            when={allMessages().length > 0}
-            fallback={<div class="chat-empty"><p>{t('chat_no_messages')}</p></div>}
+            when={displayMessages().length > 0}
+            fallback={<div class="chat-empty"><p>{searchOpen() && searchQuery().trim() ? t('chat_search_no_matches') : t('chat_no_messages')}</p></div>}
           >
-            <For each={allMessages()}>
+            <For each={displayMessages()}>
               {(msg, index) => {
-                const msgs = allMessages();
+                const msgs = displayMessages();
                 const prevMsg = index() > 0 ? msgs[index() - 1] : null;
                 const currentDate = getDateLabel(msg.timestamp);
                 const prevDate = prevMsg ? getDateLabel(prevMsg.timestamp) : null;
@@ -1346,6 +1416,41 @@ export const ChatView: Component<ChatViewProps> = (props) => {
         }>
           {/* Modern input: [emoji] [attach] [textarea] [send] */}
           <div class="chat-input-area">
+            {/* Attachment preview strip. The `.chat-media-bar` (which
+                holds the classic MediaUpload preview) is hidden in
+                modern via design-styles.css, so without this strip the
+                user sees no feedback after picking a file or pasting
+                an image — the upload succeeds silently and the message
+                looks empty. Each chip can be removed individually. */}
+            <Show when={attachments().length > 0}>
+              <div class="modern-attachments-preview">
+                <For each={attachments()}>
+                  {(att, i) => (
+                    <div class="modern-attach-chip">
+                      <Show
+                        when={att.mime_type.startsWith('image/')}
+                        fallback={<span class="modern-attach-icon">{att.mime_type.startsWith('video/') ? '🎬' : '📎'}</span>}
+                      >
+                        <img
+                          class="modern-attach-thumb"
+                          src={getClient().getMediaUrl(att.thumbnail_cid || att.cid)}
+                          alt={att.filename || ''}
+                          loading="lazy"
+                        />
+                      </Show>
+                      <span class="modern-attach-name">{safeAttachmentName(att, 10)}</span>
+                      <button
+                        class="modern-attach-remove"
+                        onClick={() => setAttachments((prev) => prev.filter((_, idx) => idx !== i()))}
+                        title={t('cancel')}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
             <div class="chat-input">
               <div class="emoji-container">
                 <button class="input-icon-btn" onClick={() => walletAddress() && setShowEmoji(!showEmoji())} disabled={!walletAddress()}>😊</button>
@@ -1359,7 +1464,14 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                 if (file && walletAddress()) {
                   getClient().uploadMedia(file, file.name).then((result) => {
                     setAttachments((p) => [...p, { cid: result.cid, mime_type: file.type || 'application/octet-stream', size_bytes: file.size, filename: file.name, thumbnail_cid: result.thumbnail_cid }]);
-                  }).catch(() => {});
+                  }).catch((err: any) => {
+                    // Surface upload failures the same way the paste path
+                    // does. Previously this silently swallowed errors,
+                    // leaving the user with no idea why their attachment
+                    // didn't appear.
+                    setSendError(err?.message || 'Upload failed');
+                    setTimeout(() => setSendError(null), 6000);
+                  });
                 }
                 e.currentTarget.value = '';
               }} />

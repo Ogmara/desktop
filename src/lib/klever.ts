@@ -11,6 +11,26 @@
 
 import { vaultGetSigner } from './vault';
 import { t } from '../i18n/init';
+import { requireTxConfirmation } from './txConfirm';
+import { stripBidi } from './sanitize';
+
+// Bundled logos for native Klever tokens. The Klever asset-details API's
+// logo URL for KLV currently points to a host that no longer serves the
+// image, and KFI has no logo in the API response at all. Shipping these
+// two PNGs (~17KB total) inside the desktop bundle removes the runtime
+// dependency on external image hosts and keeps the wallet usable offline.
+import klvLogoUrl from '../assets/tokens/klv.png';
+import kfiLogoUrl from '../assets/tokens/kfi.png';
+
+/**
+ * Bundled logo overrides for native tokens whose API-provided logos are
+ * unreliable. Other KDAs fall through to whatever `getTokenMetadata`
+ * returns from the Klever asset API.
+ */
+const BUNDLED_TOKEN_LOGOS: Record<string, string> = {
+  KLV: klvLogoUrl,
+  KFI: kfiLogoUrl,
+};
 
 /**
  * Desktop always has standalone signing capability.
@@ -38,6 +58,7 @@ export function getExplorerUrl(): string {
     ? 'https://testnet.kleverscan.org'
     : 'https://kleverscan.org';
 }
+
 
 /** Set the Klever network provider URLs (called after fetching node stats). */
 export function setKleverNetwork(network: string): void {
@@ -72,14 +93,33 @@ function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
   return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
-/** Minimum interval between TX submissions (2 seconds). */
-let lastTxTime = 0;
-function checkTxRateLimit(): void {
+// Tx rate-limit + in-flight lock.
+//
+// The cooldown is enforced from the moment a *successful* broadcast
+// completes — not from the moment a user clicks Send. Previously
+// `lastTxTime` was set on entry, which meant the PIN-confirm modal
+// time counted against the user (every retry after cancel reset the
+// clock incorrectly). Setting it only after broadcast also defends
+// against a quick double-click race: the in-flight flag rejects the
+// second call before either has updated the timestamp.
+const TX_MIN_INTERVAL_MS = 2000;
+let lastTxBroadcastAt = 0;
+let txInFlight = false;
+
+function acquireTxSlot(): void {
+  if (txInFlight) {
+    throw new Error('A transaction is already in progress');
+  }
   const now = Date.now();
-  if (now - lastTxTime < 2000) {
+  if (now - lastTxBroadcastAt < TX_MIN_INTERVAL_MS) {
     throw new Error('Please wait a moment before sending another transaction');
   }
-  lastTxTime = now;
+  txInFlight = true;
+}
+
+function releaseTxSlot(success: boolean): void {
+  if (success) lastTxBroadcastAt = Date.now();
+  txInFlight = false;
 }
 
 // --- Helpers ---
@@ -145,6 +185,32 @@ function sleep(ms: number): Promise<void> {
 /** Get "KLV" or "testnet KLV" depending on current network. */
 function klvLabel(): string {
   return currentNetwork === 'testnet' ? 'testnet KLV' : 'KLV';
+}
+
+/** Abbreviate a klv1 address for display, e.g. "klv1abc…xyz". bech32
+ *  charset is lowercase ASCII alphanumeric so no bidi sanitization
+ *  is needed here — but we still pass it through stripBidi defensively
+ *  at the summary boundary in case a caller passes a non-bech32 string. */
+function abbrevAddress(addr: string): string {
+  if (!addr || addr.length < 16) return addr;
+  return `${addr.slice(0, 8)}…${addr.slice(-6)}`;
+}
+
+/** Format atomic units to a decimal string for tx-summary display, with
+ *  locale-aware thousands separators on the integer part. Uses BigInt
+ *  for the locale formatting so token amounts past 2^53 atomic units
+ *  (high-precision assets at large balances) don't silently lose
+ *  digits during display. */
+function atomicToDisplay(atomic: number, precision: number): string {
+  const intToLocale = (s: string) => {
+    try { return BigInt(s).toLocaleString(); }
+    catch { return s; }
+  };
+  if (precision === 0) return intToLocale(String(Math.trunc(atomic)));
+  const str = String(Math.trunc(atomic)).padStart(precision + 1, '0');
+  const intPart = str.slice(0, str.length - precision);
+  const fracPart = str.slice(str.length - precision).replace(/0+$/, '');
+  return fracPart ? `${intToLocale(intPart)}.${fracPart}` : intToLocale(intPart);
 }
 
 /** Parse Klever node error responses into user-friendly messages. */
@@ -218,8 +284,27 @@ function requireSigner() {
 async function buildSignBroadcast(
   contracts: Array<{ type: number; payload: Record<string, unknown> }>,
   data?: string[],
+  summary?: string,
 ): Promise<string> {
-  checkTxRateLimit();
+  acquireTxSlot();
+  let success = false;
+  try {
+    // PIN re-prompt when app-lock is enabled. No-op when no PIN is set.
+    // The broker throws TxConfirmationCancelled if the user dismisses;
+    // we let it propagate up so callers can surface a localized message.
+    await requireTxConfirmation(summary || t('tx_confirm_generic'));
+    const result = await broadcastImpl(contracts, data);
+    success = true;
+    return result;
+  } finally {
+    releaseTxSlot(success);
+  }
+}
+
+async function broadcastImpl(
+  contracts: Array<{ type: number; payload: Record<string, unknown> }>,
+  data?: string[],
+): Promise<string> {
   const signer = requireSigner();
   const nodeBase = kleverProvider.node;
 
@@ -366,6 +451,8 @@ interface ScInvokeParams {
   args: string[];
   /** KLV amount to send in atomic units (1 KLV = 1_000_000). */
   value?: number;
+  /** Optional human-readable summary for the PIN-confirm modal. */
+  summary?: string;
 }
 
 /**
@@ -386,9 +473,18 @@ async function invokeContract(params: ScInvokeParams): Promise<string> {
     callValue: params.value ? { KLV: params.value.toString() } : {},
   };
 
+  // Strip bidi/control chars from any caller-supplied summary in case
+  // a future call site interpolates user input. The functionName here
+  // is internal (registerUser / createChannel / etc.) so safe today.
+  const summary = stripBidi(
+    params.summary
+    || t('tx_confirm_contract_summary', { fn: params.functionName })
+  );
+
   return buildSignBroadcast(
     [{ type: 63, payload }], // 63 = SmartContract
     [btoa(callData)],
+    summary,
   );
 }
 
@@ -498,6 +594,12 @@ export async function sendTip(
   const amountAtomic = Math.round(amountKlv * 1_000_000);
   const txData = note ? [btoa(note.slice(0, 128))] : undefined;
 
+  const summary = stripBidi(t('tx_confirm_tip_summary', {
+    amount: amountKlv,
+    klv: klvLabel(),
+    to: abbrevAddress(recipient),
+  }));
+
   return buildSignBroadcast(
     [{
       type: 0, // Transfer
@@ -508,6 +610,7 @@ export async function sendTip(
       },
     }],
     txData,
+    summary,
   );
 }
 
@@ -619,7 +722,7 @@ export async function getAccountBalances(address: string): Promise<TokenBalance[
     frozenBalance: account.FrozenBalance ?? 0,
     precision: 6,
     name: 'Klever',
-    logo: 'https://media.klever.io/token/klv.png',
+    logo: BUNDLED_TOKEN_LOGOS.KLV,
   });
 
   // KDA (Klever Digital Assets) — assets map
@@ -656,7 +759,10 @@ export async function getTokenMetadata(assetId: string): Promise<{
   precision: number;
 } | null> {
   if (assetId === 'KLV') {
-    return { name: 'Klever', ticker: 'KLV', logo: 'https://media.klever.io/token/klv.png', precision: 6 };
+    return { name: 'Klever', ticker: 'KLV', logo: BUNDLED_TOKEN_LOGOS.KLV, precision: 6 };
+  }
+  if (assetId === 'KFI') {
+    return { name: 'Klever Finance', ticker: 'KFI', logo: BUNDLED_TOKEN_LOGOS.KFI, precision: 6 };
   }
   const apiBase = kleverProvider.api;
   try {
@@ -665,9 +771,11 @@ export async function getTokenMetadata(assetId: string): Promise<{
     const json = await resp.json();
     const asset = json?.data?.asset;
     if (!asset) return null;
+    // Sanitize both name and ticker — they come from arbitrary KDA
+    // issuers via the Klever asset API and end up rendered as JSX.
     return {
-      name: asset.Name ?? asset.name ?? assetId,
-      ticker: asset.Ticker ?? asset.ticker ?? assetId.split('-')[0],
+      name: stripBidi(String(asset.Name ?? asset.name ?? assetId)),
+      ticker: stripBidi(String(asset.Ticker ?? asset.ticker ?? assetId.split('-')[0])),
       logo: asset.Logo ?? asset.logo ?? '',
       precision: asset.Precision ?? asset.precision ?? 0,
     };
@@ -687,6 +795,7 @@ export async function sendTransfer(
   recipient: string,
   assetId: string,
   amount: number,
+  precision: number = 0,
 ): Promise<string> {
   const payload: Record<string, unknown> = {
     receiver: recipient,
@@ -694,8 +803,18 @@ export async function sendTransfer(
     kda: assetId,
   };
 
+  // assetId is normally chain-enforced alphanumeric, but a future
+  // network update or hostile-asset registration could embed RTL/bidi
+  // codepoints. Sanitize before interpolation so the recipient address
+  // shown in the PIN prompt cannot be visually reversed.
+  const summary = stripBidi(t('tx_confirm_send_summary', {
+    amount: atomicToDisplay(amount, precision),
+    asset: stripBidi(assetId),
+    to: abbrevAddress(recipient),
+  }));
+
   return buildSignBroadcast([{
     type: 0, // Transfer
     payload,
-  }]);
+  }], undefined, summary);
 }

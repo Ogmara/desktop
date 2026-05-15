@@ -12,7 +12,7 @@ import { showMobileList } from '../lib/mobile-nav';
 import { isModernStyle } from '../lib/theme';
 import { FormattedText } from '../components/FormattedText';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
-import { getPayloadContent, getPayloadAttachments } from '../lib/payload';
+import { getPayloadContent, getPayloadAttachments, buildOptimisticChatPayload, safeAttachmentName } from '../lib/payload';
 import { EmojiPicker } from '../components/EmojiPicker';
 import { buildDirectMessage } from '@ogmara/sdk';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
@@ -144,12 +144,18 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
       setMessageInput('');
       setAttachments([]);
 
-      // Optimistic: show sent message immediately
+      // Optimistic: show sent message immediately. Encode the payload
+      // as msgpack so attachments are visible in the bubble right away
+      // — a plain-string `payload` would make `getPayloadAttachments`
+      // return [] and the image/video would only appear after a refetch.
       setLocalMessages((prev) => [...prev, {
         msg_id: `local-${Date.now()}`,
         author: walletAddress(),
         timestamp: Date.now(),
-        payload: text,
+        payload: buildOptimisticChatPayload({
+          content: text,
+          attachments: atts,
+        }),
       }]);
 
       setTimeout(() => {
@@ -367,12 +373,44 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
         }>
           {/* Modern DM input: [emoji] [attach] [textarea] [send] */}
           <div class="dm-input-area">
+            {/* Attachment preview strip — same fix as ChatView's modern
+                input. `.dm-media-bar` is hidden in modern, so without
+                this strip the upload looks like a no-op to the user. */}
+            <Show when={attachments().length > 0}>
+              <div class="modern-attachments-preview">
+                <For each={attachments()}>
+                  {(att, i) => (
+                    <div class="modern-attach-chip">
+                      <Show
+                        when={att.mime_type.startsWith('image/')}
+                        fallback={<span class="modern-attach-icon">{att.mime_type.startsWith('video/') ? '🎬' : '📎'}</span>}
+                      >
+                        <img
+                          class="modern-attach-thumb"
+                          src={getClient().getMediaUrl(att.thumbnail_cid || att.cid)}
+                          alt={att.filename || ''}
+                          loading="lazy"
+                        />
+                      </Show>
+                      <span class="modern-attach-name">{safeAttachmentName(att, 10)}</span>
+                      <button
+                        class="modern-attach-remove"
+                        onClick={() => setAttachments((prev) => prev.filter((_, idx) => idx !== i()))}
+                        title={t('cancel')}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
             <div class="dm-input-row">
               <div class="dm-emoji-container">
                 <button class="input-icon-btn" onClick={() => walletAddress() && setShowEmoji(!showEmoji())} disabled={!walletAddress()}>😊</button>
                 <Show when={showEmoji()}><EmojiPicker onSelect={insertEmoji} onClose={() => setShowEmoji(false)} /></Show>
               </div>
-              <button class="input-icon-btn" onClick={() => { const inp = document.createElement('input'); inp.type = 'file'; inp.onchange = (ev) => { const file = (ev.target as HTMLInputElement).files?.[0]; if (file) getClient().uploadMedia(file, file.name).then((r) => { setAttachments((p) => [...p, { cid: r.cid, mime_type: file.type || 'application/octet-stream', size_bytes: file.size, filename: file.name, thumbnail_cid: r.thumbnail_cid }]); }).catch(() => {}); }; inp.click(); }} disabled={!walletAddress()}>
+              <button class="input-icon-btn" onClick={() => { const inp = document.createElement('input'); inp.type = 'file'; inp.onchange = (ev) => { const file = (ev.target as HTMLInputElement).files?.[0]; if (file) getClient().uploadMedia(file, file.name).then((r) => { setAttachments((p) => [...p, { cid: r.cid, mime_type: file.type || 'application/octet-stream', size_bytes: file.size, filename: file.name, thumbnail_cid: r.thumbnail_cid }]); }).catch((err: any) => { setSendError(err?.message || 'Upload failed'); setTimeout(() => setSendError(null), 6000); }); }; inp.click(); }} disabled={!walletAddress()}>
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
               </button>
               <textarea ref={inputRef} class="dm-textarea" rows={1} placeholder={t('chat_placeholder')} value={messageInput()}

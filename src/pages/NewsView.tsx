@@ -8,8 +8,10 @@ import { getClient } from '../lib/api';
 import { authStatus, getSigner, l2Address, walletAddress } from '../lib/auth';
 import { navigate } from '../lib/router';
 import { FormattedText } from '../components/FormattedText';
-import { getPayloadContent, getPayloadTitle, getPayloadAttachments, decodePayload } from '../lib/payload';
+import { VideoAttachment } from '../components/VideoAttachment';
+import { getPayloadContent, getPayloadTitle, getPayloadAttachments, decodePayload, safeAttachmentName } from '../lib/payload';
 import { sendTip, kleverAvailable, getExplorerUrl } from '../lib/klever';
+import { TxConfirmationCancelled } from '../lib/txConfirm';
 import { resolveProfile } from '../lib/profile';
 import { ensureHexMsgId, formatLocalTime, truncateAddress } from '../lib/news-utils';
 import { ReactionPicker } from '../components/ReactionPicker';
@@ -175,6 +177,15 @@ export const NewsView: Component = () => {
           cursor: pointer;
         }
         .news-attachment-img:hover { opacity: 0.9; }
+        /* Match image sizing for inline videos so a video-only card
+           doesn't blow out its container at the browser default size. */
+        .news-attachment-video {
+          max-width: 100%;
+          max-height: 400px;
+          border-radius: var(--radius-md);
+          background: #000;
+          display: block;
+        }
         .news-file-link {
           display: inline-flex;
           align-items: center;
@@ -386,7 +397,13 @@ const NewsCard: Component<{ post: any }> = (props) => {
       setTipAmount('1');
       setTipNote('');
     } catch (e: any) {
-      setActionError(e?.message || 'Tip failed');
+      // User dismissing the PIN modal isn't a failure — surface a calm
+      // localized message instead of an angry "Tip failed: …".
+      if (e instanceof TxConfirmationCancelled) {
+        setActionError(t('tx_confirm_cancelled'));
+      } else {
+        setActionError(e?.message || 'Tip failed');
+      }
     } finally {
       setTipPending(false);
     }
@@ -461,25 +478,38 @@ const NewsCard: Component<{ post: any }> = (props) => {
       <Show when={(decoded().attachments ?? []).length > 0}>
         <div class="news-attachments">
           <For each={decoded().attachments!}>
-            {(att) => (
-              <Show
-                when={att.mime_type.startsWith('image/')}
-                fallback={
-                  <a class="news-file-link" href={getClient().getMediaUrl(att.cid)} target="_blank" rel="noopener noreferrer">
-                    📎 {att.filename || att.cid.slice(0, 12)}
+            {(att) => {
+              const isImage = att.mime_type.startsWith('image/');
+              const isVideo = att.mime_type.startsWith('video/');
+              const mediaUrl = getClient().getMediaUrl(att.cid);
+              if (isImage) {
+                return (
+                  <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
+                    <img
+                      class="news-attachment-img"
+                      src={getClient().getMediaUrl(att.thumbnail_cid || att.cid)}
+                      alt={att.filename || ''}
+                      loading="lazy"
+                    />
                   </a>
-                }
-              >
-                <a href={getClient().getMediaUrl(att.cid)} target="_blank" rel="noopener noreferrer">
-                  <img
-                    class="news-attachment-img"
-                    src={getClient().getMediaUrl(att.thumbnail_cid || att.cid)}
-                    alt={att.filename || ''}
-                    loading="lazy"
+                );
+              }
+              if (isVideo) {
+                return (
+                  <VideoAttachment
+                    src={mediaUrl}
+                    filename={att.filename}
+                    videoClass="news-attachment-video"
+                    fallbackClass="news-file-link"
                   />
+                );
+              }
+              return (
+                <a class="news-file-link" href={mediaUrl} target="_blank" rel="noopener noreferrer">
+                  📎 {safeAttachmentName(att)}
                 </a>
-              </Show>
-            )}
+              );
+            }}
           </For>
         </div>
       </Show>

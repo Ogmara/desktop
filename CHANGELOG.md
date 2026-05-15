@@ -5,6 +5,201 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.0] - 2026-05-15
+
+### Added
+- **"Open externally" + Download buttons on the video codec fallback.**
+  Previously when WebKitGTK couldn't decode a video (typical on Linux
+  without `gstreamer1.0-libav`, or on Gentoo with missing USE flags),
+  `VideoAttachment` collapsed to a single download link. The fallback
+  panel now offers two clear actions: ▶ **Open externally** and
+  ⬇ **Download**. Mirrors what Telegram desktop does on Linux when its
+  bundled decoder bails — route to a player that works rather than
+  leave the user staring at a black box.
+- **`open_media_external` Tauri command.** Accepts http(s) URLs (the
+  existing `open_url` only allows https, which doesn't work for local
+  L2 node media URLs at `http://localhost:<port>/...`). Defense-in-depth
+  validation: 8 KB URL length cap, rejection of control/whitespace
+  characters, http(s)-only prefix check.
+- **Linux: direct video-player spawn instead of xdg-open.**
+  `xdg-open` routes HTTP URLs by SCHEME (always → browser), which
+  defeats the purpose of an "open externally" button — the browser
+  either previews inline or offers a download dialog, never opens
+  mpv/vlc. The xdg-mime registry that DOES know `video/mp4` → mpv
+  only kicks in for `file://` URLs, and on many systems the default
+  `video/mp4` handler is a transcoder (HandBrake) rather than a
+  player anyway. On Linux the command now spawns the first available
+  binary from a priority list: mpv → vlc → celluloid → mplayer →
+  ffplay. macOS and Windows still use their native open mechanism
+  (their browsers play H.264 inline).
+- **BUILDING.md: Linux video codec section.** Documents the
+  GStreamer + libav plugin chain per distro (Debian, Fedora, Arch,
+  Gentoo, AppImage). The Gentoo block calls out the three USE-flag
+  dependencies that line up to make WebKitGTK media work
+  (`net-libs/webkit-gtk USE="gstreamer"`,
+  `media-plugins/gst-plugins-libav`, ffmpeg codec flags) — the
+  "GStreamer is installed but video still doesn't play" trap.
+
+### Fixed
+- **i18n: 4 new keys in 7 locales for the video fallback panel**
+  (`video_codec_missing`, `video_open_external`,
+  `video_open_external_hint`, `video_download`). German, Spanish,
+  Portuguese, Japanese, Chinese, Russian, English.
+
+### Changed
+- **L2 SDK requirement: this release is paired with L2 node v0.37+
+  and sdk-js v0.17+.** v0.37 introduces server-side preservation of
+  title/tags/attachments through edits — without it the desktop's
+  existing news-edit fix only papers over a broken read path. See
+  L2 node CHANGELOG for the projection-fix details.
+
+## [1.19.0] - 2026-05-14
+
+### Added
+- **Sortable token table columns.** Click any column header (Token /
+  Balance / Value) to sort ascending or descending — repeated clicks
+  toggle direction. KLV is always pinned to the first row regardless
+  of sort state. Default sort is Value descending so the most valuable
+  holdings appear first.
+- **True wallet experience: Receive flow + fiat values.** The token
+  portfolio view now has a "Receive" button that opens a modal with the
+  user's full bech32 address and a one-click copy button, alongside a
+  warning that only Klever-network assets should be sent to this address.
+  Per-token fiat value and 24h change pill (red/green) display alongside
+  each balance, and a portfolio total in the user-selected fiat currency
+  appears in the summary card. Prices come from
+  [bitcoin.me](https://api.bitcoin.me/tokens) (the rebrand of Klever
+  DEX) — per-KDA USD prices, keyless and rate-friendly. USD→EUR/BRL/GBP/
+  JPY/CNY conversion uses CoinGecko's `tether` cross-rate, also keyless.
+  Both sources cache to localStorage (5 min for prices, 60 min for forex)
+  and degrade gracefully to stale cache when the network is down.
+  Mainnet only — testnet hides fiat entirely since testnet KLV has no
+  market value.
+- **PIN re-prompt on every outgoing transaction.** When app-lock is
+  enabled (Settings → Security), the desktop now requires the user to
+  re-enter their PIN before broadcasting any transaction: transfers,
+  tips, smart-contract calls (registration, channel creation, delegation,
+  governance votes). The gate lives at the broadcast layer in
+  `klever.ts` so every current and future tx-broadcasting path is
+  covered uniformly. The CryptoKey derived from PIN verification is
+  intentionally discarded — this is a confirmation layer, not a vault
+  decryption step. Wrong-PIN handling reuses the existing cooldown
+  machinery from `appLock.ts`. When app-lock is *not* set, no extra
+  prompt is shown (the vault is unencrypted on disk anyway; Settings
+  already warns the user about this).
+- **Display currency setting.** Choice of USD / EUR / BRL / GBP / JPY /
+  CNY in Settings → Theme, formatted with locale-aware `Intl.NumberFormat`.
+- **Wallet menu split into two entries.** The modern sidebar's burger
+  menu now offers "Wallet" (→ `/wallet/tokens`, balances + send +
+  receive) and "Account & Security" (→ `/wallet`, key management,
+  registration, device delegation). Cross-links between the two views.
+- **Bundled KLV and KFI logos.** The Klever asset-details API's logo
+  URL for KLV no longer serves the image, and KFI has no logo entry in
+  the API at all. Ship both PNGs (~17KB total) inside the desktop
+  bundle so the wallet always renders a recognizable token icon for
+  the network's two native tokens, with no external image dependency.
+
+### Changed
+- **Outgoing-transaction cancellations are surfaced calmly.** When a
+  user dismisses the PIN re-prompt, the send dialog shows a localized
+  "Transaction cancelled." message instead of treating it as an error.
+- **`parseDecimalToAtomic` now uses BigInt for the intermediate
+  concatenation.** Previous `Number(intPart + fracPart)` silently
+  overflowed `Number.MAX_SAFE_INTEGER` for high-precision assets at
+  very large amounts. The function still returns `number` (the Klever
+  node API accepts JS numbers), but the parse step no longer drops
+  precision before that boundary.
+
+### Fixed
+- **Video playback in chat + news uses a fallback when the codec is
+  missing.** On WebKitGTK without `gstreamer1.0-libav`, an inline
+  `<video>` element loads the file but can't decode the bitstream —
+  resulting in a black rectangle with no controls. New
+  `<VideoAttachment>` component listens for the underlying `error`
+  event and swaps to a "🎬 *filename*" download link so users get a
+  useful action instead of a silent failure. The real fix is still
+  installing the GStreamer plugin set
+  (`sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-{good,bad,ugly}`),
+  but the fallback ensures the app degrades gracefully on systems
+  without it.
+- **Inline-video CSS** for `.news-attachment-video`,
+  `.detail-attachment-video`, and `.comment-attachment-video` matches
+  the sibling image classes — videos no longer render at unconstrained
+  browser-default width and blow out their cards.
+- **Attachment filenames are now sanitized at every display site.**
+  Routed `att.filename` through a centralized `safeAttachmentName()`
+  helper that strips Unicode bidi / control codepoints (using the
+  existing `stripBidi()` from `sanitize.ts`). Applied to the file-link
+  text in news / news-detail, the modern attachment-preview chips in
+  chat + DM, the file-list label in `FormattedText`, the MediaUpload
+  preview names, and the `download=` attribute + visible name in
+  `VideoAttachment`. Prevents a hostile uploader from visually
+  reversing a filename or confusing the browser's download hint.
+- **Optimistic reply_to hex is now strictly validated.** The
+  `buildOptimisticChatPayload` helper used to silently parse
+  malformed hex (odd length, non-hex chars) into a corrupt
+  `target_id`; now requires `/^[0-9a-fA-F]+$/` and even length, and
+  drops `reply_to` cleanly otherwise. Optimistic-only, but a small
+  hardening against client-side state corruption.
+- **`<VideoAttachment>` resets its failure state when `src` changes.**
+  Previously, a reused component slot would stay in the
+  download-link fallback after the parent swapped to a new video.
+- **News-post edit pre-load now keeps the Save button disabled until
+  the existing post is loaded.** If the load fetch fails, `loaded()`
+  stays false and an error is shown — preventing a user from
+  accidentally clobbering the post with an empty form (which the SDK
+  would otherwise serialize as "no attachments / no title / no tags"
+  and the L2 node would write into storage).
+- **News-post edit now preserves the title and attachments.** Editing a
+  post that included images/videos would silently drop them — the
+  Compose view hid the MediaUpload control in edit mode and the
+  `editNews` envelope didn't carry attachments, so when the L2 node
+  rewrote the stored payload with the edit envelope's contents, every
+  attachment disappeared. Fixes: (a) preload attachments from the
+  existing post in `onMount`, (b) show MediaUpload in edit mode with
+  the pre-filled list, (c) pass `attachments` through `client.editNews`
+  to the SDK envelope (requires @ogmara/sdk ≥ 0.17.0), (d) block the
+  submit button until the pre-load finishes so the user can't
+  accidentally clobber the post by saving a half-loaded form.
+- **Chat message edit now preserves attachments in the optimistic
+  bubble** (already fixed earlier in this release via
+  `rewriteContentInPayload`; the news fix is the matching pattern for
+  the news edit flow).
+- **Chat header search now actually works.** The magnifying-glass icon
+  in a channel's top bar was a no-op — clicking it did nothing. It now
+  toggles an inline search input that replaces the channel title, and
+  the message list filters by case-insensitive substring against the
+  decoded payload content. Esc or the ✕ button closes search.
+- **Slim global title bar on Modern style (Telegram-style).** Previously
+  the min/max/close icons floated over the top-right corner, which
+  forced every page header to reserve 132px of right-padding to avoid
+  collision and ended up at different y-offsets across views. A new
+  full-width `.title-bar` strip (36px) now sits at the very top of
+  `.app-layout` on Modern, owning the drag region and the window
+  controls. Every view's own header sits below it at the same
+  y-offset, so the search icon in chat, the Receive button in
+  Portfolio, and equivalent action buttons in other views all align
+  horizontally. Chat channel-bar and Portfolio header also got a 56px
+  min-height so they read as substantial bars regardless of content.
+- **Per-row "Send" button shape under the Modern design style.** The
+  modern stylesheet applies `border-radius: var(--radius-full)` to
+  every `.send-btn` (intended for the chat composer's circular send
+  icon). The portfolio's per-row Send button was inheriting that and
+  collapsing to a tiny circle. Renamed it to `.token-send-btn` so the
+  global rule no longer applies, and gave it a proper pill shape with
+  hover lift to match the rest of the modern design.
+- **Fiat prices now display on every network, not only mainnet.** The
+  previous testnet gate hid the entire fiat column on testnet, which
+  made it hard to verify the feature on a dev wallet. Prices now show
+  for any asset bitcoin.me knows about regardless of network; testnet
+  tokens that have no match simply show "—" in the Value column.
+- **Idle-lock no longer leaves a stale PIN-confirm modal on screen.**
+  `vaultLock()` now rejects every pending tx-confirmation request, so a
+  modal that was open when the inactivity timer fired is cleanly
+  disposed before the lock screen takes over.
+- **Removed unused `vaultWipe` import in WalletView** — dead since
+  disconnect flow was unified into `auth.ts`.
+
 ## [1.18.2] - 2026-05-13
 
 ### Fixed
