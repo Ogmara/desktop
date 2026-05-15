@@ -193,6 +193,124 @@ fn open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Tauri command: open a media URL in an external video player.
+///
+/// Linux specifically does NOT route through `xdg-open` — that command
+/// dispatches HTTP URLs by SCHEME (always → user's default browser),
+/// not by MIME type, so an `http://node/media/<cid>` becomes a browser
+/// download dialog instead of an mpv/vlc launch. The xdg-mime registry
+/// (which DOES know `video/mp4` → mpv) only kicks in for `file://`
+/// URLs, but downloading the file first just to re-dispatch it is
+/// wasteful and on some systems the default `video/mp4` handler is a
+/// transcoder (HandBrake) rather than a player anyway.
+///
+/// Instead, on Linux we directly spawn a known video player binary
+/// with the URL as argv — modern players (mpv, vlc, mplayer, etc.) all
+/// accept HTTP URLs natively via libavformat. macOS and Windows still
+/// use their native open-by-default mechanism because their default
+/// browsers do play H.264 inline (so a browser tab is acceptable UX).
+#[tauri::command]
+fn open_media_external(url: String) -> Result<(), String> {
+    // Length cap. The video viewer only ever passes node-built media
+    // URLs (well under 1 KB). A 100 MB renderer-side bug would still
+    // try to allocate the argv before the spawn step rejected it.
+    const MAX_URL_LEN: usize = 8 * 1024;
+    if url.len() > MAX_URL_LEN {
+        return Err(format!("URL too long: {} > {}", url.len(), MAX_URL_LEN));
+    }
+
+    // Reject any control character or whitespace that could (a) break
+    // out of the URL when read by a logger / parent process, (b) embed
+    // newlines that some OS handlers split on. argv passes raw bytes so
+    // shell injection isn't the threat — log-injection / handler
+    // splitting is.
+    if url.chars().any(|c| c.is_control() || c == ' ') {
+        return Err("URL must not contain control or whitespace characters".into());
+    }
+
+    // Defense-in-depth: refuse anything that isn't http(s). Substring
+    // check is safe AFTER the control-char rejection above (otherwise a
+    // `http://\nfile://...` could slip past). The video viewer only
+    // passes node-built media URLs, but a misuse upstream shouldn't
+    // turn into a file:// / javascript: / data: open.
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("only http:// and https:// URLs are allowed".into());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: try known video players in order of preference. The
+        // first whose binary can be spawned wins. Each player accepts
+        // an HTTP URL as argv — mpv, vlc, and mplayer all use
+        // libavformat under the hood so the network handling is
+        // identical to local-file playback.
+        //
+        // Order rationale:
+        //   - mpv         : smallest, scriptable, modern OSD
+        //   - vlc         : near-universal Linux install
+        //   - celluloid   : GTK frontend over mpv; users who installed
+        //                   it usually want it to be the handler
+        //   - mplayer     : legacy, but still on minimal systems
+        //   - ffplay      : ffmpeg's debug player; last resort, but
+        //                   present anywhere ffmpeg is installed
+        const PLAYERS: &[&str] = &["mpv", "vlc", "celluloid", "mplayer", "ffplay"];
+        for player in PLAYERS {
+            // `.spawn()` checks PATH for the binary; missing binaries
+            // return Err("No such file or directory"). Successful spawn
+            // means the process is launching — we don't wait for it.
+            if std::process::Command::new(player).arg(&url).spawn().is_ok() {
+                return Ok(());
+            }
+        }
+        // No player found. Surface a clear, actionable error so the
+        // UI's "open externally" fallback panel can show the user
+        // exactly what to install — far better than silently falling
+        // back to xdg-open (which would just open a browser download
+        // dialog and confuse the user further).
+        return Err(
+            "No external video player found. Install one of mpv, vlc, \
+             celluloid, mplayer, or ffplay. \
+             Gentoo: `emerge media-video/mpv` or `emerge media-video/vlc`. \
+             Debian/Ubuntu: `apt install mpv` or `apt install vlc`."
+                .into(),
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: Safari/WebKit on this platform plays H.264 inline, so
+        // a browser tab is acceptable. `open` respects the user's
+        // default URL handler.
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("failed to open URL: {}", e))?;
+        return Ok(());
+    }
+
+    // Windows: `explorer.exe <url>` forwards through the shell handler
+    // chain, which has historically been a foot-gun for URI scheme
+    // smuggling (CVE-2024-21412 family). The http(s)-only prefix check
+    // above is the primary defense; downstream redirects are an OS
+    // concern outside our threat model. Tracked as a known limitation
+    // — switching to `ShellExecuteW` with explicit `lpOperation = open`
+    // is the long-term Windows hardening path. Edge/Chromium WebView
+    // plays H.264 inline so a browser tab is acceptable here.
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("failed to open URL: {}", e))?;
+        return Ok(());
+    }
+
+    // Defensive fallback for unsupported target_os values. Never
+    // reached when one of the three cfg blocks above matches.
+    #[allow(unreachable_code)]
+    Err("unsupported platform for open_media_external".into())
+}
+
 /// Tauri command: show a native save dialog and write content to the selected file.
 #[tauri::command]
 async fn save_export_file(
@@ -339,6 +457,7 @@ pub fn run() {
             secure_store_set,
             secure_store_delete,
             open_url,
+            open_media_external,
             save_export_file,
             fetch_and_save,
             update_tray_badge,

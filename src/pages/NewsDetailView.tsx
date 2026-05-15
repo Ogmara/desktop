@@ -12,10 +12,13 @@ import { getClient } from '../lib/api';
 import { authStatus, getSigner, l2Address, walletAddress, isRegistered } from '../lib/auth';
 import { navigate, routeParam } from '../lib/router';
 import { FormattedText } from '../components/FormattedText';
-import { getPayloadContent, getPayloadTitle, getPayloadAttachments, decodePayload } from '../lib/payload';
+import { VideoAttachment } from '../components/VideoAttachment';
+import { getPayloadContent, getPayloadTitle, getPayloadAttachments, decodePayload, safeAttachmentName } from '../lib/payload';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
 import { MentionPopover } from '../components/MentionPopover';
+import { EmojiPicker } from '../components/EmojiPicker';
 import { sendTip, kleverAvailable, getExplorerUrl } from '../lib/klever';
+import { TxConfirmationCancelled } from '../lib/txConfirm';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
 import { ensureHexMsgId, formatLocalTime, truncateAddress } from '../lib/news-utils';
 import { ReactionPicker } from '../components/ReactionPicker';
@@ -67,20 +70,33 @@ const CommentCard: Component<{ comment: any; onReply: (msgId: string, author: st
       <Show when={getPayloadAttachments(props.comment.payload).length > 0}>
         <div class="comment-attachments">
           <For each={getPayloadAttachments(props.comment.payload)}>
-            {(att) => (
-              <Show
-                when={att.mime_type.startsWith('image/')}
-                fallback={
-                  <a class="detail-file-link" href={getClient().getMediaUrl(att.cid)} target="_blank" rel="noopener noreferrer">
-                    📎 {att.filename || att.cid.slice(0, 12)}
+            {(att) => {
+              const isImage = att.mime_type.startsWith('image/');
+              const isVideo = att.mime_type.startsWith('video/');
+              const mediaUrl = getClient().getMediaUrl(att.cid);
+              if (isImage) {
+                return (
+                  <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
+                    <img class="comment-attachment-img" src={getClient().getMediaUrl(att.thumbnail_cid || att.cid)} alt={att.filename || ''} loading="lazy" />
                   </a>
-                }
-              >
-                <a href={getClient().getMediaUrl(att.cid)} target="_blank" rel="noopener noreferrer">
-                  <img class="comment-attachment-img" src={getClient().getMediaUrl(att.thumbnail_cid || att.cid)} alt={att.filename || ''} loading="lazy" />
+                );
+              }
+              if (isVideo) {
+                return (
+                  <VideoAttachment
+                    src={mediaUrl}
+                    filename={att.filename}
+                    videoClass="comment-attachment-video"
+                    fallbackClass="detail-file-link"
+                  />
+                );
+              }
+              return (
+                <a class="detail-file-link" href={mediaUrl} target="_blank" rel="noopener noreferrer">
+                  📎 {safeAttachmentName(att)}
                 </a>
-              </Show>
-            )}
+              );
+            }}
           </For>
         </div>
       </Show>
@@ -164,6 +180,28 @@ export const NewsDetailView: Component = () => {
   const [commentAttachments, setCommentAttachments] = createSignal<MediaAttachment[]>([]);
   // Signal-backed ref so MentionPopover's effect re-runs after mount.
   const [commentInputRef, setCommentInputRef] = createSignal<HTMLTextAreaElement>();
+  const [showCommentEmoji, setShowCommentEmoji] = createSignal(false);
+
+  // Insert emoji at caret position in the comment textarea. Mirrors
+  // ChatView's chat composer pattern so the picker behaves the same
+  // way users expect.
+  const insertCommentEmoji = (emoji: string) => {
+    const el = commentInputRef();
+    if (!el) {
+      setCommentText(commentText() + emoji);
+      return;
+    }
+    const start = el.selectionStart ?? commentText().length;
+    const end = el.selectionEnd ?? commentText().length;
+    const before = commentText().slice(0, start);
+    const after = commentText().slice(end);
+    setCommentText(before + emoji + after);
+    queueMicrotask(() => {
+      el.focus();
+      const pos = before.length + emoji.length;
+      el.setSelectionRange(pos, pos);
+    });
+  };
 
   const EDIT_WINDOW_MS = 30 * 60 * 1000;
 
@@ -293,7 +331,12 @@ export const NewsDetailView: Component = () => {
       setTipAmount('1');
       setTipNote('');
     } catch (e: any) {
-      setActionError(e?.message || 'Tip failed');
+      // PIN-modal dismissal is a user-initiated cancel, not a failure.
+      if (e instanceof TxConfirmationCancelled) {
+        setActionError(t('tx_confirm_cancelled'));
+      } else {
+        setActionError(e?.message || 'Tip failed');
+      }
     } finally {
       setTipPending(false);
     }
@@ -387,20 +430,33 @@ export const NewsDetailView: Component = () => {
           <Show when={getPayloadAttachments(postData()!.post.payload).length > 0}>
             <div class="detail-attachments">
               <For each={getPayloadAttachments(postData()!.post.payload)}>
-                {(att) => (
-                  <Show
-                    when={att.mime_type.startsWith('image/')}
-                    fallback={
-                      <a class="detail-file-link" href={getClient().getMediaUrl(att.cid)} target="_blank" rel="noopener noreferrer">
-                        📎 {att.filename || att.cid.slice(0, 12)}
+                {(att) => {
+                  const isImage = att.mime_type.startsWith('image/');
+                  const isVideo = att.mime_type.startsWith('video/');
+                  const mediaUrl = getClient().getMediaUrl(att.cid);
+                  if (isImage) {
+                    return (
+                      <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
+                        <img class="detail-attachment-img" src={getClient().getMediaUrl(att.thumbnail_cid || att.cid)} alt={att.filename || ''} loading="lazy" />
                       </a>
-                    }
-                  >
-                    <a href={getClient().getMediaUrl(att.cid)} target="_blank" rel="noopener noreferrer">
-                      <img class="detail-attachment-img" src={getClient().getMediaUrl(att.thumbnail_cid || att.cid)} alt={att.filename || ''} loading="lazy" />
+                    );
+                  }
+                  if (isVideo) {
+                    return (
+                      <VideoAttachment
+                        src={mediaUrl}
+                        filename={att.filename}
+                        videoClass="detail-attachment-video"
+                        fallbackClass="detail-file-link"
+                      />
+                    );
+                  }
+                  return (
+                    <a class="detail-file-link" href={mediaUrl} target="_blank" rel="noopener noreferrer">
+                      📎 {safeAttachmentName(att)}
                     </a>
-                  </Show>
-                )}
+                  );
+                }}
               </For>
             </div>
           </Show>
@@ -576,19 +632,33 @@ export const NewsDetailView: Component = () => {
                   });
                 }}
               />
-              <textarea
-                class="comment-input"
-                ref={(el) => setCommentInputRef(el)}
-                rows={3}
-                placeholder={t('news_comment_placeholder')}
-                value={commentText()}
-                onInput={(e) => setCommentText(e.currentTarget.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                    handleSubmitComment();
-                  }
-                }}
-              />
+              <div class="comment-input-wrap">
+                <textarea
+                  class="comment-input"
+                  ref={(el) => setCommentInputRef(el)}
+                  rows={3}
+                  placeholder={t('news_comment_placeholder')}
+                  value={commentText()}
+                  onInput={(e) => setCommentText(e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                      handleSubmitComment();
+                    }
+                  }}
+                />
+                <button
+                  class="comment-emoji-btn"
+                  type="button"
+                  onClick={() => setShowCommentEmoji(!showCommentEmoji())}
+                  disabled={commentPending()}
+                  title="Emoji"
+                >
+                  😊
+                </button>
+                <Show when={showCommentEmoji()}>
+                  <EmojiPicker onSelect={insertCommentEmoji} onClose={() => setShowCommentEmoji(false)} />
+                </Show>
+              </div>
               <MediaUpload
                 attachments={commentAttachments()}
                 onAttach={(att) => setCommentAttachments((prev) => [...prev, att])}
@@ -747,6 +817,15 @@ export const NewsDetailView: Component = () => {
           cursor: pointer;
         }
         .detail-attachment-img:hover { opacity: 0.9; }
+        /* Match image sizing for inline videos so a video post doesn't
+           render unconstrained at the browser default and overflow. */
+        .detail-attachment-video {
+          max-width: 100%;
+          max-height: 500px;
+          border-radius: var(--radius-md);
+          background: #000;
+          display: block;
+        }
         .comment-attachment-img {
           max-width: 100%;
           max-height: 300px;
@@ -755,6 +834,13 @@ export const NewsDetailView: Component = () => {
           cursor: pointer;
         }
         .comment-attachment-img:hover { opacity: 0.9; }
+        .comment-attachment-video {
+          max-width: 100%;
+          max-height: 300px;
+          border-radius: var(--radius-md);
+          background: #000;
+          display: block;
+        }
         .detail-file-link {
           display: inline-flex;
           align-items: center;
@@ -990,9 +1076,11 @@ export const NewsDetailView: Component = () => {
           cursor: pointer;
         }
         .comment-reply-cancel:hover { color: var(--color-text-primary); }
+        .comment-input-wrap { position: relative; }
         .comment-input {
           width: 100%;
           padding: var(--spacing-sm);
+          padding-right: 40px;
           border: 1px solid var(--color-border);
           border-radius: var(--radius-sm);
           background: var(--color-bg-primary);
@@ -1003,6 +1091,24 @@ export const NewsDetailView: Component = () => {
           min-height: 60px;
         }
         .comment-input:focus { outline: none; border-color: var(--color-accent-primary); }
+        .comment-emoji-btn {
+          position: absolute;
+          top: 6px;
+          right: 6px;
+          width: 28px;
+          height: 28px;
+          border-radius: var(--radius-sm);
+          background: transparent;
+          color: var(--color-text-secondary);
+          cursor: pointer;
+          font-size: 16px;
+          line-height: 1;
+        }
+        .comment-emoji-btn:hover:not(:disabled) {
+          background: var(--color-bg-tertiary);
+          color: var(--color-text-primary);
+        }
+        .comment-emoji-btn:disabled { opacity: 0.4; cursor: not-allowed; }
         .comment-error {
           font-size: var(--font-size-xs);
           color: var(--color-error);

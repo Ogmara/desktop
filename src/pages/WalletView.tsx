@@ -18,7 +18,7 @@ import {
   getSigner,
   initAuth,
 } from '../lib/auth';
-import { vaultHasWallet, vaultExportKey, vaultUnlockWithPin, vaultWipe } from '../lib/vault';
+import { vaultHasWallet, vaultExportKey, vaultUnlockWithPin } from '../lib/vault';
 import { verifyPin } from '../lib/appLock';
 import { registerUser, delegateDevice, revokeDevice } from '../lib/klever';
 import { navigate } from '../lib/router';
@@ -329,6 +329,9 @@ export const WalletView: Component = () => {
             </button>
           </div>
           <p class="wallet-source">Built-in Wallet</p>
+          <button class="wallet-btn primary" onClick={() => navigate('/wallet/tokens')}>
+            {t('wallet_view_portfolio_link')}
+          </button>
         </section>
 
         {/* On-chain registration */}

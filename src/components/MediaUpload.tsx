@@ -8,6 +8,7 @@
 import { Component, createSignal, For, Show } from 'solid-js';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
+import { safeAttachmentName } from '../lib/payload';
 
 /** Attachment data returned after successful upload. */
 export interface MediaAttachment {
@@ -105,7 +106,7 @@ export const MediaUpload: Component<{
                 <Show when={!isImage(att.mime_type)}>
                   <span class="media-file-icon">📎</span>
                 </Show>
-                <span class="media-filename">{att.filename || att.cid.slice(0, 12)}</span>
+                <span class="media-filename">{safeAttachmentName(att)}</span>
                 <button
                   class="media-remove"
                   onClick={() => props.onRemove(i())}

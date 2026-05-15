@@ -562,7 +562,8 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
               </Show>
               <Show when={authStatus() === 'ready'}>
                 <button class="modern-menu-item" onClick={() => modernNavTo(`/user/${walletAddress()}`)}>{t('menu_my_profile')}</button>
-                <button class="modern-menu-item" onClick={() => modernNavTo('/wallet')}>{t('menu_wallet')}</button>
+                <button class="modern-menu-item" onClick={() => modernNavTo('/wallet/tokens')}>{t('menu_wallet')}</button>
+                <button class="modern-menu-item" onClick={() => modernNavTo('/wallet')}>{t('menu_account_security')}</button>
                 <div style="height:1px; background:var(--color-border); margin:4px 0" />
                 <button class="modern-menu-item" onClick={() => modernNavTo('/channel/create')}>{t('menu_new_channel')}</button>
                 <div style="height:1px; background:var(--color-border); margin:4px 0" />
