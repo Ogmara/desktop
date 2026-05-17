@@ -186,6 +186,18 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     navigate('/news');
   };
 
+  // Shared across both the Modern tabbed sidebar and the Classic/
+  // Glassmorphism nav-item sidebar — keeps the "which pill is lit"
+  // logic identical between design styles. The URL query wins when
+  // present (set by the pill click handlers via `?feed=`), otherwise
+  // we fall back to the saved default. Re-evaluated reactively because
+  // it calls `route()`.
+  const currentFeedMode = (): 'global' | 'following' => {
+    const q = route().query.feed;
+    if (q === 'following' || q === 'global') return q;
+    return getSetting('defaultFeed') === 'following' ? 'following' : 'global';
+  };
+
   // Remember last route per tab so switching tabs restores the previous view
   let lastChatRoute = `/chat/${getSetting('lastChannel') || ''}`;
   let lastFeedRoute = `/news?feed=${
@@ -696,11 +708,10 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
               NewsView's createEffect, so a power user who always wants
               'Following' on launch gets that by simply ever using it. */}
           {(() => {
-            const currentFeedMode = (): 'global' | 'following' => {
-              const q = route().query.feed;
-              if (q === 'following' || q === 'global') return q;
-              return getSetting('defaultFeed') === 'following' ? 'following' : 'global';
-            };
+            // `currentFeedMode` is now hoisted to the component scope so the
+            // Classic/Glassmorphism sidebar below shares the same logic. Kept
+            // as a function call (not memoised here) because the surrounding
+            // JSX is already inside a `<Show when={...}>` reactive block.
             const pillStyle = (active: boolean, disabled: boolean) =>
               `display:flex; align-items:center; gap:10px; padding:10px 12px; width:100%; text-align:left; cursor:pointer; transition:background 0.1s; background:${active ? 'var(--color-chat-active-bg)' : 'transparent'}; ${disabled ? 'opacity:0.55' : ''}`;
             const iconStyle =
@@ -973,13 +984,37 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       class={`sidebar ${isMobileViewport() ? 'mobile-open' : ''}`}
       style={isMobileViewport() ? undefined : { width: `${sidebarWidth()}px`, 'min-width': `${sidebarWidth()}px` }}
     >
-      {/* News */}
+      {/* News — split into Global / Following feed picker for parity with
+          the Modern sidebar's pill UI. We keep the visual language of this
+          design style (sidebar-nav-item rows, no descriptive sub-line) but
+          mirror the same routing/active rules: each button writes a
+          ?feed=... URL query and NewsView's createEffect auto-saves the
+          choice as the user's default. The Following row is muted +
+          padlocked when the user has no wallet — clicking it still
+          navigates so the user lands on the value-prop card in NewsView
+          (deliberate teaching moment, not a dead-end). */}
       <div class="sidebar-section">
         <button
-          class={`sidebar-nav-item ${isView('news') ? 'active' : ''}`}
-          onClick={() => go('/news')}
+          class={`sidebar-nav-item ${isView('news') && currentFeedMode() === 'global' ? 'active' : ''}`}
+          onClick={() => go('/news?feed=global')}
+          title={t('news_feed_global_desc')}
         >
-          📰 {t('nav_news')}
+          🌐 {t('news_feed_global')}
+        </button>
+        <button
+          class={`sidebar-nav-item ${isView('news') && currentFeedMode() === 'following' ? 'active' : ''}`}
+          onClick={() => go('/news?feed=following')}
+          title={
+            authStatus() !== 'ready'
+              ? t('news_feed_following_locked_hint')
+              : t('news_feed_following_desc')
+          }
+          style={authStatus() !== 'ready' ? 'opacity:0.65' : ''}
+        >
+          👥 {t('news_feed_following')}
+          <Show when={authStatus() !== 'ready'}>
+            <span style="margin-left:6px; font-size:11px">🔒</span>
+          </Show>
         </button>
       </div>
 

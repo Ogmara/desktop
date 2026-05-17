@@ -158,6 +158,7 @@
   "bookmarks_empty": "保存した投稿はありません",
   "news_view_thread": "スレッドを表示",
   "news_view_post": "投稿を開く",
+  "node_remove_known": "リストから削除",
   "news_feed_global": "グローバル",
   "news_feed_global_desc": "ネットワーク上のすべての公開投稿",
   "news_feed_following": "フォロー中",

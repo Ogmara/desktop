@@ -48,6 +48,19 @@ export interface Settings {
    * a value-prop card when the user isn't authenticated.
    */
   defaultFeed: 'global' | 'following';
+  /**
+   * User-known L2 node URLs the picker should always remember.
+   *
+   * Auto-populated every time the user successfully `switchNode`s to
+   * a new URL (whether via the picker's manual-add field or the
+   * Settings text input). Persists across switches so that a user
+   * who picks a new node and then opens the picker again still sees
+   * their previous node in the list — even if the new node's
+   * `/api/v1/network/nodes` doesn't advertise it back. The default
+   * node URL is implicitly included by the picker; only manually-
+   * added URLs end up in this array.
+   */
+  knownNodes: string[];
 }
 
 const defaults: Settings = {
@@ -73,6 +86,7 @@ const defaults: Settings = {
   defaultLandingView: 'news',
   currency: 'usd',
   defaultFeed: 'global',
+  knownNodes: [],
 };
 
 /** Load a setting from localStorage with fallback to default. */

@@ -86,6 +86,7 @@
   "bookmarks_empty": "Нет сохранённых публикаций",
   "news_view_thread": "Открыть тред",
   "news_view_post": "Открыть публикацию",
+  "node_remove_known": "Удалить из списка",
   "news_feed_global": "Глобальная",
   "news_feed_global_desc": "Все публичные посты в сети",
   "news_feed_following": "Подписки",
