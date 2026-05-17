@@ -39,6 +39,15 @@ export interface Settings {
   defaultLandingView: 'chat' | 'news';
   /** Fiat currency used to display token values in the wallet. ISO-4217 lowercase. */
   currency: string;
+  /**
+   * Which feed mode the news view defaults to when opened without an
+   * explicit `?feed=` query param. Auto-saved every time the user
+   * switches via the sidebar pills, so their last choice IS the
+   * default on next launch. `following` is only meaningful when a
+   * wallet is connected — the news view falls back to global with
+   * a value-prop card when the user isn't authenticated.
+   */
+  defaultFeed: 'global' | 'following';
 }
 
 const defaults: Settings = {
@@ -63,6 +72,7 @@ const defaults: Settings = {
   pushGatewayUrl: '',
   defaultLandingView: 'news',
   currency: 'usd',
+  defaultFeed: 'global',
 };
 
 /** Load a setting from localStorage with fallback to default. */

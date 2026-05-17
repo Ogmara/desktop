@@ -5,6 +5,107 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.0] - 2026-05-17
+
+Sidebar gains a feed-mode picker so the News tab can show either the
+global timeline or only posts from followed users. The empty space
+under the **Feed** tab is now two pills — **🌐 Global** and
+**👥 Following** — with descriptions. Auto-saves the user's last
+choice as the default on next launch (no settings UI to dig through).
+Wires up the long-existing `client.getFeed()` SDK method to a UI for
+the first time on desktop.
+
+### Added
+- **Global / Following pills in the sidebar's Feed tab.**
+  [src/components/Sidebar.tsx](src/components/Sidebar.tsx#L678) replaces
+  the placeholder card with two click-targets. The active pill follows
+  the live URL query (`#/news?feed=global` vs `#/news?feed=following`)
+  so opening a post detail and coming back keeps the right pill lit.
+  The News tab also remembers the active feed mode across tab
+  switches via `lastFeedRoute`.
+- **`defaultFeed: 'global' | 'following'` setting.**
+  [src/lib/settings.ts](src/lib/settings.ts#L42) persists the user's
+  last chosen mode in localStorage. NewsView writes it via a
+  `createEffect` whenever the resolved mode changes, so a power user
+  who always wants Following on launch gets that automatically — no
+  preference UI required.
+- **NewsView reads the feed mode reactively.**
+  [src/pages/NewsView.tsx](src/pages/NewsView.tsx) computes
+  `feedMode` from `queryParam('feed')` falling back to
+  `getSetting('defaultFeed')`, then keys a `createResource` off it so
+  switching pills triggers an immediate refetch. The header title
+  swaps between **News Feed** and **Following** accordingly.
+- **Anon value-prop card when an unauthenticated user clicks
+  Following.** Instead of hiding the option (which removes a teaching
+  moment for new visitors) or silently returning an empty list, we
+  show a centered card with three bullets explaining why a wallet
+  matters on Ogmara (own your identity, curate your feed, portable
+  across web/desktop/mobile) plus a single **Connect wallet** CTA
+  routing to `/wallet`. The Following pill itself is rendered with
+  reduced opacity + a 🔒 affix so the gating is obvious before the
+  click.
+- **12 new i18n keys × 7 languages.** `news_feed_global`,
+  `news_feed_global_desc`, `news_feed_following`,
+  `news_feed_following_desc`, `news_feed_following_locked_hint`,
+  `news_feed_following_empty`, plus the five
+  `news_following_anon_*` strings for the value-prop card. All seven
+  supported locales (en, de, es, pt, ja, zh, ru) carry localized
+  copy — no machine-translated strings.
+
+## [1.20.2] - 2026-05-17
+
+Hotfix surfaced right after l2-node v0.46.2 took effect on testnet.
+With the edit-projection fix landed, edited news posts started
+correctly rendering their video attachments inline — which in turn
+exposed a long-standing WebKitGTK behaviour on Linux/Tauri:
+`<video preload="metadata">` against a stream the platform can't
+decode floods the page with `WebLoaderStrategy::internallyFailedLoadTimerFired`
+retries, stalling the renderer. Symptom: news feed appeared frozen,
+channels containing video messages rendered as empty. Web/Chrome/
+Firefox builds were unaffected because they ship their own codecs.
+
+### Fixed
+- **`VideoAttachment` no longer auto-fetches video metadata.**
+  [src/components/VideoAttachment.tsx](src/components/VideoAttachment.tsx#L156)
+  swaps `preload="metadata"` → `preload="none"`. The inline `<video>`
+  still renders with the standard play-button placeholder; the
+  network fetch is deferred until the user clicks play, at which
+  point either decoding succeeds or the existing `onError` →
+  "Open externally / Download" fallback panel takes over. No more
+  cascade of `internallyFailedLoadTimerFired` errors and no more
+  render-stall on Linux WebKitGTK without `gstreamer1.0-libav`.
+
+## [1.20.1] - 2026-05-17
+
+UX fix uncovered while testing news edit on testnet. Two bugs:
+the news feed had no entry point for opening a post that didn't
+declare a title — the `<h3>` heading was the only click-target,
+so a topic-less post was unreachable and its Edit button on the
+detail view was effectively hidden. Pairs with l2-node v0.46.2,
+which fixes the server-side edit projection so edits stop
+appearing to wipe title/content/tags/attachments.
+
+### Fixed
+- **Topic-less posts are reachable from the feed.** Clicking the
+  body of a news card in [src/pages/NewsView.tsx](src/pages/NewsView.tsx#L470)
+  now opens the post's detail view. The 30-min edit window +
+  author-only + registered-user rules in
+  [NewsDetailView.canEditPost](src/pages/NewsDetailView.tsx#L213)
+  are unchanged — the body click is purely a navigation entry,
+  not a privilege escalation. Clicks on interactive descendants
+  (links, mention buttons, anything matching
+  `a, button, [data-no-detail]`) short-circuit out of the
+  navigation so FormattedText's own click handlers keep working.
+
+### Added
+- **`news_view_post` localization key** across all 7 supported
+  languages (en, de, es, pt, ja, zh, ru), used as the tooltip on
+  the clickable body so screen readers and hover help describe
+  the navigation action.
+- **`.news-card-body-clickable` styling.** Pointer cursor + accent
+  colour on hover to telegraph the new click affordance without
+  underlining the prose text.
+
 ## [1.20.0] - 2026-05-15
 
 ### Added
