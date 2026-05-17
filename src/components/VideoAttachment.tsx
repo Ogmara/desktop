@@ -156,7 +156,18 @@ export const VideoAttachment: Component<VideoAttachmentProps> = (props) => {
       <video
         class={props.videoClass}
         controls
-        preload="metadata"
+        // `preload="none"` — do NOT fetch metadata on render. WebKitGTK
+        // (Linux Tauri) without `gstreamer1.0-libav` retries every failing
+        // metadata fetch through `WebLoaderStrategy`, so a feed with N
+        // un-playable videos floods the page with N×many internal load
+        // failures and can stall the renderer ("channels with videos look
+        // empty", "news feed appears frozen"). Defer fetching until the
+        // user clicks play — at which point either the codec works or
+        // `onError` fires and the fallback panel takes over. The poster
+        // attribute is intentionally omitted; without a thumbnail_cid the
+        // video shows the default play-button placeholder, which is the
+        // same UX our fallback link offers anyway.
+        preload="none"
         src={props.src}
         // `error` fires when the video element gave up — codec missing,
         // network failure, etc. We surface the fallback link instead of

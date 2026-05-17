@@ -6,7 +6,8 @@ import { Component, createResource, createSignal, createEffect, createMemo, onCl
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { authStatus, getSigner, l2Address, walletAddress } from '../lib/auth';
-import { navigate } from '../lib/router';
+import { navigate, queryParam } from '../lib/router';
+import { getSetting, setSetting } from '../lib/settings';
 import { FormattedText } from '../components/FormattedText';
 import { VideoAttachment } from '../components/VideoAttachment';
 import { getPayloadContent, getPayloadTitle, getPayloadAttachments, decodePayload, safeAttachmentName } from '../lib/payload';
@@ -17,21 +18,65 @@ import { ensureHexMsgId, formatLocalTime, truncateAddress } from '../lib/news-ut
 import { ReactionPicker } from '../components/ReactionPicker';
 import { buildNewsShareUrl, copyToClipboard } from '../lib/share';
 
+type FeedMode = 'global' | 'following';
+
+/**
+ * Resolve the feed mode for the current render: URL query param wins
+ * (the sidebar pills write `?feed=...`), otherwise the user's last
+ * saved preference, otherwise global. Returned as a getter so it stays
+ * reactive when the route changes.
+ */
+function resolveFeedMode(): FeedMode {
+  const q = queryParam('feed');
+  if (q === 'following' || q === 'global') return q;
+  const saved = getSetting('defaultFeed');
+  return saved === 'following' ? 'following' : 'global';
+}
+
 export const NewsView: Component = () => {
   const [loadError, setLoadError] = createSignal('');
-  const [news] = createResource(async () => {
-    try {
-      setLoadError('');
-      const client = getClient();
-      const resp = await client.listNews(1, 20);
-      return resp.posts;
-    } catch (e: any) {
-      const msg = e?.message || String(e);
-      console.error('[NewsView] Failed to load news:', msg);
-      setLoadError(msg);
-      return [];
+  // Reactive feed-mode signal — reads from URL/settings on every change.
+  // The `createResource` below keys off it, so a sidebar click that
+  // updates `?feed=` immediately retriggers the fetch.
+  const feedMode = createMemo<FeedMode>(() => resolveFeedMode());
+
+  // Auto-save the resolved mode as the user's new default ON CHANGE.
+  // `defer: true` skips the initial run so we don't overwrite the
+  // saved preference with itself on first mount.
+  createEffect((prev?: FeedMode) => {
+    const m = feedMode();
+    if (prev !== undefined && prev !== m) {
+      setSetting('defaultFeed', m);
     }
+    return m;
   });
+
+  // Anon-on-Following: don't even hit the auth-required endpoint when
+  // the user has no wallet. We surface the value-prop card instead.
+  const showFollowingAnonPrompt = () =>
+    feedMode() === 'following' && authStatus() !== 'ready';
+
+  const [news] = createResource(
+    () => ({ mode: feedMode(), authed: authStatus() === 'ready' }),
+    async ({ mode, authed }) => {
+      try {
+        setLoadError('');
+        const client = getClient();
+        if (mode === 'following') {
+          if (!authed) return [];
+          const resp = await client.getFeed({ page: 1, limit: 20 });
+          return resp.posts;
+        }
+        const resp = await client.listNews(1, 20);
+        return resp.posts;
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        console.error('[NewsView] Failed to load news:', msg);
+        setLoadError(msg);
+        return [];
+      }
+    },
+  );
 
   const handleNewPost = () => {
     if (authStatus() !== 'ready') {
@@ -41,28 +86,56 @@ export const NewsView: Component = () => {
     navigate('/compose');
   };
 
+  const headerTitle = () =>
+    feedMode() === 'following' ? t('news_feed_following') : t('news_title');
+
   return (
     <div class="news-view">
       <div class="news-header">
-        <h2>{t('news_title')}</h2>
+        <h2>{headerTitle()}</h2>
         <button class="new-post-btn" onClick={handleNewPost}>{t('news_new_post')}</button>
       </div>
       <Show when={loadError()}>
         <div class="news-error">{loadError()}</div>
       </Show>
-      <div class="news-feed">
-        <Show when={news.loading}>
-          <div class="news-empty">{t('loading')}</div>
-        </Show>
-        <Show
-          when={!news.loading && news() && news()!.length > 0}
-          fallback={!news.loading ? <div class="news-empty">{t('news_no_posts')}</div> : null}
-        >
-          <For each={news()}>
-            {(post) => <NewsCard post={post} />}
-          </For>
-        </Show>
-      </div>
+      {/* Anon clicking 'Following' — value-prop card instead of the empty list.
+          Conversion funnel: bullet points sell the wallet, single CTA to connect.
+          We render this BEFORE the feed list so we never show 'no posts' for a
+          state that means 'no account', not 'no follows'. */}
+      <Show when={showFollowingAnonPrompt()}>
+        <div class="news-anon-prompt">
+          <div class="news-anon-icon">👥</div>
+          <h3 class="news-anon-title">{t('news_following_anon_title')}</h3>
+          <p class="news-anon-sub">{t('news_following_anon_sub')}</p>
+          <ul class="news-anon-bullets">
+            <li>{t('news_following_anon_bullet_1')}</li>
+            <li>{t('news_following_anon_bullet_2')}</li>
+            <li>{t('news_following_anon_bullet_3')}</li>
+          </ul>
+          <button class="news-anon-cta" onClick={() => navigate('/wallet')}>
+            {t('news_following_anon_cta')}
+          </button>
+        </div>
+      </Show>
+      <Show when={!showFollowingAnonPrompt()}>
+        <div class="news-feed">
+          <Show when={news.loading}>
+            <div class="news-empty">{t('loading')}</div>
+          </Show>
+          <Show
+            when={!news.loading && news() && news()!.length > 0}
+            fallback={!news.loading ? (
+              <div class="news-empty">
+                {feedMode() === 'following' ? t('news_following_empty') : t('news_no_posts')}
+              </div>
+            ) : null}
+          >
+            <For each={news()}>
+              {(post) => <NewsCard post={post} />}
+            </For>
+          </Show>
+        </div>
+      </Show>
 
       <style>{`
         .news-view { padding: var(--spacing-md); overflow-y: auto; height: 100%; }
@@ -163,6 +236,8 @@ export const NewsView: Component = () => {
         .news-title { cursor: pointer; }
         .news-title:hover { color: var(--color-accent-primary); }
         .news-card-body { line-height: 1.6; margin-bottom: var(--spacing-md); }
+        .news-card-body-clickable { cursor: pointer; }
+        .news-card-body-clickable:hover { color: var(--color-accent-primary); }
         .news-attachments {
           display: flex;
           flex-wrap: wrap;
@@ -202,6 +277,57 @@ export const NewsView: Component = () => {
         .news-edited { font-size: var(--font-size-xs); color: var(--color-text-secondary); }
         .news-empty { text-align: center; color: var(--color-text-secondary); padding: var(--spacing-xl); }
         .news-error { padding: var(--spacing-sm) var(--spacing-md); background: rgba(255,118,117,0.15); color: var(--color-error); border-radius: var(--radius-md); font-size: var(--font-size-sm); margin-bottom: var(--spacing-md); word-break: break-all; }
+
+        /* Anon value-prop card — shown only when an unauthenticated user
+           clicks 'Following'. Layout mirrors the typical "feature gate"
+           pattern: icon, title, sub, bullets, single CTA. Kept compact
+           (max-width 540) so it doesn't look like the main content. */
+        .news-anon-prompt {
+          max-width: 540px;
+          margin: var(--spacing-xl) auto;
+          padding: var(--spacing-xl) var(--spacing-lg);
+          background: var(--color-bg-secondary);
+          border: 1px solid var(--color-border);
+          border-radius: var(--radius-lg);
+          text-align: center;
+        }
+        .news-anon-icon {
+          font-size: 40px;
+          line-height: 1;
+          margin-bottom: var(--spacing-md);
+        }
+        .news-anon-title {
+          font-size: var(--font-size-lg);
+          font-weight: 700;
+          margin-bottom: var(--spacing-sm);
+          color: var(--color-text-primary);
+        }
+        .news-anon-sub {
+          font-size: var(--font-size-sm);
+          color: var(--color-text-secondary);
+          margin-bottom: var(--spacing-lg);
+          line-height: 1.5;
+        }
+        .news-anon-bullets {
+          text-align: left;
+          margin: 0 auto var(--spacing-lg);
+          padding-left: var(--spacing-lg);
+          max-width: 420px;
+          font-size: var(--font-size-sm);
+          color: var(--color-text-primary);
+          line-height: 1.7;
+        }
+        .news-anon-bullets li { margin-bottom: var(--spacing-xs); }
+        .news-anon-cta {
+          padding: var(--spacing-sm) var(--spacing-xl);
+          background: var(--color-accent-primary);
+          color: var(--color-text-inverse);
+          border-radius: var(--radius-md);
+          font-weight: 600;
+          font-size: var(--font-size-md);
+          cursor: pointer;
+        }
+        .news-anon-cta:hover { opacity: 0.9; }
 
         .news-actions {
           display: flex;
@@ -473,7 +599,24 @@ const NewsCard: Component<{ post: any }> = (props) => {
             {decoded().title}
           </h3>
         </Show>
-        <div class="news-card-body"><FormattedText content={decoded().content} /></div>
+        {/* Body is a click-target for the detail view (where the existing
+            30-min edit-window + author + registered rules in NewsDetailView's
+            `canEditPost` apply). Posts without a title used to be unreachable
+            from the feed because the <h3> was the only entry point. Ignore
+            clicks that land on an interactive descendant (links inside
+            FormattedText, mention buttons, etc.) so this overlay can't
+            swallow them. */}
+        <div
+          class="news-card-body news-card-body-clickable"
+          onClick={(e) => {
+            const target = e.target as HTMLElement;
+            if (target.closest('a, button, [data-no-detail]')) return;
+            navigate(`/news/${ensureHexMsgId(props.post.msg_id)}`);
+          }}
+          title={t('news_view_post')}
+        >
+          <FormattedText content={decoded().content} />
+        </div>
       </Show>
       <Show when={(decoded().attachments ?? []).length > 0}>
         <div class="news-attachments">

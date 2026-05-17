@@ -188,7 +188,9 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
 
   // Remember last route per tab so switching tabs restores the previous view
   let lastChatRoute = `/chat/${getSetting('lastChannel') || ''}`;
-  let lastFeedRoute = '/news';
+  let lastFeedRoute = `/news?feed=${
+    getSetting('defaultFeed') === 'following' ? 'following' : 'global'
+  }`;
   let lastDmRoute = '/dm';
 
   // Track current route changes to update last-per-tab.
@@ -199,7 +201,17 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   createEffect(() => {
     const r = route();
     if (r.view === 'chat' && r.params.channelId) lastChatRoute = `/chat/${r.params.channelId}`;
-    if (r.view === 'news') lastFeedRoute = '/news';
+    if (r.view === 'news') {
+      // Preserve the active feed mode so clicking the News tab from
+      // Chat/DMs lands back on the same Global/Following view the user
+      // was reading. Falls back to the saved default when no query is
+      // present, mirroring `resolveFeedMode()` in NewsView.
+      const q = r.query.feed;
+      const mode = q === 'following' || q === 'global'
+        ? q
+        : (getSetting('defaultFeed') === 'following' ? 'following' : 'global');
+      lastFeedRoute = `/news?feed=${mode}`;
+    }
     if (r.view === 'dm-conversation' && r.params.address) lastDmRoute = `/dm/${r.params.address}`;
   });
 
@@ -676,10 +688,72 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         </Show>
 
         <Show when={activeTab() === 'feed'}>
-          <div style="padding:40px 20px; text-align:center; color:var(--color-text-secondary)">
-            <div style="font-size:28px; margin-bottom:8px">📰</div>
-            <p>{t('news_title')}</p>
-          </div>
+          {/* Feed-mode picker. The two entries map 1:1 to NewsView's
+              fetch source (`client.listNews()` vs `client.getFeed()`).
+              Active highlight follows the live URL query so opening a
+              detail then coming back keeps the right pill lit. The
+              clicked mode is also persisted as the default feed via
+              NewsView's createEffect, so a power user who always wants
+              'Following' on launch gets that by simply ever using it. */}
+          {(() => {
+            const currentFeedMode = (): 'global' | 'following' => {
+              const q = route().query.feed;
+              if (q === 'following' || q === 'global') return q;
+              return getSetting('defaultFeed') === 'following' ? 'following' : 'global';
+            };
+            const pillStyle = (active: boolean, disabled: boolean) =>
+              `display:flex; align-items:center; gap:10px; padding:10px 12px; width:100%; text-align:left; cursor:pointer; transition:background 0.1s; background:${active ? 'var(--color-chat-active-bg)' : 'transparent'}; ${disabled ? 'opacity:0.55' : ''}`;
+            const iconStyle =
+              'width:32px; height:32px; border-radius:50%; background:var(--color-bg-tertiary); display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0';
+            const labelStyle = (active: boolean) =>
+              `font-weight:600; font-size:var(--font-size-sm); color:${active ? 'var(--color-accent-primary)' : 'var(--color-text-primary)'}`;
+            const subStyle =
+              'font-size:var(--font-size-xs); color:var(--color-text-secondary); margin-top:2px';
+            return (
+              <>
+                <button
+                  style={pillStyle(currentFeedMode() === 'global', false)}
+                  onClick={() => go('/news?feed=global')}
+                  title={t('news_feed_global_desc')}
+                >
+                  <div style={iconStyle}>🌐</div>
+                  <div style="flex:1; overflow:hidden">
+                    <div style={labelStyle(currentFeedMode() === 'global')}>
+                      {t('news_feed_global')}
+                    </div>
+                    <div style={subStyle}>{t('news_feed_global_desc')}</div>
+                  </div>
+                </button>
+                <button
+                  style={pillStyle(
+                    currentFeedMode() === 'following',
+                    authStatus() !== 'ready',
+                  )}
+                  onClick={() => go('/news?feed=following')}
+                  title={
+                    authStatus() !== 'ready'
+                      ? t('news_feed_following_locked_hint')
+                      : t('news_feed_following_desc')
+                  }
+                >
+                  <div style={iconStyle}>👥</div>
+                  <div style="flex:1; overflow:hidden">
+                    <div style={labelStyle(currentFeedMode() === 'following')}>
+                      {t('news_feed_following')}
+                      <Show when={authStatus() !== 'ready'}>
+                        <span style="margin-left:6px; font-size:11px">🔒</span>
+                      </Show>
+                    </div>
+                    <div style={subStyle}>
+                      {authStatus() !== 'ready'
+                        ? t('news_feed_following_locked_hint')
+                        : t('news_feed_following_desc')}
+                    </div>
+                  </div>
+                </button>
+              </>
+            );
+          })()}
         </Show>
 
         <Show when={activeTab() === 'dms'}>
