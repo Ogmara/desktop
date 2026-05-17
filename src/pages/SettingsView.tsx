@@ -12,6 +12,7 @@ import { Component, createSignal, createResource, Show } from 'solid-js';
 import { t, setLanguage, currentLanguage, SUPPORTED_LANGUAGES } from '../i18n/init';
 import { getTheme, setTheme, getCustomTheme, setCustomTheme, clearCustomTheme, getDesignStyle, setDesignStyle, DESIGN_STYLES, type Theme, type CustomTheme, type DesignStyle, getColorScheme, setColorScheme, COLOR_SCHEMES, type ColorScheme } from '../lib/theme';
 import { getSetting, setSetting, currentCurrency, setCurrentCurrency } from '../lib/settings';
+import { switchNode } from '../lib/api';
 import { SUPPORTED_CURRENCIES } from '../lib/prices';
 
 const CURRENCY_LABELS: Record<string, string> = {
@@ -497,9 +498,22 @@ export const SettingsView: Component = () => {
           type="text"
           class="settings-input"
           value={nodeUrl()}
-          placeholder="http://localhost:41721"
+          placeholder="http://192.168.x.x:41721"
           onInput={(e) => setNodeUrl(e.currentTarget.value)}
-          onBlur={() => setSetting('nodeUrl', nodeUrl())}
+          onBlur={() => {
+            // Normalize: trim trailing slash + auto-prefix http:// for
+            // bare host:port input. Then route through `switchNode` so
+            // the cached HTTP client AND WebSocket subscription both
+            // reset onto the new node — previously this was a plain
+            // setSetting and the app kept hitting the old URL until
+            // the next launch.
+            let url = nodeUrl().trim().replace(/\/$/, '');
+            if (url && !/^https?:\/\//i.test(url)) {
+              url = `http://${url}`;
+              setNodeUrl(url);
+            }
+            switchNode(url);
+          }}
         />
       </section>
 

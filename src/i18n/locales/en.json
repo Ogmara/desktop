@@ -155,6 +155,7 @@
   "bookmarks_empty": "No saved posts",
   "news_view_thread": "View thread",
   "news_view_post": "Open post",
+  "node_remove_known": "Remove from list",
   "news_feed_global": "Global",
   "news_feed_global_desc": "All public posts on the network",
   "news_feed_following": "Following",

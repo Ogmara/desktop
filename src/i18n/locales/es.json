@@ -158,6 +158,7 @@
   "bookmarks_empty": "Sin publicaciones guardadas",
   "news_view_thread": "Ver hilo",
   "news_view_post": "Abrir publicación",
+  "node_remove_known": "Quitar de la lista",
   "news_feed_global": "Global",
   "news_feed_global_desc": "Todas las publicaciones públicas en la red",
   "news_feed_following": "Siguiendo",

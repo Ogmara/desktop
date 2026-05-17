@@ -5,6 +5,105 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.0] - 2026-05-17
+
+Cross-node node-picker bake-in on testnet (Odroid via Tailscale +
+production via DNS) surfaced a stack of bugs that all blocked or
+degraded "add a custom L2 node" flow. Bundled together because they
+were diagnosed and tested as one workflow.
+
+### Added
+- **`http://*:*` and `https://*:*` patterns in Tauri capabilities.**
+  [src-tauri/capabilities/default.json](src-tauri/capabilities/default.json)
+  previously listed `{ "url": "https://*" }` + `{ "url": "http://localhost:*" }`,
+  which is `URLPattern` shorthand for "HTTPS on port 443" and "HTTP on
+  literal `localhost`, any port". Every other host:port combination
+  failed `tauri-plugin-http`'s scope check with the error string
+  `"url not allowed on the configured scope"` — no network packet
+  sent, no fingerprint in DevTools beyond the fetch rejection. The
+  wider patterns admit user-typed node URLs (LAN, Tailscale, custom
+  ports). Requires a full `npm run tauri dev` restart because
+  capabilities are compiled into the Rust shell.
+- **Persisted `knownNodes` list** in localStorage. Every successful
+  `switchNode` (picker dropdown, manual-add field, Settings text
+  input) appends the URL. Solves the "switched to my Odroid and
+  `node.ogmara.org` disappeared from the dropdown" symptom — the new
+  node's `/api/v1/network/nodes` won't necessarily advertise the old
+  one, so we keep our own breadcrumb.
+- **Per-row ✕ remove button** in the picker for entries the user
+  manually added. Default and currently-selected nodes don't get the
+  control — they can't usefully be removed.
+- **Hostname-level dedup** in `getAvailableNodes`. When a node's
+  `public_url` is misconfigured (e.g. Odroid advertising
+  `https://m1cld03.tail7500b2.ts.net` while the user is actually
+  connected via `http://m1cld03.tail7500b2.ts.net:41721`), the
+  duplicate row is suppressed. Current URL wins; otherwise lowest
+  ping wins.
+- **Global / Following feed pills in the Classic / Glassmorphism
+  sidebar.** The v1.21.0 feed-mode picker only updated the Modern
+  sidebar's tabbed content. Users on Classic / Glassmorphism design
+  styles still saw the single `📰 News` button and couldn't reach
+  the Following feed. [src/components/Sidebar.tsx](src/components/Sidebar.tsx)
+  now replaces the single nav-item with two adjacent
+  `sidebar-nav-item` rows wired to the same `?feed=...` query +
+  auto-saved `defaultFeed` setting. `currentFeedMode()` is hoisted to
+  component scope so both rendering paths (Modern, Classic /
+  Glassmorphism) read the active feed mode through the same helper.
+- **`tryAddManual` surfaces the actual fetch error** with class-
+  specific hints. Previously every failure class (TLS, CORS, DNS,
+  Tauri scope, invalid URL, schema mismatch) collapsed into a silent
+  "nothing happened" drop. The picker now reports the specific
+  reason inline.
+- **`node_remove_known` localization key** across all 7 supported
+  locales.
+
+### Fixed
+- **`NodeSelector` refreshes on OPEN, not on close.** Previous code
+  was `if (!open()) handleRefresh()` after `setOpen(!open())`,
+  which reads the already-flipped signal — so refresh actually ran
+  on CLOSE. Manually-added nodes only appeared on the second open
+  attempt. Now refresh fires on the open transition.
+- **`switchNode` adds the new URL to `knownNodes` AND resets the
+  WebSocket** alongside the cached HTTP client. Without WS reset
+  the cached subscription kept feeding events from the previous
+  node after the switch — "I switched to my Odroid but I still see
+  the same news posts" was the report.
+- **SettingsView text input uses `switchNode`** with `http://`
+  auto-prefix. Previously it was a plain `setSetting('nodeUrl', …)`
+  on blur with no transport reset — saved the new URL but the
+  in-memory HTTP client kept using the OLD URL until app restart.
+- **Desktop opts into `allowPrivateHosts: true`** (sdk-js v0.18.0+)
+  in `getAvailableNodes` and `tryAddManual`. The SDK's SSRF block
+  is a useful guard for the hosted web client but counterproductive
+  on Tauri where the user IS local. Pairs with sdk-js v0.18.0.
+
+### Pairs with
+- sdk-js v0.18.0 — adds the `allowPrivateHosts` opt-in flag.
+
+## [1.21.1] - 2026-05-17
+
+Extends the v1.21.0 feed picker to the Classic and Glassmorphism
+design styles. The previous release only updated the Modern sidebar's
+tabbed feed-tab content, leaving the legacy sidebar (used by both
+Classic and Glassmorphism) with the old single "📰 News" button —
+so users on those design styles couldn't reach the Following feed at
+all.
+
+### Added
+- **Feed-mode pills in the Classic / Glassmorphism sidebar.**
+  [src/components/Sidebar.tsx](src/components/Sidebar.tsx) replaces
+  the single `📰 News` nav-item with two adjacent `sidebar-nav-item`
+  rows — `🌐 Global` and `👥 Following` — rendered in the legacy
+  design style's compact visual language. Wires to the same
+  `?feed=...` URL query + auto-saved `defaultFeed` setting as the
+  Modern pills, and shows the muted-with-padlock state for the
+  Following row when the user has no wallet connected.
+- **`currentFeedMode()` hoisted to component scope.** Both
+  rendering paths (Modern tabbed sidebar, Classic/Glassmorphism
+  nav-item sidebar) now read the active feed mode through the same
+  helper — guarantees the two designs can never drift on "which
+  pill should be lit" logic.
+
 ## [1.21.0] - 2026-05-17
 
 Sidebar gains a feed-mode picker so the News tab can show either the

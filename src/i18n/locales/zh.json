@@ -158,6 +158,7 @@
   "bookmarks_empty": "没有收藏的帖子",
   "news_view_thread": "查看帖子",
   "news_view_post": "打开帖子",
+  "node_remove_known": "从列表中移除",
   "news_feed_global": "全局",
   "news_feed_global_desc": "网络上所有的公开帖子",
   "news_feed_following": "关注",
