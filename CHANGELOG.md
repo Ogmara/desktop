@@ -5,6 +5,25 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.1] - 2026-05-18
+
+Fix uncovered during cross-node bake-in: switching to a different
+L2 node only refreshed the cached HTTP client + WebSocket; every
+`createResource` in the app kept serving the previous node's
+cached payload. Channels, news feed, profile, DMs, follow lists,
+and images all showed stale data until the user manually closed
+and reopened the desktop app.
+
+### Fixed
+- **`switchNode` now triggers a full webview reload** after
+  persisting the new URL and tearing down the cached client/WS.
+  [src/lib/api.ts](src/lib/api.ts) calls `window.location.reload()`
+  at the end — every component refetches against the new node on
+  next mount. Cost: ~1s flicker on switch. Pattern mirrors what
+  Discord / Slack do when changing server. The synchronous
+  localStorage writes (`setSetting`, `addKnownNode`) complete
+  before the reload kicks in, so persistence is intact.
+
 ## [1.22.0] - 2026-05-17
 
 Cross-node node-picker bake-in on testnet (Odroid via Tailscale +

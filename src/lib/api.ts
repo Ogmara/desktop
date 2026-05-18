@@ -73,16 +73,26 @@ export function switchNode(nodeUrl: string): void {
   // Reset the WebSocket too so push events follow the new node.
   // Lazy-imported to break the api.ts ↔ ws.ts circular import chain
   // (ws.ts imports `getCurrentNodeUrl` from this file).
-  import('./ws').then(({ closeWs, initWs }) => {
+  import('./ws').then(({ closeWs }) => {
     closeWs();
-    // Re-init without the signer is fine — `auth.ts` re-arms the
-    // authenticated subscription on next wallet ready event. Calling
-    // initWs() here just establishes the anonymous tier so public
-    // channel updates start flowing immediately.
-    initWs();
   }).catch(() => {
     // ws module is optional at boot — ignore if not yet loaded.
   });
+  // Force a full webview reload so EVERY component refetches against
+  // the new node. Without this, every `createResource` in the app
+  // keeps serving the previous node's cached payload — channels,
+  // news feed, profile, DMs, follow lists, etc. all show stale data
+  // until the user manually closes and reopens the app. (Bug
+  // observed during cross-node bake-in 2026-05-18.)
+  //
+  // `setSetting` + `addKnownNode` above are synchronous localStorage
+  // writes so they're already persisted by the time reload fires;
+  // the WS dynamic import is in-flight but reload kills it cleanly.
+  // We don't re-init WS here because the post-reload boot path will
+  // do that on next mount.
+  if (typeof window !== 'undefined') {
+    window.location.reload();
+  }
 }
 
 /** Get the current node URL. */
