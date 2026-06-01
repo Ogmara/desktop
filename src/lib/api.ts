@@ -67,17 +67,7 @@ export function removeKnownNode(url: string): void {
  * "I switched to my Odroid but I still see the same news posts".
  */
 export function switchNode(nodeUrl: string): void {
-  setSetting('nodeUrl', nodeUrl);
-  addKnownNode(nodeUrl);
-  resetClient();
-  // Reset the WebSocket too so push events follow the new node.
-  // Lazy-imported to break the api.ts ↔ ws.ts circular import chain
-  // (ws.ts imports `getCurrentNodeUrl` from this file).
-  import('./ws').then(({ closeWs }) => {
-    closeWs();
-  }).catch(() => {
-    // ws module is optional at boot — ignore if not yet loaded.
-  });
+  switchNodeSilent(nodeUrl);
   // Force a full webview reload so EVERY component refetches against
   // the new node. Without this, every `createResource` in the app
   // keeps serving the previous node's cached payload — channels,
@@ -85,14 +75,124 @@ export function switchNode(nodeUrl: string): void {
   // until the user manually closes and reopens the app. (Bug
   // observed during cross-node bake-in 2026-05-18.)
   //
-  // `setSetting` + `addKnownNode` above are synchronous localStorage
-  // writes so they're already persisted by the time reload fires;
-  // the WS dynamic import is in-flight but reload kills it cleanly.
-  // We don't re-init WS here because the post-reload boot path will
-  // do that on next mount.
+  // The setting writes inside `switchNodeSilent` above are
+  // synchronous localStorage writes, so they're already persisted
+  // by the time reload fires.
   if (typeof window !== 'undefined') {
     window.location.reload();
   }
+}
+
+/**
+ * Silent variant — switches the active node WITHOUT a webview reload.
+ * Used by [`bootstrapNodeSelection`] to land on the chosen node
+ * before any component has mounted, so no `createResource` has yet
+ * cached the previous node's payload.
+ *
+ * Never call from user-driven UI — components built against the
+ * previous node won't refetch on their own. Use `switchNode` there.
+ */
+export function switchNodeSilent(nodeUrl: string): void {
+  setSetting('nodeUrl', nodeUrl);
+  addKnownNode(nodeUrl);
+  resetClient();
+  // Reset the WebSocket too so push events follow the new node.
+  // Lazy-imported to break the api.ts ↔ ws.ts circular import chain.
+  import('./ws').then(({ closeWs }) => {
+    closeWs();
+  }).catch(() => {
+    // ws module is optional at boot — ignore if not yet loaded.
+  });
+}
+
+/**
+ * User-pinned "always connect here first" node URL (v1.23.0+).
+ *
+ * Empty string = no pin → [`bootstrapNodeSelection`] picks the
+ * lowest-ping node at boot.
+ */
+export function getDefaultNodeUrl(): string {
+  return getSetting('defaultNodeUrl') || '';
+}
+
+/**
+ * Pin (or clear) the always-connect-here-first node URL. Pass an
+ * empty string or `null` to clear the pin and revert to best-ping
+ * selection on the next boot. Pinning a URL also adds it to
+ * `knownNodes` so the picker keeps surfacing it.
+ */
+export function setDefaultNodeUrl(url: string | null): void {
+  const v = url ?? '';
+  setSetting('defaultNodeUrl', v);
+  if (v) addKnownNode(v);
+}
+
+/**
+ * Boot-time node-selection driver (v1.23.0+ / spec 5 §1.1).
+ *
+ * Decision tree:
+ *   1. If `defaultNodeUrl` is pinned: try it with a 3 s ping timeout.
+ *      Reach? → land on it. Unreachable? → fall through with a
+ *      `default-unreachable-fallback` reason on the result so the
+ *      UI can surface a one-time notice.
+ *   2. Otherwise (or after step 1's fallback): ping every candidate
+ *      from `getAvailableNodes()`, pick the lowest finite ping.
+ *   3. If no candidate is reachable, leave `nodeUrl` as-is and
+ *      return `no-candidates`.
+ *
+ * Must be called BEFORE any `getClient()` use that fetches data.
+ */
+export type BootstrapReason =
+  | 'default'
+  | 'default-unreachable-fallback'
+  | 'best-ping'
+  | 'no-candidates';
+
+export interface BootstrapResult {
+  chosen: string;
+  reason: BootstrapReason;
+}
+
+let _lastBootstrapResult: BootstrapResult | null = null;
+
+/**
+ * Returns the most recent boot-time selection result, or `null` if
+ * boot hasn't completed yet. Picker UIs use this to surface a one-
+ * time notice when the pinned default was unreachable.
+ */
+export function getLastBootstrapResult(): BootstrapResult | null {
+  return _lastBootstrapResult;
+}
+
+export async function bootstrapNodeSelection(): Promise<BootstrapResult> {
+  const pinned = getDefaultNodeUrl();
+  if (pinned) {
+    const ping = await pingNode(pinned, 3000, { allowPrivateHosts: true });
+    if (ping !== Infinity) {
+      if (pinned !== getCurrentNodeUrl()) switchNodeSilent(pinned);
+      const result: BootstrapResult = { chosen: pinned, reason: 'default' };
+      _lastBootstrapResult = result;
+      return result;
+    }
+    // Fall through to best-ping with the default-fallback reason.
+  }
+
+  const candidates = await getAvailableNodes().catch(() => [] as NodeWithPing[]);
+  const reachable = candidates.filter((c) => c.ping !== Infinity);
+  if (reachable.length > 0) {
+    reachable.sort((a, b) => a.ping - b.ping);
+    const best = reachable[0].url;
+    if (best !== getCurrentNodeUrl()) switchNodeSilent(best);
+    const result: BootstrapResult = {
+      chosen: best,
+      reason: pinned ? 'default-unreachable-fallback' : 'best-ping',
+    };
+    _lastBootstrapResult = result;
+    return result;
+  }
+  const result: BootstrapResult = { chosen: getCurrentNodeUrl(), reason: 'no-candidates' };
+  _lastBootstrapResult = result;
+  return result;
 }
 
 /** Get the current node URL. */

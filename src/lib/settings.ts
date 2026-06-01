@@ -61,6 +61,20 @@ export interface Settings {
    * added URLs end up in this array.
    */
   knownNodes: string[];
+  /**
+   * User-pinned "always connect here first" node URL (v1.23.0+).
+   *
+   * Empty string = no pin → boot picks the lowest-ping node from
+   * `knownNodes ∪ DEFAULT_NODE_URL ∪ peers-of-current-node`.
+   *
+   * Set via the `★` toggle in the node picker. When set, the boot
+   * sequence tries this URL first with a 3 s timeout; on failure it
+   * silently falls back to best-ping and surfaces a one-time
+   * "default unreachable" notice. Useful for private channels
+   * hosted natively at a specific node — pinning it guarantees the
+   * client always lands there first.
+   */
+  defaultNodeUrl: string;
 }
 
 const defaults: Settings = {
@@ -87,6 +101,7 @@ const defaults: Settings = {
   currency: 'usd',
   defaultFeed: 'global',
   knownNodes: [],
+  defaultNodeUrl: '',
 };
 
 /** Load a setting from localStorage with fallback to default. */

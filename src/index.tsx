@@ -5,7 +5,7 @@ import { App } from './App';
 import { initI18n } from './i18n/init';
 import { initTheme } from './lib/theme';
 import { setContractAddress, setKleverNetwork } from './lib/klever';
-import { getClient } from './lib/api';
+import { getClient, bootstrapNodeSelection } from './lib/api';
 import { getSetting } from './lib/settings';
 import { installNetworkActivityTracker } from './lib/network-activity';
 import './styles/global.css';
@@ -83,11 +83,19 @@ if (getSetting('compactLayout')) {
 // App.tsx calls initAuth() after runVaultMigrations(), then the WS
 // connection is properly started with the signer if available.
 
-// Fetch node config for on-chain operations (contract address + network)
-getClient().networkStats().then((stats: any) => {
-  if (stats?.contract_address) setContractAddress(stats.contract_address);
-  if (stats?.network) setKleverNetwork(stats.network);
-}).catch(() => { /* node may be unreachable at startup */ });
+// Bootstrap node selection (v1.23.0+ / spec 5 §1.1): land on the
+// pinned default if set and reachable, otherwise pick the lowest-
+// ping candidate. Runs BEFORE the networkStats fetch so on-chain
+// config comes from the right node.
+bootstrapNodeSelection()
+  .catch(() => { /* leave nodeUrl as-is */ })
+  .finally(() => {
+    // Fetch node config for on-chain operations (contract address + network)
+    getClient().networkStats().then((stats: any) => {
+      if (stats?.contract_address) setContractAddress(stats.contract_address);
+      if (stats?.network) setKleverNetwork(stats.network);
+    }).catch(() => { /* node may be unreachable at startup */ });
+  });
 
 // Disable native browser context menu globally so only in-app right-click menus appear.
 // Allow native context menu on text inputs/textareas for paste/spellcheck.

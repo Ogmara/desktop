@@ -5,6 +5,49 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.23.0] - 2026-06-01
+
+Default-node pinning + best-ping bootstrap (spec 5 §1.1 / spec 13
+§10.8). Lands alongside l2-node v0.48.0 + sdk-rust/js + website
+v0.9.0 — completes Phase 4 of the presence-gossip rollout for the
+desktop client.
+
+### Added
+
+- **`defaultNodeUrl` setting** — user-pinned "always connect here
+  first" node URL. Set via the ★ toggle in the node picker. When
+  set, the boot sequence tries this URL first; otherwise it picks
+  the lowest-ping candidate. Useful for private channels hosted
+  natively at a specific node — pinning guarantees the desktop
+  app always lands there (including LAN nodes via the
+  `allowPrivateHosts` opt-in that the desktop already uses).
+- **`bootstrapNodeSelection()`** runs once at app boot before any
+  authenticated fetch:
+  1. If a default is pinned and reachable within 3 s → land on it.
+  2. Otherwise (or if the pinned default is unreachable) → ping
+     `knownNodes ∪ DEFAULT_NODE_URL ∪ peers-of-current-node` and
+     land on the lowest finite ping.
+  3. If no candidate is reachable → leave `nodeUrl` as-is; the
+     existing "Network unavailable" error path takes over.
+- **`switchNodeSilent(url)`** — public helper used by bootstrap.
+  Same as `switchNode` minus the `window.location.reload()`, so
+  the boot-time switch doesn't restart the webview mid-init.
+- **★ / ☆ pin toggle** in the node picker. Per-row star button
+  flips the pinned-default state without switching nodes. A new
+  "Default: foo.example.org" summary row at the top of the
+  dropdown surfaces the pin when set.
+- **"Default unreachable" boot notice** appears once in the
+  picker when the pinned default failed the 3 s probe at boot
+  and we silently fell back to best-ping. Dismissable.
+- **CSS** for the new picker affordances: gold inset bar on the
+  pinned row, gold star for active pins, amber notice strip.
+
+### Changed
+
+- **`switchNode(url)`** is now a thin wrapper around
+  `switchNodeSilent(url)` + `window.location.reload()`. No
+  behaviour change for user-driven switches.
+
 ## [1.22.1] - 2026-05-18
 
 Fix uncovered during cross-node bake-in: switching to a different

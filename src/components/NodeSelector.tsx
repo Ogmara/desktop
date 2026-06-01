@@ -7,7 +7,16 @@
 
 import { Component, createResource, createSignal, For, Show } from 'solid-js';
 import { t } from '../i18n/init';
-import { getCurrentNodeUrl, getAvailableNodes, switchNode, removeKnownNode, getKnownNodes } from '../lib/api';
+import {
+  getCurrentNodeUrl,
+  getAvailableNodes,
+  switchNode,
+  removeKnownNode,
+  getKnownNodes,
+  getDefaultNodeUrl,
+  setDefaultNodeUrl,
+  getLastBootstrapResult,
+} from '../lib/api';
 import { DEFAULT_NODE_URL } from '@ogmara/sdk';
 import type { NodeWithPing } from '@ogmara/sdk';
 import { pingNode, validateNodeUrl } from '@ogmara/sdk';
@@ -19,6 +28,24 @@ export const NodeSelector: Component = () => {
   const [manualUrl, setManualUrl] = createSignal('');
   const [addError, setAddError] = createSignal('');
   const [adding, setAdding] = createSignal(false);
+  const [defaultUrl, setDefaultUrl] = createSignal(getDefaultNodeUrl());
+
+  // One-time notice when boot couldn't reach the pinned default and
+  // fell back to best-ping. Cleared after the user opens the dropdown
+  // (the picker UI is the place to fix the issue anyway).
+  const bootResult = getLastBootstrapResult();
+  const [bootNotice, setBootNotice] = createSignal(
+    bootResult && bootResult.reason === 'default-unreachable-fallback'
+      ? bootResult.chosen
+      : '',
+  );
+
+  const togglePin = (url: string) => {
+    const current = defaultUrl();
+    const next = current === url ? '' : url;
+    setDefaultNodeUrl(next || null);
+    setDefaultUrl(next);
+  };
 
   const [nodes, { refetch }] = createResource(async () => {
     return getAvailableNodes();
@@ -152,6 +179,28 @@ export const NodeSelector: Component = () => {
             <span>{t('settings_node_url')}</span>
             <button class="node-refresh" onClick={handleRefresh}>↻</button>
           </div>
+          <Show when={bootNotice()}>
+            <div class="node-boot-notice">
+              {t('node_default_unreachable_notice') ||
+                'Pinned default node unreachable — using best-ping fallback'}
+              <button
+                class="node-boot-dismiss"
+                onClick={() => setBootNotice('')}
+                title="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+          </Show>
+          <Show when={defaultUrl()}>
+            <div class="node-default-summary">
+              <span class="node-star-active">★</span>{' '}
+              {t('node_default_pinned') || 'Default'}:{' '}
+              <span class="node-default-url">
+                {defaultUrl().replace(/^https?:\/\//, '')}
+              </span>
+            </div>
+          </Show>
           <Show when={!nodes.loading} fallback={<div class="node-loading">{t('loading')}</div>}>
             <For each={nodes()}>
               {(node: NodeWithPing) => {
@@ -165,8 +214,28 @@ export const NodeSelector: Component = () => {
                   getKnownNodes().includes(node.url) &&
                   node.url !== DEFAULT_NODE_URL &&
                   node.url !== currentUrl();
+                const isPinned = () => defaultUrl() === node.url;
                 return (
-                  <div class={`node-option-row ${node.url === currentUrl() ? 'active' : ''}`}>
+                  <div
+                    class={`node-option-row ${node.url === currentUrl() ? 'active' : ''} ${
+                      isPinned() ? 'pinned' : ''
+                    }`}
+                  >
+                    <button
+                      class={`node-option-pin ${isPinned() ? 'pinned' : ''}`}
+                      title={
+                        isPinned()
+                          ? t('node_unpin_default') || 'Clear pinned default'
+                          : t('node_pin_default') ||
+                            'Pin as default — always connect here first'
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        togglePin(node.url);
+                      }}
+                    >
+                      {isPinned() ? '★' : '☆'}
+                    </button>
                     <button
                       class="node-option"
                       onClick={() => handleSelect(node.url)}
@@ -281,6 +350,48 @@ export const NodeSelector: Component = () => {
         }
         .node-option-row.active { background: var(--color-bg-tertiary); font-weight: 600; }
         .node-option-row:hover { background: var(--color-bg-tertiary); }
+        .node-option-row.pinned { box-shadow: inset 3px 0 0 var(--color-warning, #eab308); }
+        .node-option-pin {
+          display: flex;
+          align-items: center;
+          padding: 0 8px;
+          background: transparent;
+          color: var(--color-text-secondary);
+          font-size: 14px;
+          cursor: pointer;
+          opacity: 0.45;
+          transition: opacity 120ms, color 120ms;
+        }
+        .node-option-pin:hover { opacity: 1; color: var(--color-warning, #eab308); }
+        .node-option-pin.pinned { opacity: 1; color: var(--color-warning, #eab308); }
+        .node-default-summary {
+          padding: var(--spacing-xs) var(--spacing-sm);
+          font-size: var(--font-size-xs);
+          color: var(--color-text-secondary);
+          background: var(--color-bg-tertiary);
+          border-bottom: 1px solid var(--color-border);
+        }
+        .node-star-active { color: var(--color-warning, #eab308); }
+        .node-default-url { color: var(--color-text-primary); font-weight: 600; }
+        .node-boot-notice {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: var(--spacing-xs);
+          padding: var(--spacing-xs) var(--spacing-sm);
+          font-size: var(--font-size-xs);
+          color: var(--color-warning, #eab308);
+          background: rgba(234, 179, 8, 0.08);
+          border-bottom: 1px solid var(--color-border);
+        }
+        .node-boot-dismiss {
+          background: transparent;
+          color: inherit;
+          padding: 0 4px;
+          cursor: pointer;
+          opacity: 0.7;
+        }
+        .node-boot-dismiss:hover { opacity: 1; }
         .node-option {
           display: flex;
           justify-content: space-between;
