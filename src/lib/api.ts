@@ -2,16 +2,33 @@
  * Ogmara SDK integration — shared client instance.
  */
 
-import { OgmaraClient, DEFAULT_NODE_URL, discoverAndPingNodes, pingNode, type NodeWithPing } from '@ogmara/sdk';
+import { OgmaraClient, DEFAULT_NODE_URL, discoverAndPingNodes, pingNode, validateNodeUrl, type NodeWithPing } from '@ogmara/sdk';
 import { getSetting, setSetting } from './settings';
+import { vaultGetSigner } from './vault';
 
 let client: OgmaraClient | null = null;
 
-/** Get or create the shared API client. */
+/**
+ * Get or create the shared API client.
+ *
+ * The signer is RE-ATTACHED on every (re)creation from the vault's
+ * in-memory `cachedSigner`. This decouples signer lifetime from client
+ * lifetime: any `resetClient()` (e.g. a node switch) used to silently
+ * drop the signer, so the next `getClient()` produced a signer-less
+ * client and the next authenticated call threw "Signer required for
+ * authenticated endpoints". This bit hard during boot, where
+ * `bootstrapNodeSelection()` runs concurrently with `initAuth()` and
+ * can call `switchNodeSilent()` → `resetClient()` AFTER the signer was
+ * attached. Re-reading the vault signer here makes the client robust
+ * regardless of reset ordering — when the vault is locked/empty
+ * `vaultGetSigner()` returns null and we attach nothing (correct).
+ */
 export function getClient(): OgmaraClient {
   if (!client) {
     const nodeUrl = getSetting('nodeUrl') || DEFAULT_NODE_URL;
     client = new OgmaraClient({ nodeUrl });
+    const signer = vaultGetSigner();
+    if (signer) client.withSigner(signer);
   }
   return client;
 }
@@ -68,6 +85,20 @@ export function removeKnownNode(url: string): void {
  */
 export function switchNode(nodeUrl: string): void {
   switchNodeSilent(nodeUrl);
+  // Mark this as an EXPLICIT user choice so the post-reload
+  // `bootstrapNodeSelection()` honors it instead of re-running its
+  // best-ping (or pinned-default) selection and bouncing the user
+  // onto a different node. Without this, "switch to X" reloaded, then
+  // bootstrap immediately re-picked the lowest-ping candidate — so a
+  // manual switch never actually stuck, and switching *back* to a
+  // higher-ping original node silently landed somewhere else (which
+  // then sat on the loading spinner if that node was flaky). Survives
+  // the reload via sessionStorage (cleared once consumed at boot).
+  try {
+    sessionStorage.setItem('ogmara:explicitNode', nodeUrl);
+  } catch {
+    /* sessionStorage unavailable — fall back to best-ping after reload */
+  }
   // Force a full webview reload so EVERY component refetches against
   // the new node. Without this, every `createResource` in the app
   // keeps serving the previous node's cached payload — channels,
@@ -93,13 +124,34 @@ export function switchNode(nodeUrl: string): void {
  * previous node won't refetch on their own. Use `switchNode` there.
  */
 export function switchNodeSilent(nodeUrl: string): void {
+  // Validate at this single choke point so EVERY switch path — picker,
+  // manual-add, pinned-default, best-ping, and the explicit-flag boot
+  // path — is covered uniformly. A compromised current node can
+  // advertise arbitrary peer URLs via the peer registry, and best-ping
+  // would otherwise switch (and now auto-attach the signer) to them
+  // without any check. `allowPrivateHosts: true` keeps LAN/Odroid/dev
+  // nodes usable — matching the rest of the desktop's posture — while
+  // still rejecting malformed, non-http, over-long, or unparseable
+  // URLs. On rejection we keep the current node rather than switch to
+  // garbage. (Security audit, v0.19.0 SDK validateNodeUrl.)
+  if (!validateNodeUrl(nodeUrl, { allowPrivateHosts: true })) {
+    return;
+  }
   setSetting('nodeUrl', nodeUrl);
   addKnownNode(nodeUrl);
   resetClient();
-  // Reset the WebSocket too so push events follow the new node.
-  // Lazy-imported to break the api.ts ↔ ws.ts circular import chain.
-  import('./ws').then(({ closeWs }) => {
-    closeWs();
+  // RECONNECT (not just close) the WebSocket so push events follow the
+  // new node — but ONLY if a socket is already live. At cold boot the
+  // connection is owned by App.tsx's `startWebSocket()` (which attaches
+  // the vault signer after `initAuth()`); a concurrent
+  // `bootstrapNodeSelection()` switch must not open its own anonymous
+  // socket and race to be the last writer (that dropped DM push). Once
+  // the app is running, `wsIsActive()` is true and the switch correctly
+  // reconnects with the current vault signer (anon only if still
+  // locked). `initWs()` closes any existing socket first. Lazy-imported
+  // to break the api.ts ↔ ws.ts circular import chain.
+  import('./ws').then(({ initWs, wsIsActive }) => {
+    if (wsIsActive()) initWs(vaultGetSigner() ?? undefined);
   }).catch(() => {
     // ws module is optional at boot — ignore if not yet loaded.
   });
@@ -165,6 +217,25 @@ export function getLastBootstrapResult(): BootstrapResult | null {
 }
 
 export async function bootstrapNodeSelection(): Promise<BootstrapResult> {
+  // An explicit user switch (picker / manual-add) triggers a webview
+  // reload, which re-enters this function. Honor that choice verbatim
+  // — skip pin + best-ping entirely — so the node the user picked is
+  // the node they land on. The flag is one-shot: consumed here so the
+  // NEXT cold boot resumes normal pinned/best-ping selection.
+  let explicit = '';
+  try {
+    explicit = sessionStorage.getItem('ogmara:explicitNode') || '';
+    if (explicit) sessionStorage.removeItem('ogmara:explicitNode');
+  } catch {
+    /* sessionStorage unavailable — ignore, fall through to normal path */
+  }
+  if (explicit) {
+    if (explicit !== getCurrentNodeUrl()) switchNodeSilent(explicit);
+    const result: BootstrapResult = { chosen: explicit, reason: 'default' };
+    _lastBootstrapResult = result;
+    return result;
+  }
+
   const pinned = getDefaultNodeUrl();
   if (pinned) {
     const ping = await pingNode(pinned, 3000, { allowPrivateHosts: true });

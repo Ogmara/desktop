@@ -5,6 +5,73 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.24.0] - 2026-06-04
+
+Media-capability awareness: gracefully handle nodes that can't host
+files (no IPFS backend, or the Kubo daemon is offline — e.g. a text-only
+deployment). Previously, switching to such a node made image uploads
+fail with a bare `API error (500): upload failed` and showed broken-image
+placeholders for media uploaded elsewhere, with no explanation. Requires
+l2-node 0.48.7+ (reports `media_uploads` on `/api/v1/health`) and
+@ogmara/sdk 0.20.0+.
+
+### Added
+
+- New [media.ts](src/lib/media.ts) reads the current node's `media_uploads`
+  health flag at boot and exposes a `mediaUploadsAvailable()` signal.
+  Treats an absent flag (older nodes) as "available" so behavior is
+  unchanged against nodes that don't report it.
+- The attach/upload button ([MediaUpload](src/components/MediaUpload.tsx))
+  is disabled with an explanatory label + tooltip ("This node doesn't
+  host files. Switch to a node with media support…") when the node can't
+  host media — across all composers (chat, news, comments, DMs).
+- Inline message images that fail to load now render a readable
+  "Image hosted on another node — switch nodes to view" placeholder
+  ([FormattedText](src/components/FormattedText.tsx)) instead of the
+  browser's broken-image icon.
+- i18n keys `media_node_no_upload`, `media_node_no_upload_hint`,
+  `media_image_other_node` added to all 7 locales.
+
+## [1.23.1] - 2026-06-04
+
+Regression fixes for the v1.23.0 node-picker bootstrap. All three were
+introduced by, or surfaced through, the pinned-default + best-ping
+change.
+
+### Fixed
+
+- **"Signer required for authenticated endpoints" after switching
+  nodes.** The SDK signer was bound to a single client instance, so
+  any `resetClient()` (every node switch) silently dropped it; the next
+  authenticated call (e.g. sending a chat message) threw. At boot this
+  raced badly: `bootstrapNodeSelection()` runs concurrently with
+  `initAuth()` and can `resetClient()` *after* the signer was attached.
+  `getClient()` now re-attaches the vault signer on every (re)creation,
+  decoupling signer lifetime from client lifetime. NOTE: the L2 node
+  verifies auth headers statelessly (Ed25519 signature against the
+  address), so this was never a cross-node "unknown user" problem — it
+  was purely a client-side signer-lifetime bug.
+- **A manual node switch didn't stick; switching back to the original
+  node left the app stuck on the loading spinner.** `switchNode()`
+  reloads the webview, which re-entered `bootstrapNodeSelection()` —
+  and that unconditionally re-ran best-ping (or pinned-default)
+  selection, bouncing the user onto a different node than the one they
+  picked. A user switch is now recorded as an explicit one-shot choice
+  (sessionStorage) that bootstrap honors verbatim, so you land exactly
+  on the node you selected.
+- **Real-time updates died after a silent node switch.**
+  `switchNodeSilent()` only *closed* the WebSocket; it now *reconnects*
+  to the new node (with the current vault signer, anon if locked), so
+  push events follow the active node instead of stopping until the next
+  full reload.
+- **Node-picker ping label overlapped the ✕ remove button, making nodes
+  unremovable.** Adding the ★ pin button in v1.23.0 tightened each row;
+  the `.node-option` flex item had no `min-width: 0` and the ping/remove
+  controls no `flex-shrink: 0`, so a long URL (e.g. the tailscale host)
+  plus the bold active-row state overflowed and slid the ping on top of
+  the ✕. The URL now truncates with an ellipsis and the ping + buttons
+  hold their width.
+
 ## [1.23.0] - 2026-06-01
 
 Default-node pinning + best-ping bootstrap (spec 5 §1.1 / spec 13

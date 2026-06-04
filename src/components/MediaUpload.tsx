@@ -8,6 +8,7 @@
 import { Component, createSignal, For, Show } from 'solid-js';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
+import { mediaUploadsAvailable } from '../lib/media';
 import { safeAttachmentName } from '../lib/payload';
 
 /** Attachment data returned after successful upload. */
@@ -46,10 +47,23 @@ export const MediaUpload: Component<{
   const [uploadError, setUploadError] = createSignal('');
   let fileInputRef: HTMLInputElement | undefined;
 
+  // Whether the CURRENT node can host files (IPFS up). When false we
+  // disable the picker entirely and explain why, so the user never hits
+  // the confusing "upload failed" / broken-image path on a text-only node.
+  const mediaOff = () => !mediaUploadsAvailable();
+
   const handleFileSelect = async (e: Event) => {
     const input = e.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
+
+    // Defensive: the button is disabled when media is off, but guard the
+    // handler too in case it's invoked some other way (drag/drop, etc.).
+    if (mediaOff()) {
+      input.value = '';
+      setUploadError(t('media_node_no_upload_hint'));
+      return;
+    }
 
     // Reset input so the same file can be re-selected
     input.value = '';
@@ -131,13 +145,20 @@ export const MediaUpload: Component<{
       <button
         class="media-upload-btn"
         onClick={() => fileInputRef?.click()}
-        disabled={props.disabled || uploading()}
-        title={t('media_attach')}
+        disabled={props.disabled || uploading() || mediaOff()}
+        title={mediaOff() ? t('media_node_no_upload_hint') : t('media_attach')}
       >
-        {uploading() ? '⏳' : '📎'} {uploading() ? t('media_uploading') : t('media_attach')}
+        {uploading() ? '⏳' : '📎'}{' '}
+        {uploading()
+          ? t('media_uploading')
+          : mediaOff()
+            ? t('media_node_no_upload')
+            : t('media_attach')}
       </button>
 
-      <span class="media-hint">{t('media_hint')}</span>
+      <span class="media-hint">
+        {mediaOff() ? t('media_node_no_upload_hint') : t('media_hint')}
+      </span>
 
       <Show when={uploadError()}>
         <span class="media-error">{uploadError()}</span>

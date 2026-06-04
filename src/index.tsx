@@ -95,6 +95,12 @@ bootstrapNodeSelection()
       if (stats?.contract_address) setContractAddress(stats.contract_address);
       if (stats?.network) setKleverNetwork(stats.network);
     }).catch(() => { /* node may be unreachable at startup */ });
+    // Probe whether this node can host media (IPFS up). Gates the
+    // attach button + image placeholders. Fire-and-forget — the signal
+    // defaults to "available" until this resolves with an explicit false.
+    import('./lib/media').then(({ refreshMediaCapability }) => {
+      refreshMediaCapability();
+    }).catch(() => { /* non-critical */ });
   });
 
 // Disable native browser context menu globally so only in-app right-click menus appear.

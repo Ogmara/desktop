@@ -354,6 +354,7 @@ export const NodeSelector: Component = () => {
         .node-option-pin {
           display: flex;
           align-items: center;
+          flex-shrink: 0;
           padding: 0 8px;
           background: transparent;
           color: var(--color-text-secondary);
@@ -397,6 +398,14 @@ export const NodeSelector: Component = () => {
           justify-content: space-between;
           align-items: center;
           flex: 1;
+          /* Allow the button to shrink below its content's intrinsic
+             width. Without this (flex items default to min-width:auto)
+             a long URL like the tailscale host + the ping label can't
+             shrink, so the row overflows and the ping slides on top of
+             the ✕ remove button — making it unclickable. Regressed in
+             v1.23.0 when the ★ pin button stole ~30px of row width. */
+          min-width: 0;
+          gap: var(--spacing-sm);
           padding: var(--spacing-sm);
           text-align: left;
           font-size: var(--font-size-sm);
@@ -406,6 +415,7 @@ export const NodeSelector: Component = () => {
         .node-option:hover { background: var(--color-bg-tertiary); }
         .node-option.active { background: var(--color-bg-tertiary); font-weight: 600; }
         .node-option-remove {
+          flex-shrink: 0;
           padding: 0 10px;
           background: transparent;
           color: var(--color-text-secondary);
@@ -421,9 +431,25 @@ export const NodeSelector: Component = () => {
           display: flex;
           align-items: center;
           gap: var(--spacing-xs);
+          /* Take the slack and clip the URL rather than push the ping
+             into the remove button. */
+          min-width: 0;
+          flex: 1;
+          overflow: hidden;
         }
-        .node-option-url { color: var(--color-text-primary); }
-        .node-ping { font-size: var(--font-size-xs); font-weight: 600; }
+        .node-option-url {
+          color: var(--color-text-primary);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        /* Ping label keeps its full width and never overlaps the ✕. */
+        .node-ping {
+          flex-shrink: 0;
+          white-space: nowrap;
+          font-size: var(--font-size-xs);
+          font-weight: 600;
+        }
         .node-loading {
           padding: var(--spacing-md);
           text-align: center;

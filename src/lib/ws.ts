@@ -47,6 +47,20 @@ export function initWs(signer?: WalletSigner): void {
   });
 }
 
+/**
+ * True if a WebSocket subscription currently exists (connected or
+ * mid-reconnect). Used by `switchNodeSilent` to decide whether to
+ * follow a node switch: at cold boot the connection is owned solely
+ * by App.tsx's `startWebSocket()` (which attaches the vault signer
+ * after `initAuth()`), so a concurrent `bootstrapNodeSelection()`
+ * switch must NOT open its own — possibly anonymous — socket and race
+ * to be the last writer. Once the app is running, a live subscription
+ * exists and a switch correctly reconnects to the new node.
+ */
+export function wsIsActive(): boolean {
+  return subscription !== null;
+}
+
 /** Close the WebSocket connection. */
 export function closeWs(): void {
   if (subscription) {
