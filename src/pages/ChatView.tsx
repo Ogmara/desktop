@@ -6,6 +6,7 @@
 import { Component, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup, untrack } from 'solid-js';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
+import { avatarUrl } from '../lib/ownAvatar';
 import { authStatus, getSigner, walletAddress, isRegistered } from '../lib/auth';
 // Desktop tracks `wsConnected` so we can pause polling while the WS is alive
 // (avoids the duplicate-messages bug fixed in v1.15.1).
@@ -1139,7 +1140,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                             <Show when={prof()?.avatar_cid} fallback={
                               <span class="msg-avatar-placeholder">{(prof()?.display_name || msg.author).slice(0, 2).toUpperCase()}</span>
                             }>
-                              <img class="msg-avatar" src={getClient().getMediaUrl(prof()!.avatar_cid!)} alt="" />
+                              <img class="msg-avatar" src={avatarUrl(prof()!.avatar_cid!)} alt="" />
                             </Show>
                             <span class="message-author" onClick={() => navigate(`/user/${msg.author}`)}>{displayName(msg.author)}</span>
                             <Show when={prof()?.verified}><span class="msg-verified">✓</span></Show>
@@ -1182,7 +1183,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                               <Show when={prof()?.avatar_cid} fallback={
                                 <div class="msg-avatar-placeholder" onClick={() => navigate(`/user/${msg.author}`)}>{(prof()?.display_name || msg.author).slice(0, 2).toUpperCase()}</div>
                               }>
-                                <img class="msg-avatar" src={getClient().getMediaUrl(prof()!.avatar_cid!)} alt="" onClick={() => navigate(`/user/${msg.author}`)} />
+                                <img class="msg-avatar" src={avatarUrl(prof()!.avatar_cid!)} alt="" onClick={() => navigate(`/user/${msg.author}`)} />
                               </Show>
                             </Show>
                           </div>

@@ -13,6 +13,7 @@ import { vaultGetSigner } from './vault';
 import { t } from '../i18n/init';
 import { requireTxConfirmation } from './txConfirm';
 import { stripBidi } from './sanitize';
+import { getSetting, setSetting } from './settings';
 
 // Bundled logos for native Klever tokens. The Klever asset-details API's
 // logo URL for KLV currently points to a host that no longer serves the
@@ -43,11 +44,13 @@ export const kleverConnecting = () => false;
 
 // --- Network Configuration ---
 
-let kleverProvider = {
-  api: 'https://api.mainnet.klever.org',
-  node: 'https://node.mainnet.klever.org',
-};
-let currentNetwork = 'mainnet';
+// Initialize from the last-known network (persisted) so cold-boot SC node
+// discovery targets the right registry BEFORE we've reached any node to read
+// its `networkStats.network`. Defaults to mainnet (the production registry).
+let currentNetwork = getSetting('kleverNetwork') === 'testnet' ? 'testnet' : 'mainnet';
+let kleverProvider = currentNetwork === 'testnet'
+  ? { api: 'https://api.testnet.klever.org', node: 'https://node.testnet.klever.org' }
+  : { api: 'https://api.mainnet.klever.org', node: 'https://node.mainnet.klever.org' };
 
 /** Ogmara KApp smart contract address. */
 let scAddress = '';
@@ -60,9 +63,17 @@ export function getExplorerUrl(): string {
 }
 
 
+/** Current Klever network for SC discovery / explorer links. */
+export function getKleverNetwork(): 'mainnet' | 'testnet' {
+  return currentNetwork === 'testnet' ? 'testnet' : 'mainnet';
+}
+
 /** Set the Klever network provider URLs (called after fetching node stats). */
 export function setKleverNetwork(network: string): void {
   currentNetwork = network;
+  // Persist so the NEXT cold boot's SC node discovery targets this network
+  // before any node has been reached. Only mainnet/testnet are valid.
+  setSetting('kleverNetwork', network === 'testnet' ? 'testnet' : 'mainnet');
   if (network === 'testnet') {
     kleverProvider = {
       api: 'https://api.testnet.klever.org',

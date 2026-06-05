@@ -12,6 +12,7 @@ import { authStatus, walletAddress } from '../lib/auth';
 import { navigate, route } from '../lib/router';
 import { getSetting, setSetting } from '../lib/settings';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
+import { ownAvatar } from '../lib/ownAvatar';
 import { isMobileViewport, showMobileDetail, showMobileList, mobileListOpen } from '../lib/mobile-nav';
 import { isModernStyle } from '../lib/theme';
 import { getTheme, setTheme } from '../lib/theme';
@@ -167,6 +168,16 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     const addr = walletAddress();
     if (addr) resolveProfile(addr).then(setBurgerProfile);
   });
+
+  // Avatar shown in the burger menu (the OWN user). Prefer the locally-cached
+  // own avatar (renders on any node, even IPFS-less ones); else the node's
+  // media URL if the profile carries an avatar_cid; else null → initials.
+  const burgerAvatarSrc = (): string | null => {
+    const cached = ownAvatar();
+    if (cached) return cached.dataUrl;
+    const cid = burgerProfile().avatar_cid;
+    return cid ? getClient().getMediaUrl(cid) : null;
+  };
 
   const modernNavTo = (path: string) => {
     setBurgerOpen(false);
@@ -572,9 +583,16 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
               <Show when={authStatus() === 'ready' && walletAddress()}>
                 <button style="display:flex; align-items:center; gap:8px; padding:8px 12px; width:100%; text-align:left; border-radius:var(--radius-sm); cursor:pointer"
                   onClick={() => modernNavTo(`/user/${walletAddress()}`)}>
-                  <span style="width:36px; height:36px; border-radius:50%; background:var(--color-accent-bg); color:var(--color-accent-primary); display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; flex-shrink:0">
-                    {(burgerProfile().display_name || walletAddress() || '').slice(0, 2).toUpperCase()}
-                  </span>
+                  <Show
+                    when={burgerAvatarSrc()}
+                    fallback={
+                      <span style="width:36px; height:36px; border-radius:50%; background:var(--color-accent-bg); color:var(--color-accent-primary); display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; flex-shrink:0">
+                        {(burgerProfile().display_name || walletAddress() || '').slice(0, 2).toUpperCase()}
+                      </span>
+                    }
+                  >
+                    <img src={burgerAvatarSrc()!} alt="" style="width:36px; height:36px; border-radius:50%; object-fit:cover; flex-shrink:0" />
+                  </Show>
                   <div style="overflow:hidden">
                     <div style="font-weight:600; font-size:var(--font-size-sm); color:var(--color-text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">
                       {burgerProfile().display_name || `${walletAddress()?.slice(0, 8)}...${walletAddress()?.slice(-4)}`}

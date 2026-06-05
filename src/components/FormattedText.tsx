@@ -11,42 +11,9 @@ import { parseMessageContent, type TextSegment, type Attachment } from '@ogmara/
 import { getClient } from '../lib/api';
 import { navigate } from '../lib/router';
 import { getSetting } from '../lib/settings';
-import { t } from '../i18n/init';
 import { VideoAttachment } from './VideoAttachment';
+import { MediaImage } from './MediaImage';
 import { safeAttachmentName } from '../lib/payload';
-
-/**
- * Inline message image with a graceful failure state. When the CID can't
- * be fetched from the current node — most commonly because the image was
- * uploaded to a different node and THIS node has no IPFS backend (so it
- * returns 503/404) — we replace the browser's broken-image icon with a
- * readable "hosted on another node — switch nodes to view" placeholder.
- * Per-image local error state, so one missing attachment doesn't affect
- * the others. (l2-node 0.48.7 media-capability UX.)
- */
-const MsgImage: Component<{ thumbSrc: string; fullUrl: string; alt: string }> = (props) => {
-  const [errored, setErrored] = createSignal(false);
-  return (
-    <Show
-      when={!errored()}
-      fallback={
-        <div class="msg-image-missing" title={props.alt}>
-          <span class="msg-image-missing-icon" aria-hidden="true">🖼️</span>
-          <span class="msg-image-missing-text">{t('media_image_other_node')}</span>
-        </div>
-      }
-    >
-      <img
-        src={props.thumbSrc}
-        alt={props.alt}
-        class="msg-image"
-        loading="lazy"
-        onClick={() => setLightboxUrl(props.fullUrl)}
-        onError={() => setErrored(true)}
-      />
-    </Show>
-  );
-};
 
 interface Props {
   content: string;
@@ -219,12 +186,13 @@ export const FormattedText: Component<Props> = (props) => {
 
               if (isImage && autoload) {
                 return (
-                  <MsgImage
-                    thumbSrc={att.thumbnail_cid
+                  <MediaImage
+                    src={att.thumbnail_cid
                       ? getClient().getMediaUrl(att.thumbnail_cid)
                       : mediaUrl}
-                    fullUrl={mediaUrl}
                     alt={att.filename || 'image'}
+                    class="msg-image"
+                    onOpen={() => setLightboxUrl(mediaUrl)}
                   />
                 );
               }
@@ -283,24 +251,6 @@ export const FormattedText: Component<Props> = (props) => {
           object-fit: cover;
         }
         .msg-image:hover { opacity: 0.9; }
-        .msg-image-missing {
-          display: inline-flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          gap: var(--spacing-xs);
-          width: 220px;
-          max-width: 100%;
-          min-height: 120px;
-          padding: var(--spacing-md);
-          border: 1px dashed var(--color-border);
-          border-radius: var(--radius-md);
-          background: var(--color-bg-tertiary);
-          color: var(--color-text-secondary);
-          text-align: center;
-        }
-        .msg-image-missing-icon { font-size: 28px; opacity: 0.7; }
-        .msg-image-missing-text { font-size: var(--font-size-xs); line-height: 1.4; }
         .msg-video {
           max-width: 400px;
           max-height: 300px;

@@ -10,7 +10,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { t } from '../i18n/init';
 import { navigate, route } from '../lib/router';
 import { authStatus, walletAddress } from '../lib/auth';
-import { getClient } from '../lib/api';
+import { avatarUrl } from '../lib/ownAvatar';
 import { getSetting } from '../lib/settings';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
 
@@ -94,7 +94,7 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
             <Show when={profile().avatar_cid}>
               <img
                 class="toolbar-avatar"
-                src={getClient().getMediaUrl(profile().avatar_cid!)}
+                src={avatarUrl(profile().avatar_cid!)}
                 alt=""
               />
             </Show>

@@ -133,6 +133,8 @@ export async function disconnectWallet(): Promise<void> {
   setWalletSource(null);
   setAuthStatus('none');
   setIsRegistered(false);
+  // Drop the cached own avatar so a different account doesn't inherit it.
+  import('./ownAvatar').then(({ clearOwnAvatar }) => clearOwnAvatar()).catch(() => {});
 }
 
 /** Update on-chain registration status and invalidate profile cache. */
@@ -156,6 +158,12 @@ export async function checkRegistrationStatus(): Promise<void> {
   try {
     const resp = await getClient().getUserProfile(addr);
     setIsRegistered(resp.user.registered_at > 0);
+    // Cache the user's OWN avatar image locally while we're (presumably) on a
+    // node that has it, so it keeps rendering after switching to a node
+    // without IPFS / without this user's media. Best-effort, fire-and-forget.
+    import('./ownAvatar').then(({ ensureOwnAvatarCached }) =>
+      ensureOwnAvatarCached(resp.user.avatar_cid),
+    ).catch(() => { /* non-critical */ });
   } catch {
     setIsRegistered(false);
   }

@@ -22,6 +22,25 @@ export default defineConfig({
   },
   build: {
     target: 'esnext',
+    // This is a Tauri app — assets load from the local app bundle, not over
+    // the network, so the default 500 kB chunk-size advisory isn't
+    // actionable here. Raise it past the app chunk so the build output stays
+    // clean (the vendor split below is still worthwhile for cache locality).
+    chunkSizeWarningLimit: 1200,
+    rollupOptions: {
+      output: {
+        // Split third-party code out of the app bundle so app-code edits
+        // don't bust the (large, stable) vendor cache. Groups by
+        // change-cadence: `solid` (framework), `sdk` (@ogmara/sdk),
+        // `vendor` (crypto/msgpack/i18n/etc.).
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('solid-js') || id.includes('vite-plugin-solid')) return 'solid';
+          if (id.includes('@ogmara') || id.includes('/sdk-js/')) return 'sdk';
+          return 'vendor';
+        },
+      },
+    },
   },
   // Prevent vite from obscuring Rust errors
   clearScreen: false,

@@ -2,9 +2,41 @@
  * Ogmara SDK integration — shared client instance.
  */
 
-import { OgmaraClient, DEFAULT_NODE_URL, discoverAndPingNodes, pingNode, validateNodeUrl, type NodeWithPing } from '@ogmara/sdk';
+import { createSignal } from 'solid-js';
+import { OgmaraClient, DEFAULT_NODE_URL, discoverAndPingNodes, discoverNodesViaSc, pingNode, validateNodeUrl, type NodeWithPing } from '@ogmara/sdk';
 import { getSetting, setSetting } from './settings';
 import { vaultGetSigner } from './vault';
+
+/**
+ * Reactive mirror of the active node URL. localStorage reads aren't reactive
+ * in Solid, and `bootstrapNodeSelection()` lands a node via `switchNodeSilent`
+ * WITHOUT a reload — so the picker's current-node label (read once at mount)
+ * showed blank on a fresh install until a manual switch. Components read this
+ * signal so the label updates the moment bootstrap (or any silent switch)
+ * settles on a node. Kept in lockstep with `setSetting('nodeUrl', …)`.
+ *
+ * Initialized inline (NOT via `getCurrentNodeUrl()`) so module eval never
+ * reaches a `const` declared below this line — that's a temporal dead-zone
+ * crash ("Cannot access … before initialization"). Equivalent to
+ * `getCurrentNodeUrl()`'s value (saved node, else '').
+ */
+const [activeNodeUrl, setActiveNodeUrl] = createSignal(getSetting('nodeUrl') || '');
+export { activeNodeUrl };
+
+/** Network the cold-boot SC node discovery targets. Persisted by
+ *  `setKleverNetwork` once a node's stats are read; defaults to mainnet
+ *  (the production registry) on a fresh install. */
+function discoveryNetwork(): 'mainnet' | 'testnet' {
+  return getSetting('kleverNetwork') === 'testnet' ? 'testnet' : 'mainnet';
+}
+
+/** Drop SC-registered nodes that haven't anchored within this window. A node
+ *  doesn't auto-deregister on-chain when it goes offline (registration is a
+ *  permanent record until it deregisters), so the CLIENT applies the
+ *  staleness filter — the same 7-day window the node's own cross-node media
+ *  fallback uses. Nodes that have never anchored (lastAnchorAt === 0) are
+ *  kept: they may simply be coming online. */
+const SC_MAX_ANCHOR_AGE_SECS = 7 * 24 * 60 * 60;
 
 let client: OgmaraClient | null = null;
 
@@ -25,7 +57,11 @@ let client: OgmaraClient | null = null;
  */
 export function getClient(): OgmaraClient {
   if (!client) {
-    const nodeUrl = getSetting('nodeUrl') || DEFAULT_NODE_URL;
+    // No hardcoded default node anymore — the seed comes from on-chain SC
+    // discovery via `bootstrapNodeSelection()`, which sets `nodeUrl` before
+    // any data fetch. An empty URL here just means "no node selected yet";
+    // calls fail (and are caught by views) until bootstrap lands one.
+    const nodeUrl = getSetting('nodeUrl') || '';
     client = new OgmaraClient({ nodeUrl });
     const signer = vaultGetSigner();
     if (signer) client.withSigner(signer);
@@ -138,6 +174,7 @@ export function switchNodeSilent(nodeUrl: string): void {
     return;
   }
   setSetting('nodeUrl', nodeUrl);
+  setActiveNodeUrl(nodeUrl); // keep the reactive label in sync
   addKnownNode(nodeUrl);
   resetClient();
   // RECONNECT (not just close) the WebSocket so push events follow the
@@ -217,6 +254,13 @@ export function getLastBootstrapResult(): BootstrapResult | null {
 }
 
 export async function bootstrapNodeSelection(): Promise<BootstrapResult> {
+  // One-time cleanup: purge the deprecated hardcoded seed
+  // (`node.ogmara.org`) from the user's persisted known-nodes if it's a
+  // leftover breadcrumb. It used to be `DEFAULT_NODE_URL`, is now dead, and
+  // the picker exempted it from removal — so without this it lingered as an
+  // unremovable ∞ row. Idempotent: no-op once it's gone.
+  removeKnownNode(DEFAULT_NODE_URL);
+
   // An explicit user switch (picker / manual-add) triggers a webview
   // reload, which re-enters this function. Honor that choice verbatim
   // — skip pin + best-ping entirely — so the node the user picked is
@@ -266,9 +310,10 @@ export async function bootstrapNodeSelection(): Promise<BootstrapResult> {
   return result;
 }
 
-/** Get the current node URL. */
+/** Get the current node URL, or '' if none selected yet (fresh install
+ *  before `bootstrapNodeSelection()` has landed an SC-discovered node). */
 export function getCurrentNodeUrl(): string {
-  return getSetting('nodeUrl') || DEFAULT_NODE_URL;
+  return getSetting('nodeUrl') || '';
 }
 
 /** Discover available nodes with ping times, sorted by latency.
@@ -282,34 +327,48 @@ export function getCurrentNodeUrl(): string {
  *
  * 1. `discoverAndPingNodes` — pings the current node and any peers it
  *    advertises in `/api/v1/network/nodes`. Driven by the current
- *    node's view of the network.
- * 2. `DEFAULT_NODE_URL` — the SDK's hardcoded default. Always pingable
- *    so the user can fall back even after switching to a node that
- *    doesn't advertise it back.
+ *    node's view of the network. Skipped when there's no current node
+ *    (fresh install — nothing to ask yet).
+ * 2. `discoverNodeUrlsViaSc` — the ON-CHAIN registry (getActiveNodes →
+ *    getNodeMetadata → derived HTTPS endpoint). This is the
+ *    decentralized seed source that REPLACED the old hardcoded
+ *    `DEFAULT_NODE_URL` (`node.ogmara.org`), which was a single point
+ *    of failure — when it went down, fresh clients had no bootstrap
+ *    seed and it cluttered the picker as a permanently-dead ∞ row.
+ *    Best-effort: a Klever RPC hiccup just yields no SC seeds.
  * 3. `knownNodes` — every URL the user has successfully switched to
- *    in the past. Persisted in localStorage by `switchNode`. Solves
- *    the "I added my Odroid and now node.ogmara.org disappeared from
- *    the dropdown" footgun — the new node's peer registry won't
- *    necessarily list the old one back, so we keep our own breadcrumb.
+ *    in the past. Persisted in localStorage by `switchNode`, so a node
+ *    the user added stays in the picker even if neither the current
+ *    node nor the SC registry lists it back.
  */
 export async function getAvailableNodes(): Promise<NodeWithPing[]> {
   const currentUrl = getCurrentNodeUrl();
-  const discovered = await discoverAndPingNodes(currentUrl, { allowPrivateHosts: true });
+  const discovered = currentUrl
+    ? await discoverAndPingNodes(currentUrl, { allowPrivateHosts: true }).catch(
+        () => [] as NodeWithPing[],
+      )
+    : [];
 
   const discoveredUrls = new Set(discovered.map((n) => n.url));
-  // Always include the default + every user-added URL even if the
-  // current node didn't advertise them. They might be slow/offline
-  // (Infinity ping) — that's still useful info, the user can pick
-  // and re-test rather than lose them entirely.
+  // On-chain registry seeds + every user-added URL, even if the current
+  // node didn't advertise them. They might be slow/offline (Infinity
+  // ping) — still useful info; the user can pick and re-test rather than
+  // lose them. SC discovery is best-effort (RPC may be down).
+  const nowSecs = Math.floor(Date.now() / 1000);
+  const scNodes = await discoverNodesViaSc(discoveryNetwork()).catch(() => []);
+  const scUrls = scNodes
+    .filter((n) => !!n.endpoint)
+    .filter((n) => !n.lastAnchorAt || nowSecs - n.lastAnchorAt <= SC_MAX_ANCHOR_AGE_SECS)
+    .map((n) => n.endpoint as string);
   const extras: string[] = [];
-  if (!discoveredUrls.has(DEFAULT_NODE_URL) && DEFAULT_NODE_URL !== currentUrl) {
-    extras.push(DEFAULT_NODE_URL);
-  }
-  for (const url of getKnownNodes()) {
-    if (!discoveredUrls.has(url) && url !== DEFAULT_NODE_URL && url !== currentUrl) {
-      extras.push(url);
+  const pushExtra = (url: string) => {
+    if (!url || discoveredUrls.has(url) || url === currentUrl || extras.includes(url)) {
+      return;
     }
-  }
+    extras.push(url);
+  };
+  for (const url of scUrls) pushExtra(url);
+  for (const url of getKnownNodes()) pushExtra(url);
 
   const extraPings = await Promise.all(
     extras.map(async (url) => ({

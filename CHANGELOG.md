@@ -5,6 +5,73 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.25.0] - 2026-06-04
+
+On-chain node discovery — the picker and cold-boot bootstrap now source
+nodes from the Klever KApp registry instead of a hardcoded seed.
+Requires @ogmara/sdk 0.21.0+.
+
+### Added
+
+- Node discovery via the on-chain SC (`discoverNodeUrlsViaSc`):
+  `getAvailableNodes` and `bootstrapNodeSelection` now seed from
+  `getActiveNodes`/`getNodeMetadata` (current network) ∪ the user's
+  `knownNodes`. New `kleverNetwork` setting persists the last-known
+  network (from `networkStats`) so cold-boot discovery targets the right
+  registry (mainnet/testnet) before any node is reached; defaults to
+  mainnet. `getKleverNetwork()` getter added.
+- **Own-avatar local cache** (`lib/ownAvatar.ts`): the user's own avatar is
+  cached as a data URL in localStorage (populated on profile-load and on
+  upload, cleared on disconnect) so it renders on ANY node — including ones
+  with no IPFS backend. The burger menu now shows the avatar (was
+  initials-only); toolbar, profile, news posts, and chat messages resolve
+  through a cache-aware `avatarUrl()`.
+- **News image placeholders**: news post + comment attachment images use the
+  shared `MediaImage` component, so an unfetchable image (e.g. hosted on a
+  node without IPFS) shows the "hosted on another node" placeholder instead
+  of a broken icon. Chat + news now share one component.
+
+### Changed
+
+- **Dropped the hardcoded `DEFAULT_NODE_URL` seed (`node.ogmara.org`).**
+  It was dead, yet always injected into the picker as a permanently-∞
+  row and used as the cold-boot fallback for all clients — a single
+  point of failure. `getClient`/`getCurrentNodeUrl` now return `''`
+  (no node) until SC discovery / a saved node lands one. The deprecated
+  seed is also purged from the user's persisted `knownNodes` at boot
+  (it lingered as an unremovable ∞ row), and the picker's ✕ remove
+  control no longer exempts it — any stale/dead known node is removable.
+- SC discovery applies a 7-day anchor-staleness filter (matching the
+  node's own media-fallback window): a registered node that stopped
+  anchoring long ago doesn't auto-deregister on-chain, so the client
+  drops it from candidates rather than surfacing a dead ∞ row.
+- The active node URL is now a reactive signal (`activeNodeUrl`) updated
+  by `switchNodeSilent`, so the picker's current-node label appears the
+  moment bootstrap silently lands a node on a fresh install (the `''`
+  fallback above otherwise left it blank until a manual select).
+- Build: split third-party code into `solid` / `sdk` / `vendor` chunks
+  via Rollup `manualChunks` for cache locality; raised
+  `chunkSizeWarningLimit` (this is a local-asset Tauri app, so the
+  default 500 kB advisory isn't actionable).
+
+### Fixed
+
+- Node-picker ping label overlapped the ✕ remove button (regressed in
+  v1.23.0). The v1.23.1 flex-shrink fix wasn't reliable (and an inline
+  component `<style>` is an HMR blind spot, so it often needed a full
+  reload). The row is now **CSS Grid** with explicit `[pin][url][ping][✕]`
+  tracks — overlap is structurally impossible regardless of URL length
+  or active-row bold weight.
+- Missing i18n keys rendered as raw key names (e.g. the pinned-default
+  strip showed `node_default_pinned` instead of "Pinned default"). The
+  `t('x') || 'fallback'` pattern doesn't work because `i18next` returns
+  the key itself for a miss. Added the 5 missing `node_*` keys to all 7
+  locales.
+- Profile-page avatar was broken even on the node that hosts it — it built
+  a **relative** `/api/v1/media/<cid>` URL (resolves against the page
+  origin, not the node) while every other avatar used
+  `getClient().getMediaUrl()`. Now uses the node-based URL like the rest.
+
 ## [1.24.0] - 2026-06-04
 
 Media-capability awareness: gracefully handle nodes that can't host

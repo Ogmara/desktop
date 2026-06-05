@@ -8,7 +8,7 @@
 import { Component, createResource, createSignal, For, Show } from 'solid-js';
 import { t } from '../i18n/init';
 import {
-  getCurrentNodeUrl,
+  activeNodeUrl,
   getAvailableNodes,
   switchNode,
   removeKnownNode,
@@ -17,14 +17,16 @@ import {
   setDefaultNodeUrl,
   getLastBootstrapResult,
 } from '../lib/api';
-import { DEFAULT_NODE_URL } from '@ogmara/sdk';
 import type { NodeWithPing } from '@ogmara/sdk';
 import { pingNode, validateNodeUrl } from '@ogmara/sdk';
 import { AnchorBadge } from './AnchorBadge';
 
 export const NodeSelector: Component = () => {
   const [open, setOpen] = createSignal(false);
-  const [currentUrl, setCurrentUrl] = createSignal(getCurrentNodeUrl());
+  // Reactive current node — updates the moment bootstrap / any silent switch
+  // lands a node (the old local signal was captured once at mount, so it
+  // showed blank on a fresh install until a manual select).
+  const currentUrl = activeNodeUrl;
   const [manualUrl, setManualUrl] = createSignal('');
   const [addError, setAddError] = createSignal('');
   const [adding, setAdding] = createSignal(false);
@@ -52,8 +54,7 @@ export const NodeSelector: Component = () => {
   });
 
   const handleSelect = (url: string) => {
-    switchNode(url);
-    setCurrentUrl(url);
+    switchNode(url); // updates activeNodeUrl via switchNodeSilent, then reloads
     setOpen(false);
   };
 
@@ -204,15 +205,13 @@ export const NodeSelector: Component = () => {
           <Show when={!nodes.loading} fallback={<div class="node-loading">{t('loading')}</div>}>
             <For each={nodes()}>
               {(node: NodeWithPing) => {
-                // Show the ✕ button only on entries the user manually
-                // added. Discovered entries, the default, and the
-                // currently-selected node don't get a remove control —
-                // there's no useful state to remove for those (the
-                // default re-appears from `getAvailableNodes` and the
-                // current one is what's actually in use).
+                // Show the ✕ on any known-nodes breadcrumb that isn't the
+                // currently-selected node. (We no longer exempt a hardcoded
+                // default — there isn't one anymore; nodes come from the SC
+                // registry + the user's own list, and a stale/dead known
+                // node must always be removable.)
                 const isUserAdded = () =>
                   getKnownNodes().includes(node.url) &&
-                  node.url !== DEFAULT_NODE_URL &&
                   node.url !== currentUrl();
                 const isPinned = () => defaultUrl() === node.url;
                 return (
@@ -246,10 +245,14 @@ export const NodeSelector: Component = () => {
                           <AnchorBadge level={node.anchorStatus!.level} showLabel={false} />
                         </Show>
                       </span>
-                      <span class="node-ping" style={{ color: pingColor(node.ping) }}>
-                        {node.ping === Infinity ? '∞' : node.ping}ms ({pingLabel(node.ping)})
-                      </span>
                     </button>
+                    {/* Ping + remove are ROW-LEVEL siblings (not inside the
+                        select button) with reserved, non-shrinking width, so
+                        the ping label can never slide on top of the ✕ —
+                        whatever the URL length or active-row bold weight. */}
+                    <span class="node-ping" style={{ color: pingColor(node.ping) }}>
+                      {node.ping === Infinity ? '∞' : node.ping}ms ({pingLabel(node.ping)})
+                    </span>
                     <Show when={isUserAdded()}>
                       <button
                         class="node-option-remove"
@@ -344,7 +347,15 @@ export const NodeSelector: Component = () => {
         }
         .node-refresh:hover { color: var(--color-accent-primary); }
         .node-option-row {
-          display: flex;
+          /* Grid with explicit column tracks: [pin] [url(flex)] [ping] [✕].
+             Tracks can't overlap by definition, so the ping label can
+             never land on top of the remove button no matter how long the
+             URL is or whether the row is the bold active one. The url
+             track is minmax(0,1fr) so it (and only it) absorbs slack and
+             truncates; the other three size to content. The 4th track is
+             empty on rows without a ✕ (current/default node). */
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto auto;
           align-items: stretch;
           width: 100%;
         }
@@ -443,9 +454,13 @@ export const NodeSelector: Component = () => {
           text-overflow: ellipsis;
           white-space: nowrap;
         }
-        /* Ping label keeps its full width and never overlaps the ✕. */
+        /* Ping label is a ROW-LEVEL flex sibling (not inside the select
+           button): reserved width, never shrinks, never overlaps the ✕. */
         .node-ping {
           flex-shrink: 0;
+          display: flex;
+          align-items: center;
+          padding: 0 var(--spacing-sm);
           white-space: nowrap;
           font-size: var(--font-size-xs);
           font-weight: 600;

@@ -6,6 +6,7 @@ import { Component, createResource, createSignal, For, Show } from 'solid-js';
 import { JSX } from 'solid-js/jsx-runtime';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
+import { avatarUrl } from '../lib/ownAvatar';
 import { authStatus, walletAddress, l2Address, getSigner } from '../lib/auth';
 import { kleverAvailable, registerUser, addressToPubkeyHex } from '../lib/klever';
 import { navigate } from '../lib/router';
@@ -181,6 +182,18 @@ export const UserProfileView: Component<UserProfileProps> = (props) => {
         try {
           const result = await client.uploadMedia(avatarFile()!);
           avatarCid = result.cid;
+          // Cache the just-uploaded avatar locally (keyed by its new CID) so
+          // it renders immediately and on any node, including IPFS-less ones.
+          try {
+            const dataUrl = await new Promise<string>((resolve, reject) => {
+              const r = new FileReader();
+              r.onloadend = () => resolve(r.result as string);
+              r.onerror = reject;
+              r.readAsDataURL(avatarFile()!);
+            });
+            const { setOwnAvatar } = await import('../lib/ownAvatar');
+            setOwnAvatar(result.cid, dataUrl);
+          } catch { /* caching is best-effort */ }
         } catch (uploadErr: any) {
           throw new Error(`Avatar upload failed: ${uploadErr?.message || 'unknown error'}`);
         }
@@ -227,7 +240,7 @@ export const UserProfileView: Component<UserProfileProps> = (props) => {
       <div class="profile-header">
         <div class="profile-avatar">
           <Show when={profile()?.user?.avatar_cid} fallback={<div class="avatar-placeholder">{props.address.slice(3, 5).toUpperCase()}</div>}>
-            <img src={`/api/v1/media/${profile()!.user.avatar_cid}`} alt="Avatar" class="avatar-img" />
+            <img src={avatarUrl(profile()!.user.avatar_cid!)} alt="Avatar" class="avatar-img" />
           </Show>
         </div>
         <div class="profile-info">
