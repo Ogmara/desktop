@@ -474,22 +474,49 @@ export const ChatView: Component<ChatViewProps> = (props) => {
 
   const MAX_LOCAL_MESSAGES = 200;
 
+  // Apply an in-place update (reaction/edit/delete) to the target message
+  // WITHOUT refetching the whole list — a refetch rebuilds every row and loses
+  // scroll position. Updates the localMessages copy, or copies the target out
+  // of the channel resource into localMessages so it wins the dedup.
+  const applyToTarget = (targetId: string, fn: (m: any) => any) => {
+    setLocalMessages((prev) => {
+      const idx = prev.findIndex((m) => msgIdToHex(m.msg_id) === msgIdToHex(targetId));
+      if (idx >= 0) return prev.map((m, i) => (i === idx ? fn(m) : m));
+      const fromResource = (messages() || []).find(
+        (m) => msgIdToHex(m.msg_id) === msgIdToHex(targetId),
+      );
+      return fromResource ? [...prev, fn(fromResource)] : prev;
+    });
+  };
+
   // Subscribe to channel WebSocket events
   const wsCleanup = onWsEvent((event) => {
     if (event.type === 'message' && props.channelId) {
       const msg = event.envelope;
       if (msg.channel_id === props.channelId || msg.channel_id === String(props.channelId)) {
-        // Handle edit/delete events by updating existing messages
+        // Reactions: apply the delta IN PLACE (no refetch → no scroll jump).
+        // Skip our OWN reaction — handleReact already counted it optimistically.
+        if (msg.msg_type === 'ChatReaction') {
+          if (msg.author === walletAddress() || !msg.target_msg_id) return;
+          applyToTarget(msg.target_msg_id, (m) => {
+            const reactions = { ...(m.reactions || {}) };
+            const cur = reactions[msg.emoji] || 0;
+            const next = msg.remove ? cur - 1 : cur + 1;
+            if (next <= 0) delete reactions[msg.emoji];
+            else reactions[msg.emoji] = next;
+            return { ...m, reactions };
+          });
+          return;
+        }
+        // Edits/deletes: apply in place (covers resource messages too).
         if (msg.msg_type === 'ChatEdit' || msg.msg_type === 'ChatDelete') {
           const targetId = msg.target_msg_id || msg.msg_id;
           if (targetId) {
-            setLocalMessages((prev) => prev.map((m) => {
-              if (msgIdToHex(m.msg_id) === msgIdToHex(targetId)) {
-                if (msg.msg_type === 'ChatDelete') return { ...m, deleted: true };
-                if (msg.msg_type === 'ChatEdit') return { ...m, payload: msg.payload, edited: true, last_edited_at: msg.timestamp };
-              }
-              return m;
-            }));
+            applyToTarget(targetId, (m) =>
+              msg.msg_type === 'ChatDelete'
+                ? { ...m, deleted: true }
+                : { ...m, payload: msg.payload, edited: true, last_edited_at: msg.timestamp },
+            );
             return;
           }
         }
@@ -562,16 +589,21 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     const seen = new Set<string>();
     const apiMsgs = messages() || [];
     const local = localMessages();
-    // Remove optimistic messages that now have a real counterpart from the API
-    // (same author, similar timestamp, optimistic flag)
+    // Remove optimistic messages that now have a real counterpart (same author,
+    // similar timestamp). Match against BOTH the API resource AND the real
+    // (non-optimistic) messages already in localMessages — the real message can
+    // arrive via the WS echo or the poll (into localMessages), not just the
+    // resource, so checking apiMsgs alone left a duplicate until a full reload.
+    const realMsgs = [...apiMsgs, ...local.filter((m) => !m._optimistic)];
     const filteredLocal = local.filter((lm) => {
       if (!lm._optimistic) return true;
-      return !apiMsgs.some((am) =>
+      return !realMsgs.some((am) =>
         am.author === lm.author &&
         Math.abs(normalizeTs(am.timestamp) - normalizeTs(lm.timestamp)) < 10000,
       );
     });
-    // localMessages first so optimistic updates (delete, edit, react) take priority in dedup
+    // localMessages first so in-place updates (delete, edit, react) applied to
+    // the localMessages copy take priority in the dedup.
     const combined = [...filteredLocal, ...apiMsgs];
     const deduped = combined.filter((msg) => {
       const id = msgIdToHex(msg.msg_id);
