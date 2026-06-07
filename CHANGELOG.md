@@ -5,6 +5,16 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.2] - 2026-06-07
+
+### Fixed
+
+- **Cross-node DMs now appear in the open conversation.** The DM view had no polling
+  fallback (unlike channels), and the node deliberately broadcasts only a DM
+  *notification* (the unread badge) over WS — never the message content. So a
+  received DM updated the sidebar count but the open conversation didn't fetch it.
+  The DM view now polls the recipient's own authenticated DM endpoint every 10s.
+
 ## [1.27.1] - 2026-06-07
 
 ### Fixed

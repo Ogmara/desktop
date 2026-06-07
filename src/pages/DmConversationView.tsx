@@ -64,7 +64,7 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
     }, 0);
   });
 
-  const [messages] = createResource(
+  const [messages, { refetch: refetchDmMessages }] = createResource(
     () => props.peerAddress,
     async (address) => {
       if (!address) return [];
@@ -77,6 +77,18 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
       }
     },
   );
+
+  // Poll for new DMs every 10s. The node's WS push for DMs is only a notification
+  // badge (the count) — DM CONTENT is intentionally never broadcast (it would leak
+  // plaintext to every client), so cross-node DMs would otherwise only appear on
+  // reopen. Mirrors the channel view's incremental poll.
+  let dmPollTimer: ReturnType<typeof setInterval> | null = null;
+  onMount(() => {
+    dmPollTimer = setInterval(() => {
+      if (props.peerAddress && authStatus() === 'ready') refetchDmMessages();
+    }, 10000);
+  });
+  onCleanup(() => { if (dmPollTimer) clearInterval(dmPollTimer); });
 
   const MAX_LOCAL_MESSAGES = 200;
 
