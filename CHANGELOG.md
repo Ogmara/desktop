@@ -5,6 +5,22 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.28.0] - 2026-06-07
+
+### Added
+
+- **"No node connected" landing page.** On a clean install (mainnet currently has
+  no registered nodes, and there's no bundled default), the app previously rendered
+  an empty News feed with a raw `Unexpected token '<' … not valid JSON` error. It
+  now shows a clean, branded screen — a "connecting…" state while discovery runs,
+  then an informative page with a manual node-connect field, a retry button, and an
+  automatic exponential-backoff retry that self-heals once a node comes online
+  (spec 05-clients §1.1). The app body is gated on a connected node, so no data
+  view mounts (and no misleading fetch error fires) until one is reachable.
+  Localized in all 7 languages. Manual-connect persists the validator's canonical
+  origin (strips credentials/path/query). A selected-but-unreachable node now also
+  shows a friendly News error instead of the raw parse noise.
+
 ## [1.27.5] - 2026-06-07
 
 ### Added

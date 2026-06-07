@@ -74,7 +74,13 @@ export const NewsView: Component = () => {
       } catch (e: any) {
         const msg = e?.message || String(e);
         console.error('[NewsView] Failed to load news:', msg);
-        setLoadError(msg);
+        // A node that's selected but unreachable/misconfigured returns an HTML
+        // error page → the SDK's JSON.parse throws "Unexpected token '<' …".
+        // Don't show that raw noise; map it to a clear, actionable message.
+        const isHtmlOrParse = /<!DOCTYPE|Unexpected token|not valid JSON|Failed to fetch|NetworkError/i.test(msg);
+        setLoadError(isHtmlOrParse
+          ? (t('news_load_node_unreachable') || 'Couldn’t reach the node. It may be offline — try another node from the status bar.')
+          : msg);
         return [];
       }
     },

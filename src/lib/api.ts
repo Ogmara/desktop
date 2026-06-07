@@ -242,15 +242,17 @@ export interface BootstrapResult {
   reason: BootstrapReason;
 }
 
-let _lastBootstrapResult: BootstrapResult | null = null;
+// Reactive so the no-node landing gate can tell "boot still running" (null)
+// from "boot finished, no node found" (a result with reason 'no-candidates').
+const [lastBootstrapResult, setLastBootstrapResult] = createSignal<BootstrapResult | null>(null);
 
 /**
  * Returns the most recent boot-time selection result, or `null` if
  * boot hasn't completed yet. Picker UIs use this to surface a one-
- * time notice when the pinned default was unreachable.
+ * time notice when the pinned default was unreachable. Reactive.
  */
 export function getLastBootstrapResult(): BootstrapResult | null {
-  return _lastBootstrapResult;
+  return lastBootstrapResult();
 }
 
 export async function bootstrapNodeSelection(): Promise<BootstrapResult> {
@@ -276,7 +278,7 @@ export async function bootstrapNodeSelection(): Promise<BootstrapResult> {
   if (explicit) {
     if (explicit !== getCurrentNodeUrl()) switchNodeSilent(explicit);
     const result: BootstrapResult = { chosen: explicit, reason: 'default' };
-    _lastBootstrapResult = result;
+    setLastBootstrapResult(result);
     return result;
   }
 
@@ -286,7 +288,7 @@ export async function bootstrapNodeSelection(): Promise<BootstrapResult> {
     if (ping !== Infinity) {
       if (pinned !== getCurrentNodeUrl()) switchNodeSilent(pinned);
       const result: BootstrapResult = { chosen: pinned, reason: 'default' };
-      _lastBootstrapResult = result;
+      setLastBootstrapResult(result);
       return result;
     }
     // Fall through to best-ping with the default-fallback reason.
@@ -302,11 +304,11 @@ export async function bootstrapNodeSelection(): Promise<BootstrapResult> {
       chosen: best,
       reason: pinned ? 'default-unreachable-fallback' : 'best-ping',
     };
-    _lastBootstrapResult = result;
+    setLastBootstrapResult(result);
     return result;
   }
   const result: BootstrapResult = { chosen: getCurrentNodeUrl(), reason: 'no-candidates' };
-  _lastBootstrapResult = result;
+  setLastBootstrapResult(result);
   return result;
 }
 
