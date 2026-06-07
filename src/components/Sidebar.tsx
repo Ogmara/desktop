@@ -113,6 +113,7 @@ const SIDEBAR_DEFAULT_W = 320;
 export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   const [channelsOpen, setChannelsOpen] = createSignal(getSetting('channelsExpanded'));
   const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number; channelId: number; creator?: string } | null>(null);
+  const [dmContextMenu, setDmContextMenu] = createSignal<{ x: number; y: number; address: string; unread: number } | null>(null);
 
   const savedW = parseInt(localStorage.getItem('ogmara.sidebarWidth') || '', 10);
   const [sidebarWidth, setSidebarWidth] = createSignal(
@@ -234,7 +235,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   });
 
   // DM conversations for modern sidebar
-  const [dmConversations] = createResource(
+  const [dmConversations, { refetch: refetchDmConvs }] = createResource(
     () => activeTab() === 'dms' && authStatus() === 'ready',
     async (shouldFetch) => {
       if (!shouldFetch) return [];
@@ -275,8 +276,25 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     } catch { /* ignore */ }
   };
 
-  // Close context menu on any click
-  const closeContextMenu = () => setContextMenu(null);
+  // Right-click "mark as read" for a DM conversation (mirrors the channel menu).
+  const handleDmContextMenu = (e: MouseEvent, address: string, unread: number) => {
+    e.preventDefault();
+    setDmContextMenu({ x: e.clientX, y: e.clientY, address, unread });
+  };
+
+  const handleDmMarkRead = async () => {
+    const ctx = dmContextMenu();
+    if (!ctx) return;
+    setDmContextMenu(null);
+    try {
+      await getClient().markDmRead(ctx.address);
+      setDmUnreadTotal((t) => Math.max(0, t - (ctx.unread || 0)));
+      refetchDmConvs();
+    } catch { /* ignore */ }
+  };
+
+  // Close context menus on any click
+  const closeContextMenu = () => { setContextMenu(null); setDmContextMenu(null); };
   if (typeof document !== 'undefined') {
     document.addEventListener('click', closeContextMenu);
     onCleanup(() => document.removeEventListener('click', closeContextMenu));
@@ -1031,6 +1049,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
                     <button
                       style={`display:flex; align-items:center; gap:10px; padding:10px 12px; width:100%; text-align:left; cursor:pointer; background:${isActive() ? 'var(--color-accent-bg)' : 'transparent'}`}
                       onClick={() => go(`/dm/${conv.peer}`)}
+                      onContextMenu={(e) => handleDmContextMenu(e, conv.peer, conv.unread_count)}
                     >
                       <div style="width:42px; height:42px; border-radius:50%; background:var(--color-dm); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:var(--font-size-md); flex-shrink:0; overflow:hidden">
                         <Show when={dmProf()?.avatar_cid} fallback={<span>{dmName().slice(0, 1).toUpperCase()}</span>}>
@@ -1046,7 +1065,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
                         </div>
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2px">
                           <span style="font-size:var(--font-size-xs); color:var(--color-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{conv.last_message_preview || '...'}</span>
-                          <Show when={conv.unread_count > 0}>
+                          <Show when={conv.unread_count > 0 && !isActive()}>
                             <span style="min-width:20px; height:20px; border-radius:9999px; background:var(--color-accent-primary); color:var(--color-text-inverse); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; padding:0 5px; flex-shrink:0; margin-left:4px">{conv.unread_count}</span>
                           </Show>
                         </div>
@@ -1195,6 +1214,18 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
               🗑 {t('channel_delete')}
             </button>
           </Show>
+        </div>
+      </Show>
+
+      {/* DM right-click menu — mark as read */}
+      <Show when={dmContextMenu()}>
+        <div
+          class="channel-context-menu"
+          style={{ left: `${dmContextMenu()!.x}px`, top: `${dmContextMenu()!.y}px` }}
+        >
+          <button class="context-menu-item" onClick={handleDmMarkRead}>
+            ✓ {t('channel_mark_read')}
+          </button>
         </div>
       </Show>
 

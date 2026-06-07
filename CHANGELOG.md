@@ -5,6 +5,21 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.5] - 2026-06-07
+
+### Added
+
+- **Right-click "mark as read" on DM conversations** in the sidebar — mirrors the
+  channel context menu, with an optimistic unread-badge clear.
+
+### Fixed
+
+- **Auto-mark-read when you reach the latest message**, for both channel chats and
+  DMs. Previously a conversation was only marked read on open / on every WS message
+  with no scroll awareness, so scrolling down to catch up never cleared it. Now
+  reaching the bottom marks it read (once per scroll-to-bottom). The active DM
+  conversation also no longer shows its own unread badge while you're viewing it.
+
 ## [1.27.4] - 2026-06-07
 
 ### Fixed

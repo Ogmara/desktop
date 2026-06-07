@@ -155,6 +155,18 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
     }
   });
 
+  // Reaching the latest message marks the DM read (once per scroll-to-bottom).
+  let dmWasAtBottom = true;
+  const handleDmScroll = () => {
+    if (!messagesRef) return;
+    const { scrollTop, scrollHeight, clientHeight } = messagesRef;
+    const atBottom = scrollHeight - scrollTop - clientHeight < 150;
+    if (atBottom && !dmWasAtBottom && authStatus() === 'ready' && props.peerAddress) {
+      getClient().markDmRead(props.peerAddress).catch(() => {});
+    }
+    dmWasAtBottom = atBottom;
+  };
+
   const handleSend = async () => {
     if (editingMsg()) { await handleEdit(); return; }
 
@@ -308,7 +320,7 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
         </Show>
       </div>
 
-      <div class="dm-conv-messages" ref={messagesRef}>
+      <div class="dm-conv-messages" ref={messagesRef} onScroll={handleDmScroll}>
         <Show
           when={allMessages().length > 0}
           fallback={<div class="dm-conv-empty">{t('dm_no_messages')}</div>}

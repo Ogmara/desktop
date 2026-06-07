@@ -259,12 +259,22 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     if (messagesRef) messagesRef.scrollTo({ top: messagesRef.scrollHeight, behavior: 'smooth' });
   };
 
+  let wasAtBottom = true;
   const handleScroll = () => {
     if (!messagesRef) return;
     const { scrollTop, scrollHeight, clientHeight } = messagesRef;
     const distFromBottom = scrollHeight - scrollTop - clientHeight;
     setShowScrollBtn(distFromBottom >= SCROLL_NEAR_BOTTOM_PX);
-    if (distFromBottom < SCROLL_NEAR_BOTTOM_PX) setNewMsgCount(0);
+    const atBottom = distFromBottom < SCROLL_NEAR_BOTTOM_PX;
+    if (atBottom) {
+      setNewMsgCount(0);
+      // Reaching the latest message marks the channel read. Fires once per
+      // scroll-to-bottom transition (idempotent server-side).
+      if (!wasAtBottom && authStatus() === 'ready' && props.channelId) {
+        getClient().markChannelRead(props.channelId).catch(() => {});
+      }
+    }
+    wasAtBottom = atBottom;
     // Lazy-load older messages when user scrolls near the top.
     if (scrollTop < SCROLL_LOAD_OLDER_PX && hasMoreOlder() && !loadingOlder()) {
       loadOlderMessages();
