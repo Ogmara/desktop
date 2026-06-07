@@ -157,9 +157,14 @@ jobs:
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
 
-  # Create GitHub Release after all builds complete
+  # Create GitHub Release after all builds complete.
+  # Guard: only publish a release for real version tags (v*). On a
+  # workflow_dispatch from a branch, github.ref_name would be the branch name
+  # (e.g. "main"), which would otherwise create a bogus "main" prerelease/tag.
+  # Manual runs still build + upload artifacts; they just skip publishing.
   release:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
