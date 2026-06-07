@@ -17,6 +17,7 @@ import {
 } from './vault';
 import { getClient } from './api';
 import { getSetting, setSetting } from './settings';
+import { ensureDeviceEncBinding, wipeDeviceEncKey } from './deviceEnc';
 
 export type AuthStatus = 'none' | 'loading' | 'locked' | 'ready';
 export type WalletSource = 'builtin' | null;
@@ -81,6 +82,11 @@ export async function initAuth(): Promise<void> {
           setAuthStatus('ready');
           checkRegistrationStatus();
         }
+        // Publish this device's encryption-key binding (E2E P0, §2.4).
+        // Best-effort + idempotent: a failure retries on the next login.
+        void ensureDeviceEncBinding().catch((e) =>
+          console.warn('[deviceEnc] binding failed:', e),
+        );
         return;
       }
     }
@@ -125,6 +131,7 @@ export async function generateWallet(): Promise<string> {
 /** Disconnect wallet and wipe vault. */
 export async function disconnectWallet(): Promise<void> {
   await vaultWipe();
+  await wipeDeviceEncKey();
   setSetting('walletSource', '');
   setSetting('walletAddress', '');
   setSetting('deviceRegistered', '');

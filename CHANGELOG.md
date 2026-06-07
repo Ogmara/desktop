@@ -5,6 +5,23 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.0] - 2026-06-07
+
+### Added
+
+- **Device encryption key (E2E P0, protocol §2.4).** On login the app now mints a
+  per-install X25519 encryption keypair (stored in the secure vault) and publishes a
+  wallet-authored `DeviceEncBinding` to the node, so other users can encrypt to this
+  device. Idempotent (cached `encKeyBound` marker), best-effort (retries next login),
+  and wiped on disconnect. Uses `@ogmara/sdk` 0.24.0
+  (`generateDeviceEncKeypair` / `buildDeviceEncBinding`).
+
+### Notes
+
+- The enc private key is stored raw in the 0600 secure store for now; it is not yet
+  used to decrypt anything (message encryption is P1). Before P1, it must be
+  encrypted at rest under the app-lock key and folded into the wallet key vault (P3).
+
 ## [1.26.0] - 2026-06-07
 
 Sidebar channel organization — group, reorder, and tidy the channel list.

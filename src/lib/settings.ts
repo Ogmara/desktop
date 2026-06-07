@@ -33,6 +33,10 @@ export interface Settings {
   channelsExpanded: boolean;
   /** Cached device registration status: "wallet:device" key to avoid re-registration. */
   deviceRegistered: string;
+  /** Stable per-install device id (32-byte hex) used in the enc-key binding (§2.4). */
+  deviceId: string;
+  /** Cached enc-key binding marker "wallet:enc_pub" to avoid re-publishing. */
+  encKeyBound: string;
   /** Push gateway URL. Empty = auto-derive from nodeUrl (same host, port 41722). */
   pushGatewayUrl: string;
   /** Which view the app opens to after vault unlock — `news` or `chat`. */
@@ -104,6 +108,8 @@ const defaults: Settings = {
   walletSource: '',
   nodeUrl: '',
   deviceRegistered: '',
+  deviceId: '',
+  encKeyBound: '',
   pushGatewayUrl: '',
   defaultLandingView: 'news',
   currency: 'usd',
