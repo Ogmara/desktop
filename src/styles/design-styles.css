@@ -1642,3 +1642,156 @@
     max-width: 100% !important;
   }
 }
+
+/* ===================================================================
+   Channel organization — groups, drag-and-drop, ordering.
+   Style-agnostic base rules (apply in both Classic and Modern). Colours
+   come from CSS tokens so they adapt to dark/light + every design style.
+   =================================================================== */
+
+/* Toolbar above the channel list (Modern): new group / sort A→Z. */
+.org-toolbar {
+  display: flex;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+}
+.org-toolbar-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  border-radius: var(--radius-full);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+  cursor: pointer;
+}
+.org-toolbar-btn:hover { color: var(--color-text-primary); }
+
+/* Group section + header */
+.org-group { display: flex; flex-direction: column; }
+.org-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-xs) var(--spacing-sm);
+}
+.org-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+}
+.org-group-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.org-group-rename {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+  padding: 2px 6px;
+  border: 1px solid var(--color-accent-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-primary, var(--color-bg-secondary));
+  color: var(--color-text-primary);
+}
+.org-group-menu-btn {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  line-height: 1;
+}
+.org-group-menu-btn:hover { background: var(--color-bg-tertiary); color: var(--color-text-primary); }
+.org-group-empty {
+  padding: var(--spacing-xs) var(--spacing-lg);
+  font-size: var(--font-size-xs);
+  font-style: italic;
+  color: var(--color-text-secondary);
+  opacity: 0.7;
+}
+
+/* Drop buckets + dragging feedback */
+.org-bucket { display: flex; flex-direction: column; min-height: 8px; }
+.org-bucket.org-drop-over,
+.org-channel-draggable.org-drop-over {
+  outline: 2px dashed var(--color-accent-primary);
+  outline-offset: -2px;
+  border-radius: var(--radius-md);
+}
+.org-channel-draggable { cursor: grab; }
+.org-channel-draggable:active { cursor: grabbing; }
+.org-drag-overlay {
+  padding: var(--spacing-xs) var(--spacing-md);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  background: var(--color-accent-primary);
+  color: var(--color-text-inverse);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+  pointer-events: none;
+}
+
+/* Context-menu section label (used by the move-to-group submenu). */
+.context-menu-label {
+  padding: var(--spacing-xs) var(--spacing-md);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-secondary);
+  opacity: 0.7;
+}
+
+/* The group context menu reuses .sidebar-context-menu — ensure it is styled
+   even in Modern, where the Classic inline <style> block is not mounted. */
+.sidebar-context-menu {
+  position: fixed;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  z-index: 100;
+  padding: 4px;
+  min-width: 160px;
+}
+.sidebar-context-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: var(--font-size-sm);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--color-text-primary);
+}
+.sidebar-context-menu button:hover { background: var(--color-bg-tertiary); }
+.sidebar-context-menu button.danger { color: #f44; }
+.sidebar-context-menu button.danger:hover { background: rgba(255,68,68,0.1); }
+
+/* Divider + label separating ungrouped channels from the groups above them. */
+.org-ungrouped-header {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  margin-top: var(--spacing-xs);
+  border-top: 1px solid var(--color-border);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+}

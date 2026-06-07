@@ -5,7 +5,16 @@
  * Messages, Bookmarks, Search, Settings.
  */
 
-import { Component, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup } from 'solid-js';
+import { Component, JSX, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup } from 'solid-js';
+import {
+  DragDropProvider,
+  DragDropSensors,
+  DragOverlay,
+  createDraggable,
+  createDroppable,
+  closestCenter,
+  type DragEvent,
+} from '@thisbeyond/solid-dnd';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { authStatus, walletAddress } from '../lib/auth';
@@ -19,89 +28,75 @@ import { getTheme, setTheme } from '../lib/theme';
 import { disconnectWallet } from '../lib/auth';
 // Desktop-only: tray icon badge — reflects total unread count on the OS tray.
 import { updateTrayBadge } from '../lib/trayBadge';
+import {
+  joinedSignal,
+  addJoinedChannel,
+  removeJoinedChannel,
+  syncJoinedWithApi,
+} from '../lib/joined-channels';
+import {
+  channelOrg,
+  resolveSidebarLayout,
+  isGroupCollapsed,
+  toggleGroupCollapsed,
+  createGroup,
+  renameGroup,
+  deleteGroup,
+  reorderGroups,
+  setBucketOrder,
+  assignChannel,
+  clearPlacement,
+  resetToAlphabetical,
+  DEFAULT_CHANNEL_SLUG,
+  type OrgChannel,
+  type ResolvedGroup,
+} from '../lib/channel-org';
+import { downloadChannelOrg } from '../lib/settings-sync';
+import { vaultExportKey } from '../lib/vault';
 
-/** Default channel slug shown to all users (even unauthenticated). */
-const DEFAULT_CHANNEL_SLUG = 'ogmara';
+// Re-exported for existing importers (ChannelJoinView, ChannelCreateView) that
+// historically imported these from the Sidebar; the implementation now lives in
+// lib/joined-channels so non-UI code can auto-join without importing this file.
+export { addJoinedChannel, removeJoinedChannel };
 
-// --- Reactive joined-channel tracking ---
-// SolidJS signal backed by localStorage so the sidebar memo reacts to changes.
-
-function loadJoinedFromStorage(): Set<number> {
-  try {
-    const raw = localStorage.getItem('ogmara_joined_channels');
-    if (!raw) return new Set();
-    const arr = JSON.parse(raw);
-    if (Array.isArray(arr)) return new Set(arr);
-  } catch { /* ignore */ }
-  return new Set();
-}
-
-function storageInitialized(): boolean {
-  return localStorage.getItem('ogmara_joined_channels') !== null;
-}
-
-const [joinedSignal, setJoinedSignal] = createSignal<Set<number>>(loadJoinedFromStorage());
-
-function persistJoined(ids: Set<number>): void {
-  localStorage.setItem('ogmara_joined_channels', JSON.stringify([...ids]));
-  setJoinedSignal(new Set(ids));
-}
-
-export function addJoinedChannel(channelId: number): void {
-  const ids = new Set(joinedSignal());
-  ids.add(channelId);
-  persistJoined(ids);
-}
-
-export function removeJoinedChannel(channelId: number): void {
-  const ids = new Set(joinedSignal());
-  ids.delete(channelId);
-  persistJoined(ids);
-}
+/** Sentinel droppable id for the ungrouped bucket (group ids are uuids). */
+const UNGROUPED_BUCKET = '__ungrouped__';
 
 /**
- * Sync the joined set with the API channel list.
- * - Private channels in the list → user IS a member (L2 node pre-filters) → auto-add
- * - First-time migration: seed with ALL visible channels
- *
- * Why seed with everything on first init: the joined-set is purely a
- * client-side sidebar visibility filter — there is no on-chain or server-side
- * "joined" state for public channels. After a fresh device / cleared local
- * storage the filter starts empty, so without seeding the sidebar shows
- * nothing even though the API returned a full catalog. Users could only
- * see channels by manually visiting `/chat/<id>` or finding them via Search.
- * The old behaviour of only seeding the `ogmara` default channel left
- * networks without that channel with a permanently empty sidebar after a
- * fresh setup. Seeding with the full visible set restores the expected
- * "I can see what I have access to" UX; the user can still explicitly
- * leave channels afterwards.
+ * A channel row that is both draggable (by channel id) and a droppable target
+ * (so other channels can be positioned relative to it). The actual row markup
+ * is supplied by the caller as children, so each sidebar style keeps its own
+ * look. The dragged original is dimmed; a DragOverlay renders the floating copy.
  */
-function syncJoinedWithApi(apiChannels: { channel_id: number; channel_type: number; slug: string }[]): void {
-  const current = new Set(joinedSignal());
-  let changed = false;
+const DraggableChannel: Component<{ id: number; children: JSX.Element }> = (props) => {
+  const draggable = createDraggable(props.id);
+  const droppable = createDroppable(props.id);
+  return (
+    <div
+      ref={(el) => { draggable.ref(el); droppable.ref(el); }}
+      {...draggable.dragActivators}
+      class="org-channel-draggable"
+      classList={{ 'org-drop-over': droppable.isActiveDroppable }}
+      style={draggable.isActiveDraggable ? 'opacity:0.4; touch-action:none' : 'touch-action:none'}
+    >
+      {props.children}
+    </div>
+  );
+};
 
-  if (!storageInitialized() && apiChannels.length > 0) {
-    // First-time migration on this device — seed with everything the API
-    // returns (private channels are already pre-filtered to members; public
-    // channels form the platform's visible catalog).
-    for (const ch of apiChannels) {
-      if (!current.has(ch.channel_id)) {
-        current.add(ch.channel_id);
-        changed = true;
-      }
-    }
-  } else {
-    // Auto-add private channels the API returns (user must be a member)
-    for (const ch of apiChannels) {
-      if (ch.channel_type === 2 && !current.has(ch.channel_id)) {
-        current.add(ch.channel_id);
-        changed = true;
-      }
-    }
-  }
-
-  if (changed) persistJoined(current);
-}
+/** A bucket container (a group body or the ungrouped list) that accepts drops. */
+const DroppableBucket: Component<{ id: string; children: JSX.Element }> = (props) => {
+  const droppable = createDroppable(props.id);
+  return (
+    <div
+      ref={droppable.ref}
+      class="org-bucket"
+      classList={{ 'org-drop-over': droppable.isActiveDroppable }}
+    >
+      {props.children}
+    </div>
+  );
+};
 
 // Sidebar minimum is set so the Modern header (burger + search input + bell)
 // always has room to render legibly with visual breathing room around each
@@ -260,14 +255,6 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   const channelInitial = (ch: { display_name?: string; slug: string }) =>
     (ch.display_name || ch.slug || '#').slice(0, 1).toUpperCase();
 
-  const filteredChannels = () => {
-    const all = channels() ?? [];
-    const q = searchQuery().trim().toLowerCase();
-    if (!q) return all;
-    return all.filter((ch) =>
-      (ch.display_name || '').toLowerCase().includes(q) || ch.slug.toLowerCase().includes(q),
-    );
-  };
 
   const handleContextMenu = (e: MouseEvent, channelId: number, creator?: string) => {
     e.preventDefault();
@@ -486,6 +473,235 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     );
   });
 
+  // --- Channel organization (groups + custom ordering) ---
+  // Resolved, ordered sidebar layout. Reacts to both the channel list and the
+  // synced organization. The search box still filters within the resolved list.
+  const layout = createMemo(() => resolveSidebarLayout(channels() as OrgChannel[], channelOrg()));
+
+  // Apply a free-text filter to a list of channels (Modern search box).
+  const filterList = (list: OrgChannel[]): OrgChannel[] => {
+    const q = searchQuery().trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((ch) =>
+      (ch.display_name || '').toLowerCase().includes(q) || ch.slug.toLowerCase().includes(q),
+    );
+  };
+
+  // Auto-pull the synced organization once when the wallet becomes ready, so a
+  // fresh device shows the user's groups + ordering. Best-effort, LWW-guarded.
+  let orgPulled = false;
+  createEffect(() => {
+    if (authStatus() === 'ready' && !orgPulled) {
+      orgPulled = true;
+      vaultExportKey().then((key) => { if (key) downloadChannelOrg(key).catch(() => {}); }).catch(() => {});
+    }
+  });
+
+  // --- Group editing UI state ---
+  const [groupMenu, setGroupMenu] = createSignal<{ x: number; y: number; groupId: string } | null>(null);
+  const [renamingGroup, setRenamingGroup] = createSignal<string | null>(null);
+  // Close on any click OUTSIDE the trigger button or the menu itself. We cannot
+  // rely on stopPropagation here: SolidJS delegates onClick to the document, so
+  // the opening click reaches this sibling document listener regardless — a
+  // target check is the robust pattern (same as the burger menu).
+  const closeGroupMenu = (e: MouseEvent) => {
+    const tgt = e.target as HTMLElement;
+    if (tgt.closest('.org-group-menu-btn') || tgt.closest('.sidebar-context-menu')) return;
+    setGroupMenu(null);
+  };
+  if (typeof document !== 'undefined') {
+    document.addEventListener('click', closeGroupMenu);
+    onCleanup(() => document.removeEventListener('click', closeGroupMenu));
+  }
+
+  const handleNewGroup = () => {
+    const id = createGroup(t('sidebar_new_group_default'));
+    if (id) setRenamingGroup(id);
+  };
+
+  const commitRename = (id: string, value: string) => {
+    const v = value.trim();
+    if (v) renameGroup(id, v);
+    setRenamingGroup(null);
+  };
+
+  const handleDeleteGroup = (id: string) => {
+    setGroupMenu(null);
+    if (window.confirm(t('sidebar_delete_group_confirm'))) deleteGroup(id);
+  };
+
+  const moveGroup = (id: string, dir: -1 | 1) => {
+    setGroupMenu(null);
+    const ids = layout().groups.map((rg) => rg.group.id);
+    const i = ids.indexOf(id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    reorderGroups(ids);
+  };
+
+  // Aggregate unread for a collapsed group header.
+  const groupUnread = (g: ResolvedGroup): number =>
+    g.channels.reduce((sum, ch) => sum + (unreadCounts()[String(ch.channel_id)] ?? 0), 0);
+
+  // --- Channel drag-and-drop (reorder within / move across groups) ---
+  // Droppable ids are bucket ids (group uuid or UNGROUPED_BUCKET, both strings);
+  // draggable ids are channel ids (numbers). That type split lets us tell a drop
+  // onto a container apart from a drop onto another channel.
+  const [draggedChannel, setDraggedChannel] = createSignal<OrgChannel | null>(null);
+
+  /** The ordered channel ids currently shown in a bucket. */
+  const bucketIds = (bucket: string): number[] => {
+    const l = layout();
+    if (bucket === UNGROUPED_BUCKET) return l.ungrouped.map((c) => c.channel_id);
+    const g = l.groups.find((rg) => rg.group.id === bucket);
+    return g ? g.channels.map((c) => c.channel_id) : [];
+  };
+
+  /** Which bucket a channel currently lives in. */
+  const bucketOfChannel = (channelId: number): string => {
+    const l = layout();
+    for (const g of l.groups) {
+      if (g.channels.some((c) => c.channel_id === channelId)) return g.group.id;
+    }
+    return UNGROUPED_BUCKET;
+  };
+
+  const onDragStart = ({ draggable }: DragEvent) => {
+    const id = Number(draggable.id);
+    const ch = (channels() as OrgChannel[]).find((c) => c.channel_id === id) ?? null;
+    setDraggedChannel(ch);
+  };
+
+  const onDragEnd = ({ draggable, droppable }: DragEvent) => {
+    setDraggedChannel(null);
+    if (!draggable || !droppable) return;
+    const draggedId = Number(draggable.id);
+    const overId = droppable.id;
+    let targetBucket: string;
+    let index: number;
+    if (typeof overId === 'number') {
+      targetBucket = bucketOfChannel(overId);
+      const ids = bucketIds(targetBucket);
+      index = ids.indexOf(overId);
+    } else {
+      targetBucket = String(overId);
+      index = bucketIds(targetBucket).length; // dropped on the container → append
+    }
+    if (index < 0) index = bucketIds(targetBucket).length;
+
+    const ids = bucketIds(targetBucket).filter((id) => id !== draggedId);
+    ids.splice(Math.min(index, ids.length), 0, draggedId);
+    const groupId = targetBucket === UNGROUPED_BUCKET ? null : targetBucket;
+    setBucketOrder(groupId, ids);
+  };
+
+  // --- Shared grouped-list rendering (used by both Modern and Classic) ---
+
+  /** A group section header: collapse toggle, name / inline rename, kebab menu. */
+  const groupHeader = (rg: ResolvedGroup) => {
+    const g = rg.group;
+    return (
+      <div class="org-group-header">
+        <Show
+          when={renamingGroup() === g.id}
+          fallback={
+            <button class="org-group-toggle" onClick={() => toggleGroupCollapsed(g.id)} title={g.name}>
+              <span class={`collapse-arrow ${!isGroupCollapsed(g.id) ? 'open' : ''}`}>▸</span>
+              <span class="org-group-name">{g.name}</span>
+              <Show when={isGroupCollapsed(g.id) && groupUnread(rg) > 0}>
+                <span class="unread-badge">{groupUnread(rg)}</span>
+              </Show>
+            </button>
+          }
+        >
+          {/* Rename input is a SIBLING of the toggle button, never nested inside
+              it (an <input> in a <button> is invalid and not editable). */}
+          <input
+            class="org-group-rename"
+            value={g.name}
+            ref={(el) => setTimeout(() => el.focus(), 0)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitRename(g.id, e.currentTarget.value);
+              else if (e.key === 'Escape') setRenamingGroup(null);
+            }}
+            onBlur={(e) => commitRename(g.id, e.currentTarget.value)}
+          />
+        </Show>
+        <Show when={renamingGroup() !== g.id}>
+          <button
+            class="org-group-menu-btn"
+            title={t('sidebar_group_options')}
+            onClick={(e) => { e.stopPropagation(); setGroupMenu({ x: e.clientX, y: e.clientY, groupId: g.id }); }}
+          >⋯</button>
+        </Show>
+      </div>
+    );
+  };
+
+  /** The floating group context menu (rename / delete / move up-down). */
+  const groupMenuEl = () => (
+    <Show when={groupMenu()}>
+      {(menu) => (
+        <div class="sidebar-context-menu" style={`left:${menu().x}px; top:${menu().y}px`} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => { setRenamingGroup(menu().groupId); setGroupMenu(null); }}>{t('sidebar_rename_group')}</button>
+          <button onClick={() => moveGroup(menu().groupId, -1)}>{t('sidebar_move_up')}</button>
+          <button onClick={() => moveGroup(menu().groupId, 1)}>{t('sidebar_move_down')}</button>
+          <button class="danger" onClick={() => handleDeleteGroup(menu().groupId)}>{t('sidebar_delete_group')}</button>
+        </div>
+      )}
+    </Show>
+  );
+
+  /**
+   * Render the full grouped + drag-and-drop channel list. `renderRow` supplies
+   * each style's own channel-row markup; the default channel is pinned first and
+   * is never draggable.
+   */
+  const renderGroupedChannels = (renderRow: (ch: OrgChannel) => JSX.Element) => {
+    const l = layout();
+    return (
+      <DragDropProvider collisionDetector={closestCenter} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+        <DragDropSensors />
+        <Show when={l.defaultChannel}>{renderRow(l.defaultChannel!)}</Show>
+        <For each={l.groups}>
+          {(rg) => (
+            <div class="org-group">
+              {groupHeader(rg)}
+              <Show when={!isGroupCollapsed(rg.group.id)}>
+                <DroppableBucket id={rg.group.id}>
+                  <For each={filterList(rg.channels)}>
+                    {(ch) => <DraggableChannel id={ch.channel_id}>{renderRow(ch)}</DraggableChannel>}
+                  </For>
+                  <Show when={rg.channels.length === 0}>
+                    <div class="org-group-empty">{t('sidebar_group_empty')}</div>
+                  </Show>
+                </DroppableBucket>
+              </Show>
+            </div>
+          )}
+        </For>
+        {/* Divider before the ungrouped channels, but only when there is at
+            least one group above them — keeps the un-customized list clean. */}
+        <Show when={l.groups.length > 0 && filterList(l.ungrouped).length > 0}>
+          <div class="org-ungrouped-header">{t('sidebar_ungrouped')}</div>
+        </Show>
+        <DroppableBucket id={UNGROUPED_BUCKET}>
+          <For each={filterList(l.ungrouped)}>
+            {(ch) => <DraggableChannel id={ch.channel_id}>{renderRow(ch)}</DraggableChannel>}
+          </For>
+        </DroppableBucket>
+        <DragOverlay>
+          <Show when={draggedChannel()}>
+            <div class="org-drag-overlay">
+              {(draggedChannel()!.display_name || draggedChannel()!.slug)}
+            </div>
+          </Show>
+        </DragOverlay>
+      </DragDropProvider>
+    );
+  };
+
   // Listen for channel list changes (create/leave/delete)
   if (typeof window !== 'undefined') {
     const onChannelsChanged = () => setChannelVersion(v => v + 1);
@@ -660,61 +876,69 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       {/* Tab content */}
       <div style="flex:1; overflow-y:auto">
         <Show when={activeTab() === 'chats'}>
-          <For each={filteredChannels()}>
-            {(channel) => {
-              const unread = () => unreadCounts()[String(channel.channel_id)] ?? 0;
-              const mentioned = () => (mentionCounts()[String(channel.channel_id)] ?? 0) > 0;
-              const isActive = () => currentChannelId() === channel.channel_id;
-              return (
-                <button
-                  style={`display:flex; align-items:center; gap:10px; padding:10px 12px; width:100%; text-align:left; cursor:pointer; transition:background 0.1s; background:${isActive() ? 'var(--color-chat-active-bg)' : 'transparent'}`}
-                  onClick={() => go(`/chat/${channel.channel_id}`)}
-                  onContextMenu={(e) => handleContextMenu(e, channel.channel_id, channel.creator)}
-                >
-                  <div style="width:48px; height:48px; border-radius:50%; background:linear-gradient(135deg, var(--color-accent-primary), var(--color-accent-secondary)); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:20px; flex-shrink:0; overflow:hidden">
-                    <Show when={channel.logo_cid} fallback={<span>{channelInitial(channel)}</span>}>
-                      <img src={getClient().getMediaUrl(channel.logo_cid!)} alt="" style="width:48px; height:48px; border-radius:50%; object-fit:cover" />
+          {/* Organize bar: create a new group / reset to alphabetical */}
+          <Show when={authStatus() === 'ready'}>
+            <div class="org-toolbar">
+              <button class="org-toolbar-btn" onClick={handleNewGroup} title={t('sidebar_new_group')}>
+                <span style="font-size:14px">🗂</span> {t('sidebar_new_group')}
+              </button>
+              <button class="org-toolbar-btn" onClick={resetToAlphabetical} title={t('sidebar_sort_az')}>A→Z</button>
+            </div>
+          </Show>
+          {renderGroupedChannels((channel) => {
+            const unread = () => unreadCounts()[String(channel.channel_id)] ?? 0;
+            const mentioned = () => (mentionCounts()[String(channel.channel_id)] ?? 0) > 0;
+            const isActive = () => currentChannelId() === channel.channel_id;
+            return (
+              <button
+                style={`display:flex; align-items:center; gap:10px; padding:10px 12px; width:100%; text-align:left; cursor:pointer; transition:background 0.1s; background:${isActive() ? 'var(--color-chat-active-bg)' : 'transparent'}`}
+                onClick={() => go(`/chat/${channel.channel_id}`)}
+                onContextMenu={(e) => handleContextMenu(e, channel.channel_id, channel.creator)}
+              >
+                <div style="width:48px; height:48px; border-radius:50%; background:linear-gradient(135deg, var(--color-accent-primary), var(--color-accent-secondary)); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:20px; flex-shrink:0; overflow:hidden">
+                  <Show when={channel.logo_cid} fallback={<span>{channelInitial(channel)}</span>}>
+                    <img src={getClient().getMediaUrl(channel.logo_cid!)} alt="" style="width:48px; height:48px; border-radius:50%; object-fit:cover" />
+                  </Show>
+                </div>
+                <div style="flex:1; overflow:hidden">
+                  <div style="display:flex; justify-content:space-between; align-items:center">
+                    <span style="font-weight:600; font-size:var(--font-size-sm); color:var(--color-text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">
+                      <Show when={channel.channel_type === 2}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px; vertical-align:-1px">
+                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                        </svg>
+                      </Show>
+                      <Show when={channel.channel_type === 1}>
+                        <span style="margin-right:4px; vertical-align:-1px" title={t('sidebar_broadcast_channel')}>📢</span>
+                      </Show>
+                      {channel.display_name || channel.slug}
+                    </span>
+                  </div>
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2px">
+                    <span style="font-size:var(--font-size-xs); color:var(--color-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">
+                      {channel.description || (channel.channel_type === 2
+                        ? t('sidebar_private_channel')
+                        : channel.channel_type === 1
+                          ? t('sidebar_broadcast_channel')
+                          : t('sidebar_public_channel'))}
+                    </span>
+                    <Show when={mentioned()}>
+                      <span class="mention-badge" title={t('sidebar_mentioned_here')}
+                        style="min-width:20px; height:20px; border-radius:9999px; background:var(--color-warning, #f59e0b); color:#fff; font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; padding:0 5px; flex-shrink:0; margin-left:4px">
+                        @
+                      </span>
+                    </Show>
+                    <Show when={unread() > 0}>
+                      <span style="min-width:20px; height:20px; border-radius:9999px; background:var(--color-accent-primary); color:var(--color-text-inverse); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; padding:0 5px; flex-shrink:0; margin-left:4px">
+                        {unread()}
+                      </span>
                     </Show>
                   </div>
-                  <div style="flex:1; overflow:hidden">
-                    <div style="display:flex; justify-content:space-between; align-items:center">
-                      <span style="font-weight:600; font-size:var(--font-size-sm); color:var(--color-text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">
-                        <Show when={channel.channel_type === 2}>
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px; vertical-align:-1px">
-                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                          </svg>
-                        </Show>
-                        <Show when={channel.channel_type === 1}>
-                          <span style="margin-right:4px; vertical-align:-1px" title={t('sidebar_broadcast_channel')}>📢</span>
-                        </Show>
-                        {channel.display_name || channel.slug}
-                      </span>
-                    </div>
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2px">
-                      <span style="font-size:var(--font-size-xs); color:var(--color-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">
-                        {channel.description || (channel.channel_type === 2
-                          ? t('sidebar_private_channel')
-                          : channel.channel_type === 1
-                            ? t('sidebar_broadcast_channel')
-                            : t('sidebar_public_channel'))}
-                      </span>
-                      <Show when={mentioned()}>
-                        <span class="mention-badge" title={t('sidebar_mentioned_here')}
-                          style="min-width:20px; height:20px; border-radius:9999px; background:var(--color-warning, #f59e0b); color:#fff; font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; padding:0 5px; flex-shrink:0; margin-left:4px">
-                          @
-                        </span>
-                      </Show>
-                      <Show when={unread() > 0}>
-                        <span style="min-width:20px; height:20px; border-radius:9999px; background:var(--color-accent-primary); color:var(--color-text-inverse); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; padding:0 5px; flex-shrink:0; margin-left:4px">
-                          {unread()}
-                        </span>
-                      </Show>
-                    </div>
-                  </div>
-                </button>
-              );
-            }}
-          </For>
+                </div>
+              </button>
+            );
+          })}
+          {groupMenuEl()}
         </Show>
 
         <Show when={activeTab() === 'feed'}>
@@ -913,6 +1137,28 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
           }}>
             ⚙ {t('channel_settings')}
           </button>
+          {/* Move-to-group submenu — keyboard/touch-accessible alternative to drag */}
+          <Show when={contextMenu()?.channelId !== undefined}>
+            <div class="context-menu-label">{t('sidebar_move_to_group')}</div>
+            <button class="context-menu-item" onClick={() => {
+              const ctx = contextMenu(); setContextMenu(null);
+              if (ctx) assignChannel(ctx.channelId, null);
+            }}># {t('sidebar_ungrouped')}</button>
+            <For each={layout().groups}>
+              {(rg) => (
+                <button class="context-menu-item" onClick={() => {
+                  const ctx = contextMenu(); setContextMenu(null);
+                  if (ctx) assignChannel(ctx.channelId, rg.group.id);
+                }}>🗂 {rg.group.name}</button>
+              )}
+            </For>
+            <button class="context-menu-item" onClick={() => {
+              const ctx = contextMenu(); setContextMenu(null);
+              if (!ctx) return;
+              const id = createGroup(t('sidebar_new_group_default'));
+              if (id) { assignChannel(ctx.channelId, id); setRenamingGroup(id); }
+            }}>＋ {t('sidebar_new_group')}</button>
+          </Show>
           <button class="context-menu-item context-menu-danger" onClick={async () => {
             const ctx = contextMenu();
             setContextMenu(null);
@@ -921,6 +1167,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
             try {
               await getClient().leaveChannel(ctx.channelId);
               removeJoinedChannel(ctx.channelId);
+              clearPlacement(ctx.channelId); // drop its group placement (syncs)
               window.dispatchEvent(new Event('ogmara:channels-changed'));
               navigate('/news');
             } catch (e: any) {
@@ -938,6 +1185,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
               try {
                 await getClient().deleteChannel(ctx.channelId);
                 removeJoinedChannel(ctx.channelId);
+                clearPlacement(ctx.channelId); // drop its group placement (syncs)
                 window.dispatchEvent(new Event('ogmara:channels-changed'));
                 navigate('/news');
               } catch (e: any) {
@@ -1054,6 +1302,13 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
           <Show when={authStatus() === 'ready'}>
             <button
               class="sidebar-add-btn"
+              onClick={handleNewGroup}
+              title={t('sidebar_new_group')}
+            >
+              🗂
+            </button>
+            <button
+              class="sidebar-add-btn"
               onClick={() => go('/channel/create')}
               title={t('channel_create')}
             >
@@ -1063,56 +1318,55 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         </div>
         <Show when={channelsOpen()}>
           <Show when={hasLoadedOnce() || !allChannels.loading} fallback={<div class="sidebar-loading">{t('loading')}</div>}>
-            <For each={channels()}>
-              {(channel) => (
-                <div class="channel-group">
-                  <button
-                    class={`sidebar-item ${currentChannelId() === channel.channel_id ? 'active' : ''}`}
-                    onClick={() => go(`/chat/${channel.channel_id}`)}
-                    onContextMenu={(e) => handleContextMenu(e, channel.channel_id, channel.creator)}
-                  >
-                    <span class="channel-hash">{channel.channel_type === 2 ? '🔒' : channel.channel_type === 1 ? '📢' : '#'}</span>
-                    <span class="channel-name">{channel.display_name || channel.slug}</span>
-                    <Show when={(mentionCounts()[String(channel.channel_id)] ?? 0) > 0}>
-                      <span class="mention-badge" title={t('sidebar_mentioned_here')}>@</span>
-                    </Show>
-                    <Show when={(unreadCounts()[String(channel.channel_id)] ?? 0) > 0}>
-                      <span class="unread-badge">{unreadCounts()[String(channel.channel_id)]}</span>
-                    </Show>
-                  </button>
-                  <Show when={channel.channel_type === 2}>
-                    <button
-                      class="sidebar-members-toggle"
-                      onClick={() => toggleMembers(channel.channel_id)}
-                    >
-                      <span class={`collapse-arrow ${expandedMembers().has(channel.channel_id) ? 'open' : ''}`}>▸</span>
-                      <span>{t('channel_members')}</span>
-                    </button>
-                    <Show when={expandedMembers().has(channel.channel_id)}>
-                      <div class="sidebar-member-list">
-                        <For each={channelMembers()[channel.channel_id] ?? []}>
-                          {(member) => (
-                            <button
-                              class="sidebar-member-item"
-                              onClick={() => go(`/user/${member.address}`)}
-                              onContextMenu={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setMemberMenu({ x: e.clientX, y: e.clientY, channelId: channel.channel_id, address: member.address, role: member.role, creator: channel.creator });
-                              }}
-                              title={member.address}
-                            >
-                              <span class="member-dot" classList={{ 'member-mod': member.role === 'moderator', 'member-owner': member.role === 'creator' }} />
-                              <span class="member-name">{memberDisplayName(member.address)}</span>
-                            </button>
-                          )}
-                        </For>
-                      </div>
-                    </Show>
+            {renderGroupedChannels((channel) => (
+              <div class="channel-group">
+                <button
+                  class={`sidebar-item ${currentChannelId() === channel.channel_id ? 'active' : ''}`}
+                  onClick={() => go(`/chat/${channel.channel_id}`)}
+                  onContextMenu={(e) => handleContextMenu(e, channel.channel_id, channel.creator)}
+                >
+                  <span class="channel-hash">{channel.channel_type === 2 ? '🔒' : channel.channel_type === 1 ? '📢' : '#'}</span>
+                  <span class="channel-name">{channel.display_name || channel.slug}</span>
+                  <Show when={(mentionCounts()[String(channel.channel_id)] ?? 0) > 0}>
+                    <span class="mention-badge" title={t('sidebar_mentioned_here')}>@</span>
                   </Show>
-                </div>
-              )}
-            </For>
+                  <Show when={(unreadCounts()[String(channel.channel_id)] ?? 0) > 0}>
+                    <span class="unread-badge">{unreadCounts()[String(channel.channel_id)]}</span>
+                  </Show>
+                </button>
+                <Show when={channel.channel_type === 2}>
+                  <button
+                    class="sidebar-members-toggle"
+                    onClick={() => toggleMembers(channel.channel_id)}
+                  >
+                    <span class={`collapse-arrow ${expandedMembers().has(channel.channel_id) ? 'open' : ''}`}>▸</span>
+                    <span>{t('channel_members')}</span>
+                  </button>
+                  <Show when={expandedMembers().has(channel.channel_id)}>
+                    <div class="sidebar-member-list">
+                      <For each={channelMembers()[channel.channel_id] ?? []}>
+                        {(member) => (
+                          <button
+                            class="sidebar-member-item"
+                            onClick={() => go(`/user/${member.address}`)}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setMemberMenu({ x: e.clientX, y: e.clientY, channelId: channel.channel_id, address: member.address, role: member.role, creator: channel.creator });
+                            }}
+                            title={member.address}
+                          >
+                            <span class="member-dot" classList={{ 'member-mod': member.role === 'moderator', 'member-owner': member.role === 'creator' }} />
+                            <span class="member-name">{memberDisplayName(member.address)}</span>
+                          </button>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
+                </Show>
+              </div>
+            ))}
+            {groupMenuEl()}
           </Show>
         </Show>
       </div>

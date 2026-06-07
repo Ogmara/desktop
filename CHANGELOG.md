@@ -5,6 +5,49 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.26.0] - 2026-06-07
+
+Sidebar channel organization — group, reorder, and tidy the channel list.
+Channels were previously shown in raw API order with no way to organize them.
+
+### Added
+
+- **User-created channel groups** in the sidebar (Classic and Modern styles):
+  create (🗂 button), rename inline, collapse/expand, and delete (channels fall
+  back to the ungrouped list — never lost). Collapsed groups show an aggregate
+  unread badge.
+- **Alphabetical-by-default ordering** for unplaced channels (`display_name`
+  then `slug`); the default `ogmara` channel stays pinned first. "Sort A→Z"
+  resets manual ordering while keeping groups.
+- **Drag-and-drop reordering** of channels within and across groups
+  (`@thisbeyond/solid-dnd`, pointer + touch). Right-click "Move to group" and
+  group "Move up/down" provide a non-drag, keyboard-accessible alternative.
+- **Cross-device sync of the organization** via the existing encrypted
+  `SettingsSync` blob (E2E-encrypted; node never sees plaintext). Edits
+  auto-upload (debounced); the org auto-downloads on login, resolved
+  last-writer-wins by `updatedAt`. A channel grouped on one device auto-joins
+  on the others.
+- New `sidebar_*` i18n strings across all 7 locales (en, de, es, pt, ja, zh, ru).
+
+### Changed
+
+- Per-device view-state (collapsed groups, last-open channel) stays local and is
+  **not** synced, by design.
+- Joined-channel tracking extracted from `Sidebar.tsx` into `lib/joined-channels.ts`.
+
+### Fixed
+
+- **Chat no longer jumps/scrolls when a reaction, edit, or delete arrives over
+  the WebSocket.** These are now applied **in place** to the target message
+  (copied out of the channel resource into `localMessages` if needed) instead of
+  triggering a full list refetch that rebuilt every row and lost scroll
+  position. Own reactions are skipped on the WS echo (already counted
+  optimistically) to avoid double-counting. (Desktop port of the web 0.40.2 fix.)
+- **Duplicate message after sending no longer lingers until reload.** Optimistic
+  messages are now de-duplicated against the real message whether it arrives via
+  the REST resource, the WS echo, or the poll (into `localMessages`), not just
+  the resource.
+
 ## [1.25.0] - 2026-06-04
 
 On-chain node discovery — the picker and cold-boot bootstrap now source

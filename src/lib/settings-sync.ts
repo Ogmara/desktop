@@ -7,9 +7,15 @@
 import { getSetting, setSetting } from './settings';
 import { getClient } from './api';
 import { DESIGN_STYLES, COLOR_SCHEMES, type DesignStyle, type ColorScheme } from './theme';
+import { getChannelOrg, applyRemoteOrg } from './channel-org';
+import { addJoinedChannels } from './joined-channels';
 
 /** JSON-encoded settings keys synced across devices (read/write via getSetting/setSetting). */
 const SYNC_KEYS = ['lang', 'notificationSound', 'compactLayout', 'fontSize'] as const;
+
+/** Object-valued synced settings. Stored under their own key in the blob and
+ *  applied with bespoke merge logic rather than the scalar setSetting path. */
+const CHANNEL_ORG_KEY = 'channelOrg';
 
 /** Theme-style keys stored as raw strings in localStorage (read/write via lib/theme.ts).
  *  Kept on a separate path to avoid JSON-encoding breakage when the value is a
@@ -64,6 +70,9 @@ export async function encryptSettings(hexKey: string): Promise<{ encrypted_setti
     const raw = localStorage.getItem(`ogmara.${key}`);
     if (raw !== null) settings[key] = raw;
   }
+  // Channel organization (groups + custom ordering) — an object value, carried
+  // with its own LWW `updatedAt` so the receiver can resolve multi-device edits.
+  settings[CHANNEL_ORG_KEY] = getChannelOrg();
   const plaintext = new TextEncoder().encode(JSON.stringify(settings));
   const key = await deriveKey(hexKey);
   const nonce = crypto.getRandomValues(new Uint8Array(12));
@@ -113,6 +122,13 @@ export async function decryptAndApplySettings(
     if (RAW_SYNC_KEYS.includes(k as any) && typeof v === 'string' && isValidRawSyncValue(k, v)) {
       localStorage.setItem(`ogmara.${k}`, v);
     }
+    // Channel organization: apply via LWW (only if the remote copy is newer) and
+    // auto-join any channel the remote org places, so a channel grouped on
+    // another device becomes visible here.
+    if (k === CHANNEL_ORG_KEY && v && typeof v === 'object') {
+      const placedIds = applyRemoteOrg(v);
+      if (placedIds.length) addJoinedChannels(placedIds);
+    }
   }
 }
 
@@ -142,4 +158,33 @@ export async function downloadSettings(hexKey: string): Promise<boolean> {
     new Uint8Array(resp.nonce),
   );
   return true;
+}
+
+/**
+ * Download the synced blob and apply ONLY the channel organization (LWW), not
+ * theme/lang/etc. Used for the automatic on-login pull so a fresh device shows
+ * the user's groups + ordering without overriding this device's other prefs.
+ * Best-effort: swallows errors and returns false on any failure.
+ */
+export async function downloadChannelOrg(hexKey: string): Promise<boolean> {
+  try {
+    const resp = await getClient().getSettings();
+    if (!resp) return false;
+    const key = await deriveKey(hexKey);
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: new Uint8Array(resp.nonce) },
+      key,
+      new Uint8Array(resp.encrypted_settings),
+    );
+    const settings = JSON.parse(new TextDecoder().decode(plaintext));
+    const org = settings?.[CHANNEL_ORG_KEY];
+    if (org && typeof org === 'object') {
+      const placedIds = applyRemoteOrg(org);
+      if (placedIds.length) addJoinedChannels(placedIds);
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
