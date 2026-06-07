@@ -29,10 +29,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
 
@@ -133,7 +133,7 @@ jobs:
       # Upload artifacts (available in Actions tab)
       - name: Upload Windows artifacts
         if: matrix.label == 'windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ogmara-${{ steps.version.outputs.version }}-beta-windows
           path: |
@@ -142,7 +142,7 @@ jobs:
 
       - name: Upload Linux artifacts
         if: matrix.label == 'linux'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ogmara-${{ steps.version.outputs.version }}-beta-linux
           path: |
@@ -151,7 +151,7 @@ jobs:
 
       - name: Upload macOS artifacts
         if: matrix.label == 'macos-arm64'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ogmara-${{ steps.version.outputs.version }}-beta-macos
           path: |
@@ -166,7 +166,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Read version
         id: version
@@ -175,7 +175,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -183,7 +183,7 @@ jobs:
         run: find artifacts -type f | sort
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: Ogmara Desktop v${{ steps.version.outputs.version }} (Beta)
           tag_name: ${{ github.ref_name }}
