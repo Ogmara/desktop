@@ -64,7 +64,7 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
     }, 0);
   });
 
-  const [messages, { refetch: refetchDmMessages }] = createResource(
+  const [messages] = createResource(
     () => props.peerAddress,
     async (address) => {
       if (!address) return [];
@@ -78,17 +78,14 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
     },
   );
 
-  // Poll for new DMs every 10s. The node's WS push for DMs is only a notification
-  // badge (the count) — DM CONTENT is intentionally never broadcast (it would leak
-  // plaintext to every client), so cross-node DMs would otherwise only appear on
-  // reopen. Mirrors the channel view's incremental poll.
-  let dmPollTimer: ReturnType<typeof setInterval> | null = null;
-  onMount(() => {
-    dmPollTimer = setInterval(() => {
-      if (props.peerAddress && authStatus() === 'ready') refetchDmMessages();
-    }, 10000);
+  // The DM view component is reused across conversations (only the route param
+  // changes), so clear per-conversation local state when the peer changes —
+  // otherwise the previous peer's messages (including your own optimistic sends)
+  // leak into the newly-opened conversation.
+  createEffect(() => {
+    props.peerAddress; // track
+    setLocalMessages([]);
   });
-  onCleanup(() => { if (dmPollTimer) clearInterval(dmPollTimer); });
 
   const MAX_LOCAL_MESSAGES = 200;
 
@@ -96,7 +93,10 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   const cleanup = onWsEvent((event) => {
     if (event.type === 'dm') {
       const msg = event.envelope;
-      if (msg.author === props.peerAddress || msg.author === walletAddress()) {
+      // Only incoming messages from THIS peer. Our own sends are shown
+      // optimistically; matching `author === me` here would pull a DM we sent to a
+      // DIFFERENT peer into whichever conversation happens to be open.
+      if (msg.author === props.peerAddress) {
         setLocalMessages((prev) => {
           const next = [...prev, msg];
           return next.length > MAX_LOCAL_MESSAGES ? next.slice(-MAX_LOCAL_MESSAGES) : next;

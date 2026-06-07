@@ -5,6 +5,17 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.3] - 2026-06-07
+
+### Fixed
+
+- **Reverted the 1.27.2 DM poll** — it duplicated sent messages (optimistic `local-`
+  copy + polled real copy weren't deduped). See screenshot-reported duplication.
+- **DM conversation isolation.** Clear per-conversation local message state when the
+  peer changes (the view is reused across DM routes), and the real-time WS handler
+  now only adds messages from the current peer (was also matching your own sends to
+  *other* peers) — fixes sent messages leaking into every other conversation.
+
 ## [1.27.2] - 2026-06-07
 
 ### Fixed
