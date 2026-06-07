@@ -922,16 +922,24 @@ export const ChatView: Component<ChatViewProps> = (props) => {
 
   const cancelReply = () => setReplyTo(null);
 
+  // An optimistic message still carries a `local-<ts>` placeholder id (its real
+  // 32-byte msg_id hasn't echoed back yet). Editing/deleting/reacting to it would
+  // hex-decode "local-…" → "Invalid hex string", and the failed edit could drop
+  // the message from the view (data loss). Block these actions until it confirms.
+  const isPending = (msg: any) => String(msg?.msg_id ?? '').startsWith('local-');
+
   const canEdit = (msg: any) =>
     isRegistered() &&
     msg.author === walletAddress() &&
     !msg.deleted &&
+    !isPending(msg) &&
     (Date.now() - normalizeTs(msg.timestamp)) < EDIT_WINDOW_MS;
 
   const canDelete = (msg: any) =>
-    isRegistered() && msg.author === walletAddress() && !msg.deleted;
+    isRegistered() && msg.author === walletAddress() && !msg.deleted && !isPending(msg);
 
   const startEdit = (msg: any) => {
+    if (isPending(msg)) return; // unconfirmed message has no real msg_id to edit yet
     setEditingMsg({ msgId: msgIdToHex(msg.msg_id), content: getPayloadContent(msg.payload) });
     setMessageInput(getPayloadContent(msg.payload));
     inputRef()?.focus();
@@ -983,6 +991,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
 
   const handleDelete = async (msg: any) => {
     if (!props.channelId) return;
+    if (isPending(msg)) return; // can't delete an unconfirmed (local-) message
     if (!window.confirm(t('chat_delete_confirm'))) return;
     try {
       const client = getClient();
@@ -1007,6 +1016,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
 
   const handleReact = async (msg: any, emoji: string) => {
     if (!props.channelId || !walletAddress()) return;
+    if (isPending(msg)) return; // can't react to an unconfirmed (local-) message
     try {
       const client = getClient();
       await client.reactToMessage(props.channelId, msgIdToHex(msg.msg_id), emoji);

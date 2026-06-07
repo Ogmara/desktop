@@ -5,6 +5,16 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.1] - 2026-06-07
+
+### Fixed
+
+- **Edit/delete/react blocked on unconfirmed messages (data loss).** A message
+  still showing its optimistic `local-<ts>` placeholder id (real `msg_id` not yet
+  echoed back) could be edited — which hex-decoded `"local-…"` → "Invalid hex
+  string", and the failed edit could then drop the message from the view entirely.
+  These actions are now disabled until a message confirms.
+
 ## [1.27.0] - 2026-06-07
 
 ### Added
