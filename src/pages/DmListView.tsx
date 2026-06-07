@@ -2,7 +2,7 @@
  * DmListView — list of DM conversations.
  */
 
-import { Component, createResource, createSignal, For, Show } from 'solid-js';
+import { Component, createResource, createSignal, For, Show, onMount, onCleanup } from 'solid-js';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { authStatus } from '../lib/auth';
@@ -12,7 +12,7 @@ import type { DmConversation } from '@ogmara/sdk';
 export const DmListView: Component = () => {
   const [newDmAddress, setNewDmAddress] = createSignal('');
 
-  const [conversations] = createResource(
+  const [conversations, { refetch: refetchConversations }] = createResource(
     () => authStatus() === 'ready',
     async (isReady) => {
       if (!isReady) return [];
@@ -25,6 +25,16 @@ export const DmListView: Component = () => {
       }
     },
   );
+
+  // The list otherwise loads once (on auth) and never refreshes, so new
+  // conversations and updated previews/unread don't appear. Poll periodically.
+  let listPollTimer: ReturnType<typeof setInterval> | null = null;
+  onMount(() => {
+    listPollTimer = setInterval(() => {
+      if (authStatus() === 'ready') refetchConversations();
+    }, 12000);
+  });
+  onCleanup(() => { if (listPollTimer) clearInterval(listPollTimer); });
 
   const handleNewDm = () => {
     const addr = newDmAddress().trim();

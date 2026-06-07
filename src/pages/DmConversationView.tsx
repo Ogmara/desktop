@@ -64,7 +64,7 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
     }, 0);
   });
 
-  const [messages] = createResource(
+  const [messages, { refetch: refetchDmMessages }] = createResource(
     () => props.peerAddress,
     async (address) => {
       if (!address) return [];
@@ -86,6 +86,19 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
     props.peerAddress; // track
     setLocalMessages([]);
   });
+
+  // Auto-refresh: the open conversation otherwise only loads once (on open), so a
+  // DM that arrives while you're viewing only shows after leaving + returning. The
+  // node can't push DM bodies over the shared WS broadcast (it would leak to every
+  // client), so poll the recipient's own authenticated endpoint. The dedup below
+  // drops the optimistic copy when the real one arrives, so there's no duplication.
+  let dmPollTimer: ReturnType<typeof setInterval> | null = null;
+  onMount(() => {
+    dmPollTimer = setInterval(() => {
+      if (props.peerAddress && authStatus() === 'ready') refetchDmMessages();
+    }, 8000);
+  });
+  onCleanup(() => { if (dmPollTimer) clearInterval(dmPollTimer); });
 
   const MAX_LOCAL_MESSAGES = 200;
 
@@ -110,11 +123,20 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   });
   onCleanup(cleanup);
 
-  // Deduplicate by msg_id
+  // Combine server + local messages. First drop optimistic (`local-`) sends once
+  // the server has the real copy (matched by author + timestamp window) so a poll
+  // refetch doesn't show the message twice; then dedup by msg_id.
+  const normTs = (t: any) => { const n = Number(t) || 0; return n < 1e12 ? n * 1000 : n; };
   const allMessages = () => {
+    const real = messages() || [];
+    const local = localMessages().filter((lm) => {
+      if (!String(lm.msg_id ?? '').startsWith('local-')) return true;
+      return !real.some((rm) =>
+        rm.author === lm.author &&
+        Math.abs(normTs(rm.timestamp) - normTs(lm.timestamp)) < 15000);
+    });
     const seen = new Set<string>();
-    const combined = [...(messages() || []), ...localMessages()];
-    return combined.filter((msg) => {
+    return [...real, ...local].filter((msg) => {
       if (!msg.msg_id || seen.has(msg.msg_id)) return false;
       seen.add(msg.msg_id);
       return true;

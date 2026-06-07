@@ -742,7 +742,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     if (pollTimer) clearInterval(pollTimer);
     if (authStatus() === 'ready') {
       pollData();
-      pollTimer = setInterval(pollData, 30000);
+      pollTimer = setInterval(pollData, 12000);
     }
   });
   onCleanup(() => { if (pollTimer) clearInterval(pollTimer); });

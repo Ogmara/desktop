@@ -5,6 +5,17 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.4] - 2026-06-07
+
+### Fixed
+
+- **DMs appear without reopening the conversation.** The open conversation now polls
+  the recipient's own authenticated endpoint every 8s (the node can't push DM bodies
+  over the shared WS broadcast without leaking them to all clients). Dedup now drops
+  a sent message's optimistic `local-` copy when the real one arrives, so polling no
+  longer duplicates sends. The DM conversation list polls every 12s (new
+  conversations appear) and the unread-badge poll sped up 30s -> 12s.
+
 ## [1.27.3] - 2026-06-07
 
 ### Fixed
