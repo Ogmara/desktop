@@ -67,7 +67,8 @@ export async function deriveKeyFromPin(
   return crypto.subtle.deriveKey(
     {
       name: 'PBKDF2',
-      salt: salt.buffer.slice(salt.byteOffset, salt.byteOffset + salt.byteLength),
+      // audit 2026-06-07 B4.1: cast to ArrayBuffer — TS5.9 types .slice() as ArrayBuffer|SharedArrayBuffer
+      salt: salt.buffer.slice(salt.byteOffset, salt.byteOffset + salt.byteLength) as ArrayBuffer,
       iterations: PBKDF2_ITERATIONS,
       hash: 'SHA-256',
     },
@@ -112,9 +113,10 @@ export async function decryptWithKey(
   const iv = hexToBytes(ivHex);
   const ciphertext = hexToBytes(ctHex);
   const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: iv.buffer.slice(iv.byteOffset, iv.byteOffset + iv.byteLength) },
+    // audit 2026-06-07 B4.1: cast to ArrayBuffer — TS5.9 types .slice() as ArrayBuffer|SharedArrayBuffer
+    { name: 'AES-GCM', iv: iv.buffer.slice(iv.byteOffset, iv.byteOffset + iv.byteLength) as ArrayBuffer },
     key,
-    ciphertext.buffer.slice(ciphertext.byteOffset, ciphertext.byteOffset + ciphertext.byteLength),
+    ciphertext.buffer.slice(ciphertext.byteOffset, ciphertext.byteOffset + ciphertext.byteLength) as ArrayBuffer,
   );
   return new TextDecoder().decode(plaintext);
 }

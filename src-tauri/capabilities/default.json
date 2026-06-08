@@ -29,12 +29,12 @@
     "window-state:allow-save-window-state",
     {
       "identifier": "http:default",
+      "comment": "audit 2026-06-07 B4.6/W2: node URLs are user-configurable so https on any host/port stays open, but arbitrary PLAINTEXT http:// is dropped (TLS enforced, matching the SSRF/host-binding fixes). Plaintext is allowed ONLY for loopback (local dev node).",
       "allow": [
-        { "url": "http://*:*" },
         { "url": "https://*:*" },
-        { "url": "http://*" },
         { "url": "https://*" },
-        { "url": "http://localhost:*" }
+        { "url": "http://localhost:*" },
+        { "url": "http://127.0.0.1:*" }
       ]
     }
   ]

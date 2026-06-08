@@ -735,7 +735,8 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       const client = getClient();
       const lastSeenNotif = parseInt(localStorage.getItem('ogmara.lastSeenNotifTs') || '0', 10);
       const [unread, dmUnread, notifResp] = await Promise.all([
-        client.getUnreadCounts().catch(() => ({ unread: {} })),
+        // audit 2026-06-07 B4.1: fallback must include `mentions` so the union keeps the field
+        client.getUnreadCounts().catch(() => ({ unread: {}, mentions: {} })),
         client.getDmUnread().catch(() => ({ unread: {} })),
         client.getNotifications(lastSeenNotif || undefined, 50).catch(() => ({ notifications: [] })),
         // Refresh channel list

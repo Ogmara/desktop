@@ -34,7 +34,17 @@ function hexToBytes(h: string): Uint8Array {
   return out;
 }
 
-/** Stable per-install device identifier (32-byte hex). Public, persisted once. */
+/**
+ * Stable per-install device identifier (32-byte hex). Public, persisted once.
+ *
+ * ACCEPTED SPEC DEVIATION (protocol §2.4): §2.4 defines `device_id` as the
+ * device's Ed25519 *signing* key. The desktop built-in-wallet model has no
+ * separate device signing key (it signs with the embedded wallet key directly),
+ * so we mint a random stable per-install `device_id` instead. The node accepts
+ * this (router validation only checks the value is 32-byte hex), and §2.4/§5.3
+ * should acknowledge that built-in-wallet clients use a random per-install
+ * device_id. Behavior is intentional — do not "fix" by deriving from a key.
+ */
 function getOrCreateDeviceId(): string {
   let id = getSetting('deviceId');
   if (!id) {
@@ -54,11 +64,6 @@ async function getOrCreateEncKeypair(): Promise<{ privateKey: Uint8Array; public
   const kp = generateDeviceEncKeypair();
   await setItemAsync(ENC_PRIV_KEY, bytesToHex(kp.privateKey));
   return kp;
-}
-
-/** Hex of this device's X25519 encryption public key (creates the keypair if absent). */
-export async function getDeviceEncPublicKeyHex(): Promise<string> {
-  return (await getOrCreateEncKeypair()).publicKeyHex;
 }
 
 /**

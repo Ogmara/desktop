@@ -42,13 +42,6 @@ export function getSigner(): WalletSigner | null {
   return vaultGetSigner();
 }
 
-/** Guard: throws if no signer is available. Use in action handlers. */
-export function requireAuth(): WalletSigner {
-  const signer = vaultGetSigner();
-  if (!signer) throw new Error('Wallet not connected');
-  return signer;
-}
-
 /** Initialize auth on app startup. Loads vault, attaches signer to client. */
 export async function initAuth(): Promise<void> {
   setAuthStatus('loading');

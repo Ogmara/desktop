@@ -66,7 +66,6 @@ export type ForexRates = Record<string, number>;
 
 /** Supported display currencies (subset of CoinGecko `vs_currencies`). */
 export const SUPPORTED_CURRENCIES = ['usd', 'eur', 'brl', 'gbp', 'jpy', 'cny'] as const;
-export type Currency = typeof SUPPORTED_CURRENCIES[number];
 
 /** Fractional digits for currency display. Most are 2; JPY has none. */
 const CURRENCY_FRACTION_DIGITS: Record<string, number> = {

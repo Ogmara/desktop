@@ -25,15 +25,71 @@ struct SavedPosition(Mutex<Option<PhysicalPosition<i32>>>);
 struct SecureFileStore {
     path: PathBuf,
     data: Mutex<HashMap<String, String>>,
+    /// Set when the on-disk store existed but was corrupt/unreadable on load AND
+    /// we could not preserve it to a `.bak` sidecar. In that state `save()`
+    /// refuses to write — overwriting would destroy recoverable (possibly
+    /// encrypted-wallet) data (audit 2026-06-07 N1, CLAUDE.md Wallet Safety).
+    poisoned: std::sync::atomic::AtomicBool,
+}
+
+/// Build a non-clobbering `.corrupt.bak` sidecar path next to `path`.
+fn next_corrupt_bak_path(path: &std::path::Path) -> PathBuf {
+    for n in 0..1000 {
+        let mut name = path.as_os_str().to_owned();
+        if n == 0 {
+            name.push(".corrupt.bak");
+        } else {
+            name.push(format!(".corrupt.{n}.bak"));
+        }
+        let candidate = PathBuf::from(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    // Extremely unlikely (1000 existing backups) — fall back to the base name.
+    let mut name = path.as_os_str().to_owned();
+    name.push(".corrupt.bak");
+    PathBuf::from(name)
 }
 
 impl SecureFileStore {
     fn new(app_data_dir: PathBuf) -> Self {
         let path = app_data_dir.join(".secure-store.json");
+        let mut poisoned = false;
         let data = if path.exists() {
             match fs::read_to_string(&path) {
-                Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
-                Err(_) => HashMap::new(),
+                Ok(contents) => match serde_json::from_str::<HashMap<String, String>>(&contents) {
+                    Ok(map) => map,
+                    Err(e) => {
+                        // Corrupt JSON. NEVER overwrite — the bytes may still
+                        // hold a recoverable (encrypted) wallet. Preserve them in
+                        // a .bak sidecar and start empty; if preservation fails,
+                        // poison the store so save() refuses to write.
+                        let bak = next_corrupt_bak_path(&path);
+                        match fs::rename(&path, &bak) {
+                            Ok(()) => eprintln!(
+                                "[secure-store] WARNING: store was corrupt ({e}); original preserved at {} — wallet may need restore/re-import",
+                                bak.display()
+                            ),
+                            Err(re) => {
+                                poisoned = true;
+                                eprintln!(
+                                    "[secure-store] ERROR: store corrupt ({e}) and backup failed ({re}); refusing to overwrite to protect wallet data"
+                                );
+                            }
+                        }
+                        HashMap::new()
+                    }
+                },
+                Err(e) => {
+                    // File exists but couldn't be read (perms/IO). Don't risk
+                    // overwriting a recoverable file — poison and surface.
+                    poisoned = true;
+                    eprintln!(
+                        "[secure-store] ERROR: store exists but is unreadable ({e}); refusing to overwrite to protect wallet data"
+                    );
+                    HashMap::new()
+                }
             }
         } else {
             HashMap::new()
@@ -41,10 +97,17 @@ impl SecureFileStore {
         Self {
             path,
             data: Mutex::new(data),
+            poisoned: std::sync::atomic::AtomicBool::new(poisoned),
         }
     }
 
     fn save(&self) -> Result<(), String> {
+        if self.poisoned.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(
+                "secure store is read-only (was corrupt/unreadable on load); not overwriting to protect wallet data — restart, or restore/remove the store file"
+                    .into(),
+            );
+        }
         let data = self.data.lock().map_err(|e| format!("lock error: {e}"))?;
         // Ensure parent directory exists
         if let Some(parent) = self.path.parent() {
@@ -81,6 +144,31 @@ impl SecureFileStore {
             .remove(key);
         self.save()
     }
+
+    /// Atomically remove `key` UNLESS it is the last remaining wallet-key slot
+    /// (i.e. `key` is present and `other` is absent). In that case it returns
+    /// `NeedsConfirmation` WITHOUT removing — the caller must get explicit user
+    /// confirmation and then call `delete`. The last-key check and the removal
+    /// happen under a single lock so two concurrent deletes of the two slots
+    /// can't both slip past the guard (audit 2026-06-07 W-1).
+    fn delete_guarded(&self, key: &str, other: &str) -> Result<DeleteOutcome, String> {
+        let mut data = self.data.lock().map_err(|e| format!("lock error: {e}"))?;
+        if data.contains_key(key) && !data.contains_key(other) {
+            return Ok(DeleteOutcome::NeedsConfirmation);
+        }
+        data.remove(key);
+        drop(data); // release before save() re-locks
+        self.save()?;
+        Ok(DeleteOutcome::Deleted)
+    }
+}
+
+/// Outcome of [`SecureFileStore::delete_guarded`].
+enum DeleteOutcome {
+    /// The key was removed (it wasn't the last wallet-key slot).
+    Deleted,
+    /// The key is the last wallet-key slot — NOT removed; needs confirmation.
+    NeedsConfirmation,
 }
 
 /// Allowed key prefixes for secure storage operations.
@@ -139,11 +227,58 @@ fn secure_store_set(app: tauri::AppHandle, key: String, value: String) -> Result
     store.set(&key, &value)
 }
 
+/// The two vault key slots that hold irreplaceable wallet key material.
+const VAULT_RAW_KEY: &str = "ogmara.vault.private_key";
+const VAULT_ENCRYPTED_KEY: &str = "ogmara.vault.encrypted_key";
+
 /// Tauri command: delete a value from the secure file store.
+///
+/// Wallet-loss guard (audit 2026-06-07 W6): the webview can call this command,
+/// so XSS/malicious code could wipe the wallet. Deleting the SOLE remaining
+/// copy of wallet key material is irreversible, so when this delete would leave
+/// no wallet key in the store we require explicit NATIVE confirmation — code in
+/// the webview cannot dismiss an OS dialog. Legitimate mode-switch migrations
+/// always write the other slot first, so they never trigger the prompt; only an
+/// explicit wallet-clear (or an attack) hits the last-copy case.
 #[tauri::command]
-fn secure_store_delete(app: tauri::AppHandle, key: String) -> Result<(), String> {
+async fn secure_store_delete(app: tauri::AppHandle, key: String) -> Result<(), String> {
     validate_key(&key)?;
     let store = app.state::<SecureFileStore>();
+
+    if key == VAULT_RAW_KEY || key == VAULT_ENCRYPTED_KEY {
+        let other = if key == VAULT_RAW_KEY { VAULT_ENCRYPTED_KEY } else { VAULT_RAW_KEY };
+        // Atomic check-and-delete: returns NeedsConfirmation (without removing)
+        // only when this is the sole remaining wallet key. Two concurrent
+        // deletes of the two slots therefore cannot both bypass the prompt.
+        match store.delete_guarded(&key, other)? {
+            DeleteOutcome::Deleted => return Ok(()),
+            DeleteOutcome::NeedsConfirmation => {
+                let app2 = app.clone();
+                let confirmed = tokio::task::spawn_blocking(move || {
+                    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+                    app2.dialog()
+                        .message(
+                            "This permanently removes your wallet key from this device. \
+                             Without an exported backup your wallet CANNOT be recovered. Continue?",
+                        )
+                        .title("Remove wallet key?")
+                        .kind(MessageDialogKind::Warning)
+                        .buttons(MessageDialogButtons::OkCancelCustom(
+                            "Remove".into(),
+                            "Cancel".into(),
+                        ))
+                        .blocking_show()
+                })
+                .await
+                .map_err(|e| format!("confirm dialog error: {e}"))?;
+                if !confirmed {
+                    return Err("wallet key deletion cancelled by user".into());
+                }
+                return store.delete(&key); // user confirmed removing this key
+            }
+        }
+    }
+
     store.delete(&key)
 }
 
@@ -342,10 +477,93 @@ async fn save_export_file(
     }
 }
 
+/// True iff `ip` is a globally-routable public address. Rejects loopback,
+/// RFC1918 private, link-local (incl. the 169.254.169.254 cloud-metadata
+/// endpoint), CGNAT, ULA, multicast, unspecified, documentation, and
+/// IPv4-mapped IPv6 — the SSRF-relevant ranges (audit 2026-06-07 C1). Mirrors
+/// the node's `sc_views` routability classifier.
+fn ip_is_publicly_routable(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            if v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.is_documentation()
+            {
+                return false;
+            }
+            let o = v4.octets();
+            // CGNAT 100.64.0.0/10 (RFC6598) — `is_shared` is unstable.
+            if o[0] == 100 && (o[1] & 0xc0) == 0x40 {
+                return false;
+            }
+            true
+        }
+        std::net::IpAddr::V6(v6) => {
+            if v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() {
+                return false;
+            }
+            let s = v6.segments();
+            if (s[0] & 0xfe00) == 0xfc00 {
+                return false; // ULA fc00::/7
+            }
+            if (s[0] & 0xffc0) == 0xfe80 {
+                return false; // link-local fe80::/10
+            }
+            if s[0..5].iter().all(|&x| x == 0) && s[5] == 0xffff {
+                return false; // IPv4-mapped ::ffff:0:0/96
+            }
+            if s[0] == 0x2001 && s[1] == 0x0db8 {
+                return false; // documentation 2001:db8::/32
+            }
+            true
+        }
+    }
+}
+
+/// A ureq resolver that performs the normal DNS lookup, then drops any
+/// non-publicly-routable address from the result (audit 2026-06-07 C1). Because
+/// ureq's connector dials *exactly* the addresses this returns — with no second
+/// DNS lookup — filtering here both blocks SSRF to internal targets and pins
+/// the connection against DNS-rebinding (a host that resolves to a public IP at
+/// validation time can't flip to a private IP at connect time). NOTE: depends
+/// on ureq 3.3's `unversioned::resolver` API (pinned in Cargo.lock).
+#[derive(Debug, Default)]
+struct SsrfGuardResolver {
+    inner: ureq::unversioned::resolver::DefaultResolver,
+}
+
+impl ureq::unversioned::resolver::Resolver for SsrfGuardResolver {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &ureq::config::Config,
+        timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+        let resolved = self.inner.resolve(uri, config, timeout)?;
+        let mut safe = ureq::unversioned::resolver::Resolver::empty(self);
+        for addr in resolved.iter() {
+            if ip_is_publicly_routable(&addr.ip()) {
+                safe.push(*addr);
+            }
+        }
+        if safe.is_empty() {
+            // Every resolved address was private/internal (or the host had
+            // none) → refuse rather than dial an internal target.
+            return Err(ureq::Error::HostNotFound);
+        }
+        Ok(safe)
+    }
+}
+
 /// Tauri command: fetch a URL with auth headers and return the body as a string.
 /// Used for large responses that Tauri's HTTP plugin can't handle reliably.
 /// Headers are restricted to x-ogmara-* for security (prevents SSRF with arbitrary auth tokens).
-/// Response body is capped at 50 MB to prevent OOM.
+/// Response body is capped at 50 MB to prevent OOM. The custom resolver blocks
+/// SSRF to private/internal IPs and pins against DNS-rebinding (audit C1).
 #[tauri::command]
 async fn fetch_and_save(
     url: String,
@@ -356,7 +574,19 @@ async fn fetch_and_save(
     }
     // Run blocking HTTP request off the Tokio runtime
     tokio::task::spawn_blocking(move || -> Result<String, String> {
-        let mut req = ureq::get(&url);
+        // Disable redirect-following: a 3xx to http:// or another host would
+        // bypass the https-only check (and could leak the x-ogmara-* auth
+        // headers over plaintext). The export endpoint is a direct call with
+        // no legitimate redirects (audit follow-up W1).
+        let config = ureq::config::Config::builder()
+            .max_redirects(0)
+            .build();
+        let agent = ureq::Agent::with_parts(
+            config,
+            ureq::unversioned::transport::DefaultConnector::default(),
+            SsrfGuardResolver::default(),
+        );
+        let mut req = agent.get(&url);
         for (k, v) in &headers {
             if k.starts_with("x-ogmara-") {
                 req = req.header(k, v);

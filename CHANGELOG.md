@@ -5,6 +5,67 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.30.1] - 2026-06-08
+
+### Removed
+
+- Cleanup (audit 2026-06-07 fix-plan Batch 5): dead app-internal exports (3)
+  removed; documented the accepted random-`device_id` deviation (protocol §2.4)
+  for the built-in-wallet client.
+
+## [1.30.0] - 2026-06-08
+
+Correctness + CSP/capability hardening (audit 2026-06-07 fix-plan Batch 4).
+Adopts sdk-js ≥0.26.0.
+
+### Security
+
+- **Tightened CSP (B4.6/W1).** Dropped `'unsafe-inline'` from `script-src` and
+  removed plaintext `http:`/`ws:` from the policy; split into per-directive
+  (`script-src 'self'`; `connect-src` https/wss + Tauri ipc + loopback; keeps
+  Tauri `asset:`/`ipc:` protocols).
+- **Narrowed the HTTP capability (B4.6/W2).** `capabilities/default.json` no
+  longer allows arbitrary plaintext `http://*` — only `https://*[:*]` (user-
+  configurable nodes) plus loopback `http://localhost|127.0.0.1:*` (local dev).
+- Inherits the sdk-js `validateNodeUrl`/WS-TLS hardening.
+
+### Fixed
+
+- **TypeScript clean + enforced (B4.1).** All tsc errors resolved (SDK type
+  alignment, ChatView WS-envelope handling, BufferSource casts in appLock/
+  settings-sync, base64-payload decode) and a real dead-code bug removed
+  (`WalletButton` compared `WalletSource` to `'klever-extension'`, impossible on
+  desktop — built-in-wallet only). `build` now runs `tsc --noEmit` before vite.
+
+## [1.29.0] - 2026-06-08
+
+### Security
+
+- **Host-bound auth (audit 2026-06-07, fix-plan B1.3).** Adopted sdk-js
+  ≥0.25.0. Account export now obtains auth headers via the new public
+  `OgmaraClient.authHeaders()` (host-bound + nonced) instead of reaching into
+  the signer with the old format; `vaultSignRequest` takes a `NodeBinding`.
+  **Requires l2-node ≥0.61.0.**
+- **SSRF guard on the native `fetch_and_save` command (audit C1).** The Rust
+  fetch used for large responses (account export) now resolves through a custom
+  ureq resolver that drops every non-publicly-routable address (RFC1918,
+  loopback, link-local incl. 169.254.169.254, CGNAT, ULA, IPv4-mapped). Because
+  ureq dials exactly the returned addresses, this both blocks SSRF to internal
+  targets and pins the connection against DNS-rebinding.
+- **rustls-webpki 0.103.10 → 0.103.13 (RUSTSEC-2026-0098/0099/0104,
+  cross-cutting B1.5)** — fixes weakened cert-chain validation + a reachable CRL
+  panic on outbound TLS.
+- **Wallet-loss guard on `secure_store_delete` (audit W6, fix-plan B2.2).** The
+  webview can call this command, so XSS could wipe the vault. Deleting the SOLE
+  remaining wallet-key slot now requires native OS confirmation (which webview
+  code cannot dismiss); legitimate mode-switch migrations write the other slot
+  first and are unaffected.
+- **Corrupt secure-store no longer self-destructs (audit N1, fix-plan B2.2).** On
+  a corrupt/unreadable store the loader preserves the original bytes in a
+  `.corrupt.bak` sidecar (never overwrites recoverable wallet data) and, if it
+  can't, poisons the store so `save()` refuses to write. Honors CLAUDE.md Wallet
+  Safety ("never delete old-format until verified").
+
 ## [1.28.0] - 2026-06-07
 
 ### Added

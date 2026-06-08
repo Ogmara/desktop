@@ -129,7 +129,7 @@ export function decodePayload(payload: number[] | Uint8Array): DecodedPayload {
  * payload fields as "not actually a base64 payload" and fall back to
  * treating the string as plain text.
  */
-function tryDecodeBase64Payload(payload: string): DecodedPayload | null {
+export function tryDecodeBase64Payload(payload: string): DecodedPayload | null {
   try {
     const binary = atob(payload);
     const bytes = new Uint8Array(binary.length);

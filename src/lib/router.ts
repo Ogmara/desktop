@@ -164,11 +164,6 @@ export function goBack(): void {
   window.history.back();
 }
 
-/** Get the current route view name. */
-export function currentView(): ViewName {
-  return route().view;
-}
-
 /** Get a route parameter. */
 export function routeParam(key: string): string | undefined {
   return route().params[key];

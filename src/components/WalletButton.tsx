@@ -4,7 +4,7 @@
 
 import { Component, Show } from 'solid-js';
 import { t } from '../i18n/init';
-import { authStatus, walletAddress, walletSource } from '../lib/auth';
+import { authStatus, walletAddress } from '../lib/auth';
 import { navigate } from '../lib/router';
 
 export const WalletButton: Component = () => {
@@ -30,9 +30,9 @@ export const WalletButton: Component = () => {
       >
         <span class="wallet-indicator connected" />
         <span class="wallet-addr">{walletAddress() ? truncateAddress(walletAddress()!) : ''}</span>
-        <Show when={walletSource() === 'klever-extension'}>
-          <span class="wallet-badge">K</span>
-        </Show>
+        {/* audit 2026-06-07 B4.1: removed dead `walletSource() === 'klever-extension'`
+            badge — desktop is built-in-wallet only (WalletSource = 'builtin' | null),
+            so the extension branch could never render. */}
       </Show>
 
       <style>{`

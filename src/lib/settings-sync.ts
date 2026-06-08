@@ -29,7 +29,8 @@ async function deriveKey(hexKey: string): Promise<CryptoKey> {
     throw new Error('Invalid key format');
   }
   const keyBytes = fromHex(hexKey);
-  const baseKey = await crypto.subtle.importKey('raw', keyBytes, 'HKDF', false, ['deriveKey']);
+  // audit 2026-06-07 B4.1: pass an ArrayBuffer-backed view — TS5.9 rejects Uint8Array<ArrayBufferLike>
+  const baseKey = await crypto.subtle.importKey('raw', keyBytes.buffer.slice(keyBytes.byteOffset, keyBytes.byteOffset + keyBytes.byteLength) as ArrayBuffer, 'HKDF', false, ['deriveKey']);
   // Zero the intermediate key bytes
   keyBytes.fill(0);
   return crypto.subtle.deriveKey(
@@ -92,9 +93,10 @@ export async function decryptAndApplySettings(
 ): Promise<void> {
   const key = await deriveKey(hexKey);
   const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: nonce },
+    // audit 2026-06-07 B4.1: ArrayBuffer-backed view — TS5.9 rejects Uint8Array<ArrayBufferLike>
+    { name: 'AES-GCM', iv: nonce.buffer.slice(nonce.byteOffset, nonce.byteOffset + nonce.byteLength) as ArrayBuffer },
     key,
-    encryptedSettings,
+    encryptedSettings.buffer.slice(encryptedSettings.byteOffset, encryptedSettings.byteOffset + encryptedSettings.byteLength) as ArrayBuffer,
   );
   let settings: Record<string, unknown>;
   try {

@@ -73,7 +73,6 @@ export function getDesignStyle(): DesignStyle {
 /** Reactive signal for the current design style — components can use this
  *  to conditionally render structural variants (e.g. modern sidebar). */
 const [designStyleSignal, setDesignStyleSignal] = createSignal<DesignStyle>(getDesignStyle());
-export function currentDesignStyle(): DesignStyle { return designStyleSignal(); }
 export function isModernStyle(): boolean { return designStyleSignal() === 'modern'; }
 
 /** Set the design style and apply it. */

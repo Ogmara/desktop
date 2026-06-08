@@ -318,9 +318,6 @@ function loadCollapsed(): Record<string, boolean> {
 
 const [collapsedSignal, setCollapsedSignal] = createSignal<Record<string, boolean>>(loadCollapsed());
 
-/** Reactive accessor for the per-device collapsed-group map. */
-export const collapsedGroups = collapsedSignal;
-
 /** Whether a group is currently collapsed on this device. */
 export function isGroupCollapsed(id: string): boolean {
   return collapsedSignal()[id] === true;

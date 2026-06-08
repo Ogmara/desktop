@@ -11,7 +11,7 @@ import { authStatus, getSigner, walletAddress, isRegistered } from '../lib/auth'
 import { navigate, queryParam } from '../lib/router';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
 import { EmojiPicker } from '../components/EmojiPicker';
-import { getPayloadContent, getPayloadTitle, decodePayload } from '../lib/payload';
+import { getPayloadContent, getPayloadTitle, tryDecodeBase64Payload } from '../lib/payload';
 
 export const ComposeView: Component = () => {
   const editMsgId = () => queryParam('edit');
@@ -77,9 +77,11 @@ export const ComposeView: Component = () => {
       setTitle(getPayloadTitle(post.payload) || '');
       setContent(getPayloadContent(post.payload));
       try {
-        const decoded = decodePayload(post.payload);
-        if (decoded.tags) setTags(decoded.tags.join(', '));
-        if (decoded.attachments && decoded.attachments.length > 0) {
+        // audit 2026-06-07 B4.1: post.payload is a base64 STRING — decode via the
+        // codebase's base64→DecodedPayload helper (mirrors getPayloadContent above).
+        const decoded = tryDecodeBase64Payload(post.payload);
+        if (decoded?.tags) setTags(decoded.tags.join(', '));
+        if (decoded?.attachments && decoded.attachments.length > 0) {
           // PayloadAttachment shape matches MediaAttachment (cid,
           // mime_type, size_bytes, filename, thumbnail_cid) so we
           // can pass through directly.

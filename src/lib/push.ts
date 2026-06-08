@@ -36,6 +36,10 @@ export function areNotificationsEnabled(): boolean {
 /**
  * Send a native OS notification via Tauri.
  * Only sends if notifications are enabled in settings.
+ *
+ * Not yet called from the WS event handlers (mention/DM/reply wiring is pending);
+ * retained intentionally as the notification dispatcher + sole consumer of the
+ * local `invoke`/`areNotificationsEnabled` helpers. Do not prune in isolation.
  */
 export async function sendNativeNotification(title: string, body: string): Promise<void> {
   if (!areNotificationsEnabled()) return;

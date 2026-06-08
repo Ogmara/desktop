@@ -502,18 +502,25 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   // Subscribe to channel WebSocket events
   const wsCleanup = onWsEvent((event) => {
     if (event.type === 'message' && props.channelId) {
-      const msg = event.envelope;
+      // audit 2026-06-07 B4.1: WS envelopes are loose JSON — msg_type/channel_id
+      // arrive as the spec's string names / values here, so widen locally.
+      const msg = event.envelope as Omit<typeof event.envelope, 'msg_type' | 'channel_id'> & {
+        msg_type: number | string;
+        channel_id?: number | string;
+      };
       if (msg.channel_id === props.channelId || msg.channel_id === String(props.channelId)) {
         // Reactions: apply the delta IN PLACE (no refetch → no scroll jump).
         // Skip our OWN reaction — handleReact already counted it optimistically.
         if (msg.msg_type === 'ChatReaction') {
           if (msg.author === walletAddress() || !msg.target_msg_id) return;
+          const emoji = msg.emoji;
+          if (!emoji) return;
           applyToTarget(msg.target_msg_id, (m) => {
             const reactions = { ...(m.reactions || {}) };
-            const cur = reactions[msg.emoji] || 0;
+            const cur = reactions[emoji] || 0;
             const next = msg.remove ? cur - 1 : cur + 1;
-            if (next <= 0) delete reactions[msg.emoji];
-            else reactions[msg.emoji] = next;
+            if (next <= 0) delete reactions[emoji];
+            else reactions[emoji] = next;
             return { ...m, reactions };
           });
           return;

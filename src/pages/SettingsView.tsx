@@ -465,8 +465,9 @@ export const SettingsView: Component = () => {
               try {
                 const client = getClient();
                 const nodeUrl = (client as any).nodeUrl;
-                const signer = (client as any).signer;
-                const authHeaders = await signer.signRequest('GET', '/api/v1/account/export');
+                // Host-bound auth headers (audit 2026-06-07): the client binds
+                // to the node's identity + a fresh nonce internally.
+                const authHeaders = await client.authHeaders('GET', '/api/v1/account/export');
                 setExportStatus('Fetching...');
                 const { invoke } = await import('@tauri-apps/api/core');
                 // Fetch via Rust — Tauri's HTTP plugin can't read large response bodies
