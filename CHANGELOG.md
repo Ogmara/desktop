@@ -5,6 +5,25 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.30.2] - 2026-06-09
+
+### Fixed
+
+- **Restored `http://` node access** (HTTP capability + CSP `connect-src`). The
+  B4.6/W2 hardening narrowed the desktop to https-only, which blocked connecting
+  to self-hosted / LAN nodes over `http://` (`url not allowed on the configured
+  scope`) and triggered a discovery/WebSocket **retry storm** that froze the node
+  and crashed the webview. The plaintext-http restriction was a web-browser SSRF
+  concern that doesn't apply to a native app where users connect to their own
+  nodes — `validateNodeUrl` still runs and the signer only attaches to a
+  user-selected node. Adopts sdk-js ≥0.26.1 (WS reconnect-storm fix).
+
+### Added
+
+- Quiet client-side `/api/v1/health` rate guard (defense-in-depth): a runaway
+  request loop is short-circuited (cached replay, one throttled warning) instead
+  of DoS-ing the node.
+
 ## [1.30.1] - 2026-06-08
 
 ### Removed

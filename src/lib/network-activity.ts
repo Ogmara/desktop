@@ -51,9 +51,39 @@ export function installNetworkActivityTracker(): void {
     }
   };
 
+  // Defense-in-depth guard against a runaway /api/v1/health loop. A client bug
+  // that pings /health in a tight loop can DoS the node and leak memory in the
+  // webview. Legit boot makes only a handful of /health calls, so >25/s is
+  // always a bug: past that we short-circuit (replay the last good response,
+  // no network hit) and warn once. The proper protection is the node-side
+  // per-IP limit; this just keeps a buggy client from taking a node down.
+  const now = () => { try { return performance.now(); } catch { return 0; } };
+  const HEALTH_FLOOD_PER_SEC = 25;
+  const healthTimes: number[] = [];          // sliding 1s window of /health starts
+  let lastHealthBody: string | null = null;  // replayed while the guard is engaged
+  let floodWarnedAt = 0;
+
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     const isTracked = url.includes('/api/v1/');
+    const isHealth = isTracked && url.includes('/api/v1/health');
+
+    if (isHealth) {
+      const tnow = now();
+      healthTimes.push(tnow);
+      while (healthTimes.length && tnow - healthTimes[0] > 1000) healthTimes.shift();
+      if (healthTimes.length > HEALTH_FLOOD_PER_SEC) {
+        if (tnow - floodWarnedAt > 10000) {
+          floodWarnedAt = tnow;
+          // eslint-disable-next-line no-console
+          console.warn(`[net] /api/v1/health rate guard engaged (${healthTimes.length}/s) — short-circuiting to protect the node`);
+        }
+        return new Response(
+          lastHealthBody ?? '{"status":"ok","throttled":true}',
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+    }
 
     if (isTracked) {
       setPendingRequests((n) => n + 1);
@@ -62,6 +92,10 @@ export function installNetworkActivityTracker(): void {
 
     try {
       const resp = await originalFetch(input, init);
+      // Cache the last good /health body so the guard can replay it if it trips.
+      if (isHealth && resp.ok) {
+        resp.clone().text().then((b) => { lastHealthBody = b; }).catch(() => {});
+      }
       return resp;
     } finally {
       if (isTracked) {

@@ -29,12 +29,12 @@
     "window-state:allow-save-window-state",
     {
       "identifier": "http:default",
-      "comment": "audit 2026-06-07 B4.6/W2: node URLs are user-configurable so https on any host/port stays open, but arbitrary PLAINTEXT http:// is dropped (TLS enforced, matching the SSRF/host-binding fixes). Plaintext is allowed ONLY for loopback (local dev node).",
+      "comment": "Native desktop: users connect to their OWN self-hosted / LAN nodes over plaintext http (e.g. http://host:41721), so http AND https on any host/port must be allowed. The web-client SSRF concern that motivated dropping plaintext http (audit B4.6/W2) does NOT apply to a native app — the HTTP plugin is reached only from local app code, validateNodeUrl still runs, and the signer attaches only to a user-selected node. Narrowing to https-only broke http node access ('url not allowed on the configured scope') → discovery/WS retry storm; reverted 2026-06-08.",
       "allow": [
+        { "url": "http://*:*" },
         { "url": "https://*:*" },
-        { "url": "https://*" },
-        { "url": "http://localhost:*" },
-        { "url": "http://127.0.0.1:*" }
+        { "url": "http://*" },
+        { "url": "https://*" }
       ]
     }
   ]
