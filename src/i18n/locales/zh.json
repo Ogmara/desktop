@@ -486,5 +486,8 @@
   "settings_display_currency": "显示货币",
   "settings_display_currency_desc": "用于在钱包中显示法币价值。",
   "chat_search_placeholder": "搜索消息…",
-  "chat_search_no_matches": "没有消息符合您的搜索。"
+  "chat_search_no_matches": "没有消息符合您的搜索。",
+  "dm_waiting_for_key": "等待密钥…",
+  "dm_cannot_decrypt": "无法解密",
+  "dm_attachments_not_encrypted_yet": "加密私信附件即将推出 — 目前请仅发送文本。"
 }

@@ -486,5 +486,8 @@
   "settings_display_currency": "Moneda de visualización",
   "settings_display_currency_desc": "Se usa para mostrar valores fiat en la cartera.",
   "chat_search_placeholder": "Buscar mensajes…",
-  "chat_search_no_matches": "Ningún mensaje coincide con tu búsqueda."
+  "chat_search_no_matches": "Ningún mensaje coincide con tu búsqueda.",
+  "dm_waiting_for_key": "esperando la clave…",
+  "dm_cannot_decrypt": "no se puede descifrar",
+  "dm_attachments_not_encrypted_yet": "Los adjuntos cifrados en MD llegarán pronto — por ahora envía solo texto."
 }

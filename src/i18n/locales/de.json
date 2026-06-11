@@ -486,5 +486,8 @@
   "settings_display_currency": "Anzeigewährung",
   "settings_display_currency_desc": "Wird zur Anzeige von Fiat-Werten im Wallet verwendet.",
   "chat_search_placeholder": "Nachrichten durchsuchen…",
-  "chat_search_no_matches": "Keine Nachrichten entsprechen Ihrer Suche."
+  "chat_search_no_matches": "Keine Nachrichten entsprechen Ihrer Suche.",
+  "dm_waiting_for_key": "warte auf Schlüssel…",
+  "dm_cannot_decrypt": "Entschlüsselung fehlgeschlagen",
+  "dm_attachments_not_encrypted_yet": "Verschlüsselte DM-Anhänge kommen bald — bitte vorerst nur Text senden."
 }

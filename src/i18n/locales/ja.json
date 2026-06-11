@@ -486,5 +486,8 @@
   "settings_display_currency": "表示通貨",
   "settings_display_currency_desc": "ウォレット内の法定通貨表示に使用されます。",
   "chat_search_placeholder": "メッセージを検索…",
-  "chat_search_no_matches": "検索条件に一致するメッセージはありません。"
+  "chat_search_no_matches": "検索条件に一致するメッセージはありません。",
+  "dm_waiting_for_key": "鍵を待っています…",
+  "dm_cannot_decrypt": "復号できません",
+  "dm_attachments_not_encrypted_yet": "暗号化されたDM添付は近日対応予定です。今はテキストのみ送信してください。"
 }

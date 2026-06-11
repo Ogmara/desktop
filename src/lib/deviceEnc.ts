@@ -45,7 +45,7 @@ function hexToBytes(h: string): Uint8Array {
  * should acknowledge that built-in-wallet clients use a random per-install
  * device_id. Behavior is intentional — do not "fix" by deriving from a key.
  */
-function getOrCreateDeviceId(): string {
+export function getOrCreateDeviceId(): string {
   let id = getSetting('deviceId');
   if (!id) {
     id = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
@@ -55,7 +55,7 @@ function getOrCreateDeviceId(): string {
 }
 
 /** Load or create the device X25519 encryption keypair, persisting the secret. */
-async function getOrCreateEncKeypair(): Promise<{ privateKey: Uint8Array; publicKeyHex: string }> {
+export async function getOrCreateEncKeypair(): Promise<{ privateKey: Uint8Array; publicKeyHex: string }> {
   const stored = await getItemAsync(ENC_PRIV_KEY);
   if (stored) {
     const privateKey = hexToBytes(stored);

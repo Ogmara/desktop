@@ -2,7 +2,7 @@
  * DmConversationView — direct message conversation with a peer.
  */
 
-import { Component, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup, onMount } from 'solid-js';
+import { Component, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup, onMount, untrack } from 'solid-js';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { authStatus, walletAddress, getSigner, isRegistered } from '../lib/auth';
@@ -12,9 +12,9 @@ import { showMobileList } from '../lib/mobile-nav';
 import { isModernStyle } from '../lib/theme';
 import { FormattedText } from '../components/FormattedText';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
-import { getPayloadContent, getPayloadAttachments, buildOptimisticChatPayload, safeAttachmentName } from '../lib/payload';
+import { getPayloadAttachments, buildOptimisticChatPayload, safeAttachmentName } from '../lib/payload';
 import { EmojiPicker } from '../components/EmojiPicker';
-import { buildDirectMessage } from '@ogmara/sdk';
+import { buildEncryptedDm, decryptDmMessage, type DmDisplay } from '../lib/dmCrypto';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
 
 interface DmConversationProps {
@@ -143,6 +143,37 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
     });
   };
 
+  // Per-message decrypted display, keyed by msg_id. Decryption is async (the
+  // conv_key may need a node round-trip); `waiting` entries are retried on the next
+  // poll/refetch (e.g. once a key envelope arrives for a freshly-joined device).
+  const [dmDisplays, setDmDisplays] = createSignal<Record<string, DmDisplay>>({});
+  createEffect(() => {
+    const msgs = allMessages(); // track
+    const cur = untrack(() => dmDisplays());
+    for (const msg of msgs) {
+      const id = msg.msg_id;
+      if (!id) continue;
+      const existing = cur[id];
+      if (existing && existing.kind !== 'waiting') continue;
+      decryptDmMessage(msg.payload)
+        .then((disp) => {
+          setDmDisplays((prev) =>
+            prev[id] && prev[id].kind !== 'waiting' ? prev : { ...prev, [id]: disp },
+          );
+        })
+        .catch(() => setDmDisplays((prev) => ({ ...prev, [id]: { kind: 'error' } })));
+    }
+  });
+
+  /** Display text for a DM message bubble (decrypted, or a lock placeholder). */
+  const dmText = (msg: any): string => {
+    const d = dmDisplays()[msg.msg_id];
+    if (!d) return '';
+    if (d.kind === 'text' || d.kind === 'plain') return d.text;
+    if (d.kind === 'waiting') return `🔒 ${t('dm_waiting_for_key')}`;
+    return `🔒 ${t('dm_cannot_decrypt')}`;
+  };
+
   // Mark conversation as read on mount
   onMount(async () => {
     if (authStatus() === 'ready' && props.peerAddress) {
@@ -177,15 +208,20 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
     const signer = getSigner();
     if (!signer || !walletAddress()) return;
 
+    // DMs are E2E-encrypted (P1). Encrypted media is P5 — rather than silently
+    // downgrade the whole message (text body included) to plaintext, block sending
+    // attachments and tell the user. Text-only DMs encrypt normally.
+    if (atts.length > 0) {
+      setSendError(t('dm_attachments_not_encrypted_yet'));
+      setTimeout(() => setSendError(null), 6000);
+      return;
+    }
+
     setSending(true);
     setSendError(null);
     try {
       const client = getClient();
-      const envelope = await buildDirectMessage(signer, {
-        recipient: props.peerAddress,
-        content: text,
-        attachments: atts.length > 0 ? atts : undefined,
-      });
+      const envelope = await buildEncryptedDm(props.peerAddress, text);
       await client.sendDm(props.peerAddress, envelope);
       setMessageInput('');
       setAttachments([]);
@@ -247,8 +283,11 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
     isRegistered() && msg.author === walletAddress() && !msg.deleted;
 
   const startEdit = (msg: any) => {
-    setEditingMsg({ msgId: msgIdToHex(msg.msg_id), content: getPayloadContent(msg.payload) });
-    setMessageInput(getPayloadContent(msg.payload));
+    // Prefill with decrypted text (raw payload content is ciphertext for encrypted
+    // DMs). DM edit/delete content E2E is a P1 follow-up (tracked in the E2E plan).
+    const text = dmText(msg);
+    setEditingMsg({ msgId: msgIdToHex(msg.msg_id), content: text });
+    setMessageInput(text);
     inputRef?.focus();
   };
 
@@ -335,7 +374,7 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
                   fallback={<div class="dm-msg-body dm-msg-deleted">{t('message_deleted')}</div>}
                 >
                   <div class="dm-msg-body">
-                    <FormattedText content={getPayloadContent(msg.payload)} attachments={getPayloadAttachments(msg.payload)} />
+                    <FormattedText content={dmText(msg)} attachments={getPayloadAttachments(msg.payload)} />
                   </div>
                 </Show>
                 <span class="dm-msg-time">

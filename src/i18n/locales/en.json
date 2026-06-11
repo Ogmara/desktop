@@ -489,5 +489,8 @@
   "settings_display_currency": "Display currency",
   "settings_display_currency_desc": "Used to show fiat values in the wallet.",
   "chat_search_placeholder": "Search messages...",
-  "chat_search_no_matches": "No messages match your search."
+  "chat_search_no_matches": "No messages match your search.",
+  "dm_waiting_for_key": "waiting for key…",
+  "dm_cannot_decrypt": "can't decrypt",
+  "dm_attachments_not_encrypted_yet": "Encrypted DM attachments are coming soon — send text only for now."
 }

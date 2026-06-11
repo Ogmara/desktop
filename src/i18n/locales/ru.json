@@ -486,5 +486,8 @@
   "settings_display_currency": "Валюта отображения",
   "settings_display_currency_desc": "Используется для отображения значений в фиатной валюте в кошельке.",
   "chat_search_placeholder": "Поиск сообщений…",
-  "chat_search_no_matches": "Сообщения по запросу не найдены."
+  "chat_search_no_matches": "Сообщения по запросу не найдены.",
+  "dm_waiting_for_key": "ожидание ключа…",
+  "dm_cannot_decrypt": "не удалось расшифровать",
+  "dm_attachments_not_encrypted_yet": "Зашифрованные вложения в ЛС скоро появятся — пока отправляйте только текст."
 }
