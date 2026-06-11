@@ -489,5 +489,6 @@
   "chat_search_no_matches": "没有消息符合您的搜索。",
   "dm_waiting_for_key": "等待密钥…",
   "dm_cannot_decrypt": "无法解密",
-  "dm_attachments_not_encrypted_yet": "加密私信附件即将推出 — 目前请仅发送文本。"
+  "dm_attachments_not_encrypted_yet": "加密私信附件即将推出 — 目前请仅发送文本。",
+  "dm_encrypted_preview": "加密消息"
 }

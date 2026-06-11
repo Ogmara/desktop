@@ -1065,7 +1065,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
                           </Show>
                         </div>
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2px">
-                          <span style="font-size:var(--font-size-xs); color:var(--color-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{conv.last_message_preview || '...'}</span>
+                          <span style="font-size:var(--font-size-xs); color:var(--color-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{conv.last_message_preview || (conv.last_message_at ? `🔒 ${t('dm_encrypted_preview')}` : '...')}</span>
                           <Show when={conv.unread_count > 0 && !isActive()}>
                             <span style="min-width:20px; height:20px; border-radius:9999px; background:var(--color-accent-primary); color:var(--color-text-inverse); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; padding:0 5px; flex-shrink:0; margin-left:4px">{conv.unread_count}</span>
                           </Show>

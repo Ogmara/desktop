@@ -85,8 +85,8 @@ export const DmListView: Component = () => {
                 >
                   <div class="dm-item-main">
                     <span class="dm-peer">{truncateAddress(conv.peer)}</span>
-                    <Show when={conv.last_message_preview}>
-                      <span class="dm-preview">{conv.last_message_preview}</span>
+                    <Show when={conv.last_message_preview || conv.last_message_at}>
+                      <span class="dm-preview">{conv.last_message_preview || `🔒 ${t('dm_encrypted_preview')}`}</span>
                     </Show>
                   </div>
                   <div class="dm-item-meta">

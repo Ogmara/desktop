@@ -489,5 +489,6 @@
   "chat_search_no_matches": "Nenhuma mensagem corresponde à sua pesquisa.",
   "dm_waiting_for_key": "aguardando a chave…",
   "dm_cannot_decrypt": "não foi possível descriptografar",
-  "dm_attachments_not_encrypted_yet": "Anexos cifrados em MD chegarão em breve — por enquanto envie apenas texto."
+  "dm_attachments_not_encrypted_yet": "Anexos cifrados em MD chegarão em breve — por enquanto envie apenas texto.",
+  "dm_encrypted_preview": "Mensagem cifrada"
 }

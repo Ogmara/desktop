@@ -489,5 +489,6 @@
   "chat_search_no_matches": "検索条件に一致するメッセージはありません。",
   "dm_waiting_for_key": "鍵を待っています…",
   "dm_cannot_decrypt": "復号できません",
-  "dm_attachments_not_encrypted_yet": "暗号化されたDM添付は近日対応予定です。今はテキストのみ送信してください。"
+  "dm_attachments_not_encrypted_yet": "暗号化されたDM添付は近日対応予定です。今はテキストのみ送信してください。",
+  "dm_encrypted_preview": "暗号化されたメッセージ"
 }

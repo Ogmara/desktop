@@ -492,5 +492,6 @@
   "chat_search_no_matches": "No messages match your search.",
   "dm_waiting_for_key": "waiting for key…",
   "dm_cannot_decrypt": "can't decrypt",
-  "dm_attachments_not_encrypted_yet": "Encrypted DM attachments are coming soon — send text only for now."
+  "dm_attachments_not_encrypted_yet": "Encrypted DM attachments are coming soon — send text only for now.",
+  "dm_encrypted_preview": "Encrypted message"
 }
