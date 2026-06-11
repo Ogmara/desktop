@@ -5,6 +5,20 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.31.0] - 2026-06-11
+
+### Changed
+
+- **Block-explorer links now point to the Ogmara explorer (kleverchain.org)**
+  instead of Kleverscan. The tip-sent links (NewsView, NewsDetailView) and the
+  token portfolio's asset (`↗`) and transaction links now resolve through the
+  new explorer. Links are built with a small `klever-explorer-links` helper
+  (`ex.tx()` / `ex.wallet()` / `ex.asset()`) so URL shapes live in one place.
+  The Ogmara explorer auto-detects mainnet vs. testnet (falling back to testnet
+  when a hash isn't found on mainnet), so the per-network
+  `testnet.kleverscan.org` switch — and the `getExplorerUrl()` helper — are
+  gone; a single base URL covers all networks.
+
 ## [1.30.2] - 2026-06-09
 
 ### Fixed

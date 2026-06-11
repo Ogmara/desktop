@@ -19,7 +19,8 @@ import { getPayloadContent, getPayloadTitle, getPayloadAttachments, decodePayloa
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
 import { MentionPopover } from '../components/MentionPopover';
 import { EmojiPicker } from '../components/EmojiPicker';
-import { sendTip, kleverAvailable, getExplorerUrl } from '../lib/klever';
+import { sendTip, kleverAvailable } from '../lib/klever';
+import { ex } from '../lib/klever-explorer-links';
 import { TxConfirmationCancelled } from '../lib/txConfirm';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
 import { ensureHexMsgId, formatLocalTime, truncateAddress } from '../lib/news-utils';
@@ -591,7 +592,7 @@ export const NewsDetailView: Component = () => {
                   <div class="tip-success">
                     Tip sent!{' '}
                     <a
-                      href={`${getExplorerUrl()}/transaction/${tipTxHash()}`}
+                      href={ex.tx(tipTxHash())}
                       target="_blank"
                       rel="noopener noreferrer"
                       class="tip-tx-link"

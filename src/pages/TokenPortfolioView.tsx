@@ -10,9 +10,9 @@ import {
   getAccountBalances,
   getTokenMetadata,
   sendTransfer,
-  getExplorerUrl,
   TokenBalance,
 } from '../lib/klever';
+import { ex } from '../lib/klever-explorer-links';
 import { navigate } from '../lib/router';
 import { invoke } from '@tauri-apps/api/core';
 import { currentCurrency } from '../lib/settings';
@@ -139,8 +139,6 @@ export const TokenPortfolioView: Component = () => {
       return result;
     },
   );
-
-  const explorerUrl = createMemo(() => getExplorerUrl());
 
   const totalKlvValue = createMemo(() => {
     const list = balances();
@@ -570,7 +568,7 @@ export const TokenPortfolioView: Component = () => {
                     </button>
                     <span
                       class="explorer-link"
-                      onClick={() => openExternal(`${explorerUrl()}/asset/${encodeURIComponent(token.assetId)}`)}
+                      onClick={() => openExternal(ex.asset(token.assetId))}
                       title={t('portfolio_view_explorer')}
                     >
                       ↗
@@ -597,7 +595,7 @@ export const TokenPortfolioView: Component = () => {
                   {t('portfolio_tx_sent')}{' '}
                   <span
                     class="tx-link"
-                    onClick={(e) => { e.stopPropagation(); openExternal(`${explorerUrl()}/transaction/${sendResult()}`); }}
+                    onClick={(e) => { e.stopPropagation(); openExternal(ex.tx(sendResult())); }}
                   >
                     {sendResult().slice(0, 16)}... ↗
                   </span>
