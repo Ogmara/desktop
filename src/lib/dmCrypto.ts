@@ -1,14 +1,13 @@
 /**
- * Direct Message E2E orchestration (P1, protocol §8.2). Mirrors web `dmCrypto.ts`.
+ * Direct Message E2E orchestration (P1, protocol §8.2) — **per-sender keys**.
+ * Mirrors web `dmCrypto.ts`; desktop uses the built-in wallet to sign and a random
+ * stable per-install `device_id`.
  *
- * A DM conversation is a two-member group with a random per-epoch `conv_key`,
- * delivered to each participant device via `ChannelKeyEnvelope` (0x61) and used to
- * XChaCha20-Poly1305-encrypt each message. This module owns the conv_key lifecycle:
- * establish on first send, fetch+unwrap on demand, cache in memory, encrypt/decrypt.
- * The L2 node only ever sees opaque ciphertext + wrapped keys.
- *
- * Desktop uses the built-in wallet for signing and a random stable per-install
- * `device_id` (see deviceEnc.ts). Cross-device/restart key recovery is P3 (vault).
+ * Each participant has their OWN sending key (`conv_key`), wrapped (ECIES) to every
+ * device of both participants via `ChannelKeyEnvelope` (0x61), keyed on the node by
+ * author. To decrypt a message from author X, the recipient fetches X's key. This
+ * avoids the cross-node shared-key "split-brain" (two epoch-1 keys colliding under
+ * first-write-wins). In-memory cache keyed by (conversation, epoch, author).
  */
 import {
   computeConversationId,
@@ -35,28 +34,31 @@ function fromHex(h: string): Uint8Array {
   return out;
 }
 
-/** In-memory conv_key cache: `${conversationIdHex}:${epoch}` → 32-byte key. */
+/** In-memory key cache: `${conversationIdHex}:${epoch}:${author}` → 32-byte key. */
 const convKeys = new Map<string, Uint8Array>();
-const cacheKey = (convIdHex: string, epoch: number) => `${convIdHex}:${epoch}`;
+const cacheKey = (convIdHex: string, epoch: number, author: string) =>
+  `${convIdHex}:${epoch}:${author}`;
 
-/** Highest cached epoch for a conversation, or null. */
-function cachedLatest(convIdHex: string): { key: Uint8Array; epoch: number } | null {
+/** Highest cached epoch of `author`'s key for a conversation, or null. */
+function cachedLatest(convIdHex: string, author: string): { key: Uint8Array; epoch: number } | null {
+  const suffix = `:${author}`;
   let best: { key: Uint8Array; epoch: number } | null = null;
   for (const [k, v] of convKeys) {
-    if (k.startsWith(`${convIdHex}:`)) {
-      const epoch = Number(k.slice(convIdHex.length + 1));
+    if (k.startsWith(`${convIdHex}:`) && k.endsWith(suffix)) {
+      const epoch = Number(k.slice(convIdHex.length + 1, k.length - suffix.length));
       if (!best || epoch > best.epoch) best = { key: v, epoch };
     }
   }
   return best;
 }
 
-/** Per-conversation in-flight establishment, so a double-send doesn't fork the key. */
+/** Per-conversation in-flight establishment, so a double-send doesn't fork my key. */
 const establishing = new Map<string, Promise<{ key: Uint8Array; epoch: number }>>();
 
 /** Clear cached keys (e.g. on logout / wallet switch). */
 export function clearDmKeyCache(): void {
   convKeys.clear();
+  establishing.clear();
 }
 
 interface DeviceCtx {
@@ -75,17 +77,16 @@ async function deviceCtx(): Promise<DeviceCtx | null> {
 }
 
 /**
- * Establish a brand-new `conv_key`: wrap it to every device of BOTH participants
- * and publish one `ChannelKeyEnvelope` (0x61) per device. `peer` is always the
- * recipient so the node's `key_scope == conversation_id(author, peer)` check holds.
+ * Establish MY sending key: generate a random `conv_key`, wrap it to every device
+ * of both participants, publish one `ChannelKeyEnvelope` (0x61) per device (authored
+ * by me). `peer` is always the recipient. Caches + returns my key.
  */
-async function establishConvKey(
+async function establishMyKey(
   ctx: DeviceCtx,
   conversationId: Uint8Array,
+  convIdHex: string,
   recipient: string,
-  convKey: Uint8Array,
-  epoch: number,
-): Promise<void> {
+): Promise<{ key: Uint8Array; epoch: number }> {
   const client = getClient();
   const [recipKeys, myKeys] = await Promise.all([
     client.getEncKeys(recipient).catch(() => ({ keys: [] as { device_id: string; enc_pub: string }[] })),
@@ -100,6 +101,8 @@ async function establishConvKey(
     throw new Error('no device encryption keys found for either participant');
   }
 
+  const convKey = randomConvKey();
+  const epoch = 1;
   for (const tg of targets) {
     const wrapped: WrappedKey = wrapConvKey(convKey, fromHex(tg.encPub), conversationId);
     const envelope = await buildChannelKeyEnvelope(ctx.signer!, {
@@ -113,43 +116,26 @@ async function establishConvKey(
     });
     await client.publishKeyEnvelope(envelope);
   }
-}
-
-/**
- * Establish a new conv_key, then re-fetch our own device's envelope so we adopt the
- * first-write-wins winner (converge if the peer raced us). Falls back to our
- * candidate if the envelope isn't readable back yet.
- */
-async function establishAndAdopt(
-  ctx: DeviceCtx,
-  conversationId: Uint8Array,
-  convIdHex: string,
-  recipient: string,
-): Promise<{ key: Uint8Array; epoch: number }> {
-  const candidate = randomConvKey();
-  const epoch = 1;
-  await establishConvKey(ctx, conversationId, recipient, candidate, epoch);
-  const winner = await fetchConvKey(ctx, conversationId, convIdHex, epoch);
-  if (typeof winner !== 'string') return winner;
-  convKeys.set(cacheKey(convIdHex, epoch), candidate);
-  return { key: candidate, epoch };
+  convKeys.set(cacheKey(convIdHex, epoch, ctx.wallet), convKey);
+  return { key: convKey, epoch };
 }
 
 /** `missing` = not delivered yet (retry); `corrupt` = present but unwrap failed (error). */
 type FetchResult = { key: Uint8Array; epoch: number } | 'missing' | 'corrupt';
 
-/** Fetch + unwrap this device's `conv_key` for a scope/epoch. */
+/** Fetch + unwrap author `author`'s `conv_key` for a scope/epoch, addressed to my device. */
 async function fetchConvKey(
   ctx: DeviceCtx,
   conversationId: Uint8Array,
   convIdHex: string,
+  author: string,
   epoch?: number,
 ): Promise<FetchResult> {
   let resp;
   try {
-    resp = await getClient().getKeyEnvelope(convIdHex, ctx.deviceId, epoch);
+    resp = await getClient().getKeyEnvelope(convIdHex, ctx.deviceId, author, epoch);
   } catch {
-    return 'missing'; // network/transient — retry later
+    return 'missing';
   }
   if (!resp.envelope) return 'missing';
   try {
@@ -161,14 +147,14 @@ async function fetchConvKey(
     };
     const key = unwrapConvKey(wrapped, ctx.encPriv, conversationId);
     const ep = resp.epoch ?? env.epoch;
-    convKeys.set(cacheKey(convIdHex, ep), key);
+    convKeys.set(cacheKey(convIdHex, ep, author), key);
     return { key, epoch: ep };
   } catch {
-    return 'corrupt'; // envelope present but unwrap failed — a real error, not "waiting"
+    return 'corrupt';
   }
 }
 
-/** Ensure a usable `conv_key` for sending to `recipient` (establishing at epoch 1 if new). */
+/** Ensure MY sending key for `recipient` (establishing it if first message). */
 export async function ensureConvKeyForSend(
   recipient: string,
 ): Promise<{ convKey: Uint8Array; epoch: number; conversationId: Uint8Array } | null> {
@@ -177,20 +163,17 @@ export async function ensureConvKeyForSend(
   const conversationId = computeConversationId(ctx.wallet, recipient);
   const convIdHex = toHex(conversationId);
 
-  // 1) In-memory cache first — no node round-trip on the hot path.
-  const cached = cachedLatest(convIdHex);
+  const cached = cachedLatest(convIdHex, ctx.wallet);
   if (cached) return { convKey: cached.key, epoch: cached.epoch, conversationId };
 
-  // 2) Node: our wrapped envelope (latest epoch), unwrapped + cached.
-  const fetched = await fetchConvKey(ctx, conversationId, convIdHex);
+  const fetched = await fetchConvKey(ctx, conversationId, convIdHex, ctx.wallet);
   if (typeof fetched !== 'string') {
     return { convKey: fetched.key, epoch: fetched.epoch, conversationId };
   }
 
-  // 3) New conversation — establish once (deduped) and adopt the FWW winner.
   let inflight = establishing.get(convIdHex);
   if (!inflight) {
-    inflight = establishAndAdopt(ctx, conversationId, convIdHex, recipient).finally(() =>
+    inflight = establishMyKey(ctx, conversationId, convIdHex, recipient).finally(() =>
       establishing.delete(convIdHex),
     );
     establishing.set(convIdHex, inflight);
@@ -246,8 +229,12 @@ export type DmDisplay =
   | { kind: 'waiting' }
   | { kind: 'error' };
 
-/** Decrypt a DM message for rendering (plaintext passes through; `waiting` until the key arrives). */
-export async function decryptDmMessage(payload: number[] | Uint8Array | string): Promise<DmDisplay> {
+/** Decrypt a DM message for rendering. `author` is the message sender — we fetch
+ * THAT author's key. Plaintext (optimistic local / legacy key_epoch 0) passes through. */
+export async function decryptDmMessage(
+  payload: number[] | Uint8Array | string,
+  author?: string,
+): Promise<DmDisplay> {
   const bytes = toBytes(payload);
   if (!bytes) return { kind: 'error' };
   let decoded: RawDmPayload;
@@ -257,9 +244,6 @@ export async function decryptDmMessage(payload: number[] | Uint8Array | string):
     return { kind: 'error' };
   }
   if (typeof decoded.content === 'string') return { kind: 'plain', text: decoded.content };
-  // Legacy/MVP plaintext DMs use key_epoch 0 with UTF-8 bytes in `content`
-  // (encrypted DMs are always epoch ≥ 1). Render them as plaintext rather than
-  // mis-routing to decrypt → permanent "waiting".
   if ((decoded.key_epoch ?? 0) === 0) {
     if (decoded.content instanceof Uint8Array) {
       try {
@@ -278,11 +262,13 @@ export async function decryptDmMessage(payload: number[] | Uint8Array | string):
   const epoch = decoded.key_epoch ?? 1;
   const convIdHex = toHex(conversationId);
 
-  let key = convKeys.get(cacheKey(convIdHex, epoch));
+  const ctx = await deviceCtx();
+  if (!ctx) return { kind: 'waiting' };
+  const keyAuthor = author ?? ctx.wallet;
+
+  let key = convKeys.get(cacheKey(convIdHex, epoch, keyAuthor));
   if (!key) {
-    const ctx = await deviceCtx();
-    if (!ctx) return { kind: 'waiting' };
-    const fetched = await fetchConvKey(ctx, conversationId, convIdHex, epoch);
+    const fetched = await fetchConvKey(ctx, conversationId, convIdHex, keyAuthor, epoch);
     if (fetched === 'missing') return { kind: 'waiting' };
     if (fetched === 'corrupt') return { kind: 'error' };
     key = fetched.key;
