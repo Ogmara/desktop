@@ -16,6 +16,8 @@ import {
   generateDeviceEncKeypair,
   encPublicKeyHex,
   buildDeviceEncBinding,
+  buildDeviceEncRevoke,
+  type WalletSignFn,
 } from '@ogmara/sdk';
 import { getItemAsync, setItemAsync, deleteItemAsync } from './secureStore';
 import { getSetting, setSetting } from './settings';
@@ -67,27 +69,71 @@ export async function getOrCreateEncKeypair(): Promise<{ privateKey: Uint8Array;
 }
 
 /**
+ * Revoke any of MY OWN previously-published enc keys for `deviceId` whose
+ * `enc_pub` differs from my current one. The node keys `device_enc_keys` by
+ * `enc_pub` (not device_id), so a regenerated enc key would otherwise leave the
+ * stale enc_pub *active* — and since `channel_keys` envelopes are keyed by
+ * `device_id` (first-write-wins), a sender wrapping to BOTH enc_pubs of one
+ * device can have the stale wrapping win, making messages undecryptable.
+ * Revoking the stale enc_pub guarantees exactly one active enc_pub per device.
+ * Best-effort (also defended in `establishMyKey` by newest-per-device dedup).
+ */
+async function revokeStaleEncKeys(
+  wallet: string,
+  deviceId: string,
+  currentEncPub: string,
+  sign: WalletSignFn,
+): Promise<void> {
+  try {
+    const { keys } = await getClient().getEncKeys(wallet);
+    const did = deviceId.toLowerCase();
+    const cur = currentEncPub.toLowerCase();
+    const stale = keys.filter(
+      (k) => (k.device_id ?? '').toLowerCase() === did && (k.enc_pub ?? '').toLowerCase() !== cur,
+    );
+    for (const k of stale) {
+      const revoke = await buildDeviceEncRevoke({
+        walletAddress: wallet,
+        encPubHex: k.enc_pub,
+        walletSign: sign,
+      });
+      await getClient().publishEncKeyEnvelope(wallet, revoke);
+    }
+  } catch (e) {
+    console.warn('[deviceEnc] stale enc-key revoke skipped:', e);
+  }
+}
+
+/**
  * Ensure this device's encryption key is bound to the wallet on the node.
  * Idempotent: skips when already published for this (wallet, enc_pub). Best-effort —
  * a failure (offline node, PoW) leaves the marker unset so the next login retries.
+ * On a key change, supersedes the old enc_pub (revoke) so the directory holds
+ * exactly one active enc_pub per device.
  */
 export async function ensureDeviceEncBinding(): Promise<void> {
   const wallet = vaultGetAddress();
   if (!wallet) return;
 
   const kp = await getOrCreateEncKeypair();
-  const marker = `${wallet}:${kp.publicKeyHex}`;
+  // Marker is versioned (`v2:`) so existing installs re-run once after this
+  // fix to revoke any stale duplicate enc_pub left by the pre-revoke clients.
+  const marker = `v2:${wallet}:${kp.publicKeyHex}`;
   if (getSetting('encKeyBound') === marker) return;
 
   const deviceId = getOrCreateDeviceId();
+  // signMessage returns 128-char hex; the SDK normalizes it internally.
+  const sign: WalletSignFn = (claim) => signMessage(claim);
   const envelope = await buildDeviceEncBinding({
     walletAddress: wallet,
     encPubHex: kp.publicKeyHex,
     deviceIdHex: deviceId,
-    // signMessage returns 128-char hex; the SDK normalizes it internally.
-    walletSign: (claim) => signMessage(claim),
+    walletSign: sign,
   });
   await getClient().publishEncKeyEnvelope(wallet, envelope);
+  // Retire any stale enc_pub for this device AFTER the new key is registered, so
+  // there is never a window with zero active keys for the device.
+  await revokeStaleEncKeys(wallet, deviceId, kp.publicKeyHex, sign);
   setSetting('encKeyBound', marker);
 }
 

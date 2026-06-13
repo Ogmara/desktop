@@ -102,6 +102,11 @@ export async function connectWithKey(hexKey: string): Promise<string> {
   setAuthStatus('ready');
   setWalletJustCreated(true);
   checkRegistrationStatus();
+  // Publish this wallet's device encryption-key binding (E2E P0, §2.4) so peers
+  // can wrap DM keys to it on the FIRST session — not only after a restart.
+  void ensureDeviceEncBinding().catch((e) =>
+    console.warn('[deviceEnc] binding failed:', e),
+  );
   return address;
 }
 
@@ -118,6 +123,10 @@ export async function generateWallet(): Promise<string> {
   setSetting('walletAddress', address);
   setAuthStatus('ready');
   checkRegistrationStatus();
+  // Publish this wallet's device encryption-key binding (E2E P0, §2.4).
+  void ensureDeviceEncBinding().catch((e) =>
+    console.warn('[deviceEnc] binding failed:', e),
+  );
   return address;
 }
 

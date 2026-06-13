@@ -64,8 +64,13 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
     }, 0);
   });
 
+  // Gate the source on auth being ready: on a cold reload this resource would
+  // otherwise fire before the signer is attached, the authenticated DM fetch
+  // would 401 → [], and (since only `peerAddress` is a dependency) it would
+  // never refetch until the 8 s poll — the conversation looks empty on reload.
+  // Re-keying on `authStatus` makes it refetch the moment auth lands.
   const [messages, { refetch: refetchDmMessages }] = createResource(
-    () => props.peerAddress,
+    () => (authStatus() === 'ready' ? props.peerAddress : undefined),
     async (address) => {
       if (!address) return [];
       try {
@@ -85,6 +90,12 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   createEffect(() => {
     props.peerAddress; // track
     setLocalMessages([]);
+    // Reset the auto-scroll trackers so each opened conversation scrolls to its
+    // newest message once (these are component-scoped and would otherwise stay
+    // `dmInitialLoad=false` from the first conversation → the next one opens
+    // scrolled to the oldest message).
+    prevDmCount = 0;
+    dmInitialLoad = true;
   });
 
   // Auto-refresh: the open conversation otherwise only loads once (on open), so a
@@ -168,7 +179,7 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   /** Display text for a DM message bubble (decrypted, or a lock placeholder). */
   const dmText = (msg: any): string => {
     const d = dmDisplays()[msg.msg_id];
-    if (!d) return '';
+    if (!d) return '…'; // decrypting (resolves async) — avoids a blank bubble on load
     if (d.kind === 'text' || d.kind === 'plain') return d.text;
     if (d.kind === 'waiting') return `🔒 ${t('dm_waiting_for_key')}`;
     return `🔒 ${t('dm_cannot_decrypt')}`;

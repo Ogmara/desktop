@@ -89,14 +89,26 @@ async function establishMyKey(
 ): Promise<{ key: Uint8Array; epoch: number }> {
   const client = getClient();
   const [recipKeys, myKeys] = await Promise.all([
-    client.getEncKeys(recipient).catch(() => ({ keys: [] as { device_id: string; enc_pub: string }[] })),
-    client.getEncKeys(ctx.wallet).catch(() => ({ keys: [] as { device_id: string; enc_pub: string }[] })),
+    client.getEncKeys(recipient).catch(() => ({ keys: [] as { device_id: string; enc_pub: string; created_at: number }[] })),
+    client.getEncKeys(ctx.wallet).catch(() => ({ keys: [] as { device_id: string; enc_pub: string; created_at: number }[] })),
   ]);
 
-  const targets: { target: string; deviceId: string; encPub: string }[] = [
-    ...recipKeys.keys.map((k) => ({ target: recipient, deviceId: k.device_id, encPub: k.enc_pub })),
-    ...myKeys.keys.map((k) => ({ target: ctx.wallet, deviceId: k.device_id, encPub: k.enc_pub })),
+  const raw = [
+    ...recipKeys.keys.map((k) => ({ target: recipient, deviceId: k.device_id, encPub: k.enc_pub, createdAt: k.created_at ?? 0 })),
+    ...myKeys.keys.map((k) => ({ target: ctx.wallet, deviceId: k.device_id, encPub: k.enc_pub, createdAt: k.created_at ?? 0 })),
   ];
+  // Exactly one wrap per (target, device_id). The node keys `channel_keys` by
+  // device_id (first-write-wins), so wrapping to several enc_pubs of one device
+  // yields colliding envelopes where a stale wrapping can win — making the
+  // message undecryptable. Keep only the newest enc_pub per device; this also
+  // defends against an un-revoked duplicate on the PEER's side.
+  const byDevice = new Map<string, { target: string; deviceId: string; encPub: string; createdAt: number }>();
+  for (const t of raw) {
+    const dk = `${t.target}:${(t.deviceId ?? '').toLowerCase()}`;
+    const prev = byDevice.get(dk);
+    if (!prev || t.createdAt > prev.createdAt) byDevice.set(dk, t);
+  }
+  const targets = [...byDevice.values()];
   if (targets.length === 0) {
     throw new Error('no device encryption keys found for either participant');
   }

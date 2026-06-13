@@ -5,6 +5,28 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.33.0] - 2026-06-13
+
+### Fixed
+
+- **"Can't decrypt" from a stale device key.** The node keys the enc-key directory
+  by `enc_pub` but wraps DM keys by `device_id` (first-write-wins), so a regenerated
+  enc key left a stale `enc_pub` active → two keys for one device → colliding key
+  envelopes where the wrong wrapping could win. `ensureDeviceEncBinding` now revokes
+  (0x37) superseded `enc_pub`s for the device when the key changes, and
+  `establishMyKey` wraps to only the newest `enc_pub` per `(target, device_id)`. The
+  binding marker is bumped to `v2:` so existing installs self-heal once on next login.
+- **Fresh wallet couldn't receive DMs until app restart.** `connectWithKey` and
+  `generateWallet` now publish the device enc-key binding immediately (it previously
+  only ran on `initAuth`), so a just-created/imported wallet is reachable in its first
+  session.
+- **DMs appearing empty on reload.** The conversation message fetch re-keys on auth
+  readiness — previously it fired before the signer attached on a cold start, 401'd,
+  and didn't refetch until the 8 s poll.
+- **DM view opening scrolled to the oldest message.** Auto-scroll trackers reset per
+  conversation, so opening/switching a DM lands on the newest message.
+- Undecrypted DM bubbles show `…` while decryption resolves instead of rendering blank.
+
 ## [1.32.2] - 2026-06-12
 
 ### Fixed
