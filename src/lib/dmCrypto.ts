@@ -309,11 +309,15 @@ export async function decryptDmMessage(
   author?: string,
 ): Promise<DmDisplay> {
   const bytes = toBytes(payload);
-  if (!bytes) return { kind: 'error' };
+  if (!bytes) {
+    e2elog('decode: toBytes failed', { payloadType: Array.isArray(payload) ? 'array' : typeof payload });
+    return { kind: 'error' };
+  }
   let decoded: RawDmPayload;
   try {
     decoded = decode(bytes) as RawDmPayload;
-  } catch {
+  } catch (e) {
+    e2elog('decode: msgpack failed', { byteLen: bytes.length, err: (e as Error)?.message });
     return { kind: 'error' };
   }
   if (typeof decoded.content === 'string') return { kind: 'plain', text: decoded.content };
@@ -325,13 +329,22 @@ export async function decryptDmMessage(
         return { kind: 'error' };
       }
     }
+    e2elog('decode: legacy epoch0 but content not bytes', { contentType: typeof decoded.content });
     return { kind: 'error' };
   }
   if (!(decoded.content instanceof Uint8Array) || !(decoded.nonce instanceof Uint8Array)) {
+    e2elog('decode: content/nonce not bytes', {
+      keyEpoch: decoded.key_epoch ?? null,
+      contentType: decoded.content instanceof Uint8Array ? 'bytes' : typeof decoded.content,
+      nonceType: decoded.nonce instanceof Uint8Array ? 'bytes' : typeof decoded.nonce,
+    });
     return { kind: 'error' };
   }
   const conversationId = decoded.conversation_id;
-  if (!(conversationId instanceof Uint8Array)) return { kind: 'error' };
+  if (!(conversationId instanceof Uint8Array)) {
+    e2elog('decode: conversation_id not bytes', { convIdType: typeof decoded.conversation_id });
+    return { kind: 'error' };
+  }
   const epoch = decoded.key_epoch ?? 1;
   const convIdHex = toHex(conversationId);
 
@@ -410,6 +423,40 @@ export async function e2eSelfCheck(peer?: string): Promise<Record<string, unknow
           : `✓ OK (epoch ${r.epoch})`;
     report.myKey = verdict(mineFetch);
     report.peerKey = verdict(peerFetch);
+
+    // Probe the ACTUAL stored messages: payload shape + decode + decrypt outcome.
+    // Catches failures BEFORE any key fetch (msgpack/shape) — which is why
+    // "can't decrypt" can appear with no [e2e] crypto logs.
+    try {
+      const resp = await getClient().getDmMessages(peer);
+      const msgs = ((resp as { messages?: unknown[] }).messages || []).slice(-3);
+      report.recentMessages = [];
+      for (const m of msgs as Array<{ payload: unknown; author?: string }>) {
+        const entry: Record<string, unknown> = {
+          author: m.author,
+          payloadType: Array.isArray(m.payload) ? 'array' : typeof m.payload,
+        };
+        const bytes = toBytes(m.payload as never);
+        if (!bytes) {
+          entry.decode = '❌ toBytes failed';
+        } else {
+          entry.byteLen = bytes.length;
+          try {
+            const d = decode(bytes) as RawDmPayload;
+            entry.keyEpoch = d.key_epoch ?? null;
+            entry.contentType = d.content instanceof Uint8Array ? 'bytes' : typeof d.content;
+            entry.hasNonce = d.nonce instanceof Uint8Array;
+            entry.hasConvId = d.conversation_id instanceof Uint8Array;
+          } catch (e) {
+            entry.decode = `❌ decode error: ${(e as Error)?.message}`;
+          }
+        }
+        entry.decryptResult = (await decryptDmMessage(m.payload as never, m.author)).kind;
+        (report.recentMessages as unknown[]).push(entry);
+      }
+    } catch (e) {
+      report.recentMessages = `⚠️ ${(e as Error)?.message}`;
+    }
   }
 
   // eslint-disable-next-line no-console

@@ -5,6 +5,19 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.1] - 2026-06-13
+
+### Added
+
+- **Persistent E2E trace recorder** (`lib/e2eDebug.ts`) — always-on ring buffer of
+  every DM-encryption step, immune to console flooding. Console helpers:
+  `__ogmaraE2ETraceSave()` (download JSON), `__ogmaraE2ETrace()` (table),
+  `__ogmaraE2ETraceClear()`. `ogmara.e2eDebug` now only toggles live console mirror.
+- **`__ogmaraE2E(peer)` probes stored messages** — payload shape + decoded
+  `contentType`/`hasNonce`/`hasConvId`/`keyEpoch` + real `decryptResult` per message.
+- **Traced the decode/shape path** in `decryptDmMessage` so a "can't decrypt" that
+  bails before any key fetch is now recorded (was silent).
+
 ## [1.34.0] - 2026-06-13
 
 ### Added
