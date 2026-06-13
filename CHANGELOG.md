@@ -5,6 +5,15 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.35.1] - 2026-06-13
+
+### Fixed
+
+- **Send-path fell back to a corrupted epoch.** When a sender couldn't find its own
+  conv_key, it established at hardcoded epoch 1 (re-colliding with a polluted epoch 1
+  → stale key → "can't decrypt"). Now establishes at a fresh
+  `max(myLatest, peerLatest) + 1` epoch.
+
 ## [1.35.0] - 2026-06-13
 
 ### Fixed
