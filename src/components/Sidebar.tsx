@@ -17,6 +17,7 @@ import {
 } from '@thisbeyond/solid-dnd';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
+import { onWsEvent } from '../lib/ws';
 import { authStatus, walletAddress } from '../lib/auth';
 import { navigate, route } from '../lib/router';
 import { getSetting, setSetting } from '../lib/settings';
@@ -747,6 +748,10 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       const dmCounts = dmUnread.unread ?? {};
       const dmTotal = Object.values(dmCounts).reduce((a: number, b: number) => a + b, 0);
       setDmUnreadTotal(dmTotal);
+      // Keep the DM conversation list fresh while sitting on the DMs tab — the
+      // resource otherwise only refetches on tab change / mark-read, so a brand-new
+      // incoming conversation wouldn't appear until you navigated away and back.
+      if (activeTab() === 'dms') refetchDmConvs();
       const notifCount = (notifResp as any).notifications?.length ?? 0;
       setNotifUnread(notifCount);
 
@@ -765,6 +770,16 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     }
   });
   onCleanup(() => { if (pollTimer) clearInterval(pollTimer); });
+
+  // Live: a new incoming DM should surface a brand-new conversation in the list
+  // immediately (not only after the 12s poll or a tab switch).
+  const dmWsCleanup = onWsEvent((event) => {
+    if (event.type === 'dm') {
+      refetchDmConvs();
+      void pollData();
+    }
+  });
+  onCleanup(dmWsCleanup);
 
   const currentChannelId = () => {
     const r = route();
