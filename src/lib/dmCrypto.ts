@@ -62,7 +62,7 @@ export function clearDmKeyCache(): void {
   convKeys.clear();
   establishing.clear();
   wrappedToDevices.clear();
-  coveredThisSession.clear();
+  lastCoverMs.clear();
 }
 
 interface DeviceCtx {
@@ -194,37 +194,59 @@ export async function reKeyConversation(
     latestEpochFor(ctx, conversationId, convIdHex, recipient),
   ]);
   const epoch = Math.max(mine, theirs, 0) + 1;
-  coveredThisSession.delete(wrappedSetKey(convIdHex, epoch));
+  lastCoverMs.delete(wrappedSetKey(convIdHex, epoch));
   const res = await establishMyKey(ctx, conversationId, convIdHex, recipient, epoch);
   e2elog('reKey: bumped epoch', { convIdHex, from: Math.max(mine, theirs, 0), to: res.epoch });
   return { epoch: res.epoch };
 }
 
-/** Conversations whose current device set we've reconciled this session. */
-const coveredThisSession = new Set<string>();
+/** Last reconcile time per `${convIdHex}:${epoch}` — throttles the getEncKeys
+ *  round-trip so coverDevices can run on send AND on each incoming DM. */
+const lastCoverMs = new Map<string, number>();
+const COVER_THROTTLE_MS = 10_000;
 
 /** Cover late/newly-registered devices: wrap MY existing `convKey` to any current
  *  device we haven't wrapped to yet this epoch. Closes the "device joined after
- *  establishment → waits forever" gap. Once per conversation+epoch per session. */
+ *  establishment → waits forever" gap. Re-runnable (throttled ~10 s); FWW + the
+ *  wrappedToDevices set make re-wraps to covered devices no-ops. */
 async function coverDevices(
   ctx: DeviceCtx, conversationId: Uint8Array, convIdHex: string,
   recipient: string, convKey: Uint8Array, epoch: number,
 ): Promise<void> {
-  const sessKey = wrappedSetKey(convIdHex, epoch);
-  if (coveredThisSession.has(sessKey)) return;
-  coveredThisSession.add(sessKey);
+  const k = wrappedSetKey(convIdHex, epoch);
+  const now = Date.now();
+  if (now - (lastCoverMs.get(k) ?? 0) < COVER_THROTTLE_MS) return;
+  lastCoverMs.set(k, now);
   try {
     const targets = await getConvTargets(ctx, recipient);
-    const done = wrappedToDevices.get(sessKey) ?? new Set<string>();
+    const done = wrappedToDevices.get(k) ?? new Set<string>();
     const missing = targets.filter((t) => !done.has(targetKey(t)));
     if (missing.length > 0) {
       await wrapMyKeyToTargets(ctx, conversationId, convIdHex, recipient, convKey, epoch, missing);
       e2elog('covered late devices', { convIdHex, epoch, count: missing.length });
     }
   } catch (e) {
-    coveredThisSession.delete(sessKey);
+    lastCoverMs.set(k, 0); // failed — allow an immediate retry on the next trigger
     e2elog('coverDevices skipped', { err: (e as Error)?.message });
   }
+}
+
+/**
+ * Ensure MY conv_key is wrapped to all of `recipient`'s CURRENT devices — call on an
+ * incoming DM so a peer device that joined after my key was established gets my key
+ * without an app reload. No-op if I have no key for this conversation yet.
+ */
+export async function coverPeerDevices(recipient: string): Promise<void> {
+  const ctx = await deviceCtx();
+  if (!ctx) return;
+  const conversationId = computeConversationId(ctx.wallet, recipient);
+  const convIdHex = toHex(conversationId);
+  let entry = cachedLatest(convIdHex, ctx.wallet);
+  if (!entry) {
+    const fetched = await fetchConvKey(ctx, conversationId, convIdHex, ctx.wallet);
+    if (typeof fetched !== 'string') entry = fetched;
+  }
+  if (entry) await coverDevices(ctx, conversationId, convIdHex, recipient, entry.key, entry.epoch);
 }
 
 /** `missing` = not delivered yet (retry); `corrupt` = present but unwrap failed (error). */

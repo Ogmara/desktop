@@ -14,7 +14,7 @@ import { FormattedText } from '../components/FormattedText';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
 import { getPayloadAttachments, buildOptimisticChatPayload, safeAttachmentName } from '../lib/payload';
 import { EmojiPicker } from '../components/EmojiPicker';
-import { buildEncryptedDm, decryptDmMessage, type DmDisplay } from '../lib/dmCrypto';
+import { buildEncryptedDm, decryptDmMessage, coverPeerDevices, type DmDisplay } from '../lib/dmCrypto';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
 
 interface DmConversationProps {
@@ -125,6 +125,10 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
           const next = [...prev, msg];
           return next.length > MAX_LOCAL_MESSAGES ? next.slice(-MAX_LOCAL_MESSAGES) : next;
         });
+        // The peer is active → ensure my key is wrapped to all their current devices,
+        // so a device that joined after I established my key can read my messages
+        // without an app reload (throttled inside coverPeerDevices).
+        void coverPeerDevices(props.peerAddress);
         // Mark as read while viewing so unread badge doesn't appear
         if (authStatus() === 'ready') {
           getClient().markDmRead(props.peerAddress).catch(() => {});
