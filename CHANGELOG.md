@@ -5,6 +5,23 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.35.0] - 2026-06-13
+
+### Fixed
+
+- **DM "can't decrypt" / "invalid tag" — conv_key divergence.** The node keys
+  `channel_keys` by `(author, target-device, epoch)` first-write-wins and returns 200
+  even when a write is silently dropped, so a re-established key was used locally but
+  never stored → AEAD `invalid tag`. `establishMyKey` now **reads back** its own key
+  after publishing and adopts the node's stored key, so it encrypts with the key
+  recipients fetch.
+
+### Added
+
+- **`reKeyConversation` / `window.__ogmaraE2EReKey('<peer>')`** — clean epoch bump
+  (`max(myLatest,peerLatest)+1`) to escape a corrupted epoch; one establish on a fresh
+  epoch wins FWW on every device → one consistent key. Both participants re-key once.
+
 ## [1.34.1] - 2026-06-13
 
 ### Added
