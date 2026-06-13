@@ -5,6 +5,25 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.0] - 2026-06-13
+
+### Added
+
+- **E2E self-check console diagnostic** — `await window.__ogmaraE2E('klv1…peer')`
+  (devtools) prints a per-client verdict: my device_id, local enc_pub, registry
+  match, peer devices, and whether my/peer conv-key fetch is OK / MISSING→"waiting"
+  / CORRUPT→"can't decrypt". Opt-in `[e2e]` lifecycle logging via
+  `localStorage['ogmara.e2eDebug']='1'`.
+
+### Fixed / Changed
+
+- **Registry-verified enc-key binding** — re-publishes if the node's enc_pub for
+  my device_id ≠ my local one (fixes "can't decrypt" divergence the marker missed).
+- **429-resilient E2E publishes/fetches** (retry w/ backoff).
+- **Rewrap-on-send for late devices** (closes the "device joined mid-conversation →
+  waits forever" gap).
+- No hardcoded node URL (via sdk-js 0.30.0) — discovery is SC + gossip driven.
+
 ## [1.33.2] - 2026-06-13
 
 ### Fixed

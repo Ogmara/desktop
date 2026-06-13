@@ -24,6 +24,7 @@ import { getSetting, setSetting } from './settings';
 import { vaultGetAddress } from './vault';
 import { signMessage } from './klever';
 import { getClient } from './api';
+import { e2elog, withRetry } from './e2eDebug';
 
 const ENC_PRIV_KEY = 'ogmara.vault.enc_private_key';
 
@@ -97,7 +98,8 @@ async function revokeStaleEncKeys(
         encPubHex: k.enc_pub,
         walletSign: sign,
       });
-      await getClient().publishEncKeyEnvelope(wallet, revoke);
+      await withRetry(() => getClient().publishEncKeyEnvelope(wallet, revoke), 'revoke stale enc-key');
+      e2elog('revoked stale enc_pub', { deviceId, staleEncPub: k.enc_pub });
     }
   } catch (e) {
     console.warn('[deviceEnc] stale enc-key revoke skipped:', e);
@@ -116,12 +118,28 @@ export async function ensureDeviceEncBinding(): Promise<void> {
   if (!wallet) return;
 
   const kp = await getOrCreateEncKeypair();
-  // Marker is versioned (`v2:`) so existing installs re-run once after this
-  // fix to revoke any stale duplicate enc_pub left by the pre-revoke clients.
   const marker = `v2:${wallet}:${kp.publicKeyHex}`;
-  if (getSetting('encKeyBound') === marker) return;
-
   const deviceId = getOrCreateDeviceId();
+
+  // Registry-verified (not just the local marker): the marker only records what
+  // WE last published — it can't see that the node's enc_pub for our device_id
+  // diverged from our current local enc_pub (the "can't decrypt" cause). Confirm
+  // the node actually has THIS device_id bound to our CURRENT enc_pub; only skip
+  // when the registry agrees AND the marker is set.
+  let registryOk = false;
+  try {
+    const { keys } = await getClient().getEncKeys(wallet);
+    const mine = keys.find((k) => (k.device_id ?? '').toLowerCase() === deviceId.toLowerCase());
+    registryOk = !!mine && (mine.enc_pub ?? '').toLowerCase() === kp.publicKeyHex.toLowerCase();
+    e2elog('binding check', {
+      wallet, deviceId, localEncPub: kp.publicKeyHex,
+      registryEncPub: mine?.enc_pub ?? null, registryOk, markerSet: getSetting('encKeyBound') === marker,
+    });
+  } catch {
+    if (getSetting('encKeyBound') === marker) return;
+  }
+  if (registryOk && getSetting('encKeyBound') === marker) return;
+
   // signMessage returns 128-char hex; the SDK normalizes it internally.
   const sign: WalletSignFn = (claim) => signMessage(claim);
   const envelope = await buildDeviceEncBinding({
@@ -130,7 +148,8 @@ export async function ensureDeviceEncBinding(): Promise<void> {
     deviceIdHex: deviceId,
     walletSign: sign,
   });
-  await getClient().publishEncKeyEnvelope(wallet, envelope);
+  await withRetry(() => getClient().publishEncKeyEnvelope(wallet, envelope), 'publish binding');
+  e2elog('published binding', { deviceId, encPub: kp.publicKeyHex });
   // Retire any stale enc_pub for this device AFTER the new key is registered, so
   // there is never a window with zero active keys for the device.
   await revokeStaleEncKeys(wallet, deviceId, kp.publicKeyHex, sign);
