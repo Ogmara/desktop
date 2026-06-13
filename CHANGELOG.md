@@ -5,6 +5,19 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.33.2] - 2026-06-13
+
+### Fixed
+
+- **`tauri dev` / `vite dev` broken by the 1.33.1 esbuild pin.** Forcing
+  `esbuild 0.28.1` under Vite 6 made the dev dependency pre-bundle fail
+  ("Transforming destructuring to the configured target environment is not
+  supported yet") — esbuild 0.28 changed syntax-lowering and Vite 6's dev target
+  tripped it. Bumped Vite to `^7.3.2` (natively uses the patched esbuild 0.28.1 and
+  handles it correctly); the esbuild override is retained so the whole tree stays
+  patched. `build.target` unchanged (`esnext`). `npm audit` stays at 0; dev
+  pre-bundle + production build both verified.
+
 ## [1.33.1] - 2026-06-13
 
 ### Security
