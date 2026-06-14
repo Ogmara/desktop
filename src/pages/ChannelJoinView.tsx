@@ -6,10 +6,10 @@
  * Private channels: shows invite-required message.
  */
 
-import { Component, createResource, createSignal, createEffect, Show } from 'solid-js';
+import { Component, createResource, createSignal, Show } from 'solid-js';
 import { OgmaraClient, validateNodeUrl, type ChannelDetailResponse } from '@ogmara/sdk';
 import { t } from '../i18n/init';
-import { getClient, getCurrentNodeUrl, switchNode } from '../lib/api';
+import { getClient, getCurrentNodeUrl } from '../lib/api';
 import { authStatus, walletAddress } from '../lib/auth';
 import { navigate, queryParam } from '../lib/router';
 import { addJoinedChannel } from '../components/Sidebar';
@@ -62,25 +62,29 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
     },
   );
 
-  // After a "Switch & join" the app reloads on the host node; auto-complete the
-  // join once the channel resolves there (and auth is ready for private channels).
-  createEffect(() => {
-    const ch = channel();
-    const ready = authStatus() === 'ready';
-    if (!ch) return;
-    let pending = '';
-    try { pending = sessionStorage.getItem('ogmara:pendingJoin') || ''; } catch { /* ignore */ }
-    if (pending !== props.channelId) return;
-    if (isPrivate() && !ready) return; // private join needs auth — wait for it
-    try { sessionStorage.removeItem('ogmara:pendingJoin'); } catch { /* ignore */ }
-    void handleJoin();
-  });
-
-  const handleSwitchAndJoin = () => {
+  // FEDERATE + join (replaces "switch & join"): tell THIS (the member's home) node
+  // to replicate the channel — subscribe to its gossip topic + record membership —
+  // so the channel's encrypted messages/keys flow here live. The member stays on
+  // their node; no node switch.
+  const handleFederateAndJoin = async () => {
     const cn = crossNode();
     if (!cn) return;
-    try { sessionStorage.setItem('ogmara:pendingJoin', props.channelId); } catch { /* ignore */ }
-    switchNode(cn.host); // persists the node + full reload → channel loads from host
+    if (!walletAddress()) { navigate('/wallet'); return; }
+    setJoining(true);
+    setError('');
+    try {
+      const client = getClient();
+      await client.federateChannel(channelIdNum(), cn.host);
+      // Announce membership to the host + other members (gossips; best-effort).
+      try { await client.joinChannel(channelIdNum()); } catch { /* membership also recorded locally by federate */ }
+      addJoinedChannel(channelIdNum());
+      window.dispatchEvent(new Event('ogmara:channels-changed'));
+      navigate(`/chat/${channelIdNum()}`);
+    } catch (e: any) {
+      setError(e?.message || t('channel_federate_failed'));
+    } finally {
+      setJoining(false);
+    }
   };
 
   const isPrivate = () => {
@@ -124,8 +128,8 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
         </div>
       </Show>
 
-      {/* The channel lives on a different node (private, host-scoped) — preview it
-          from the host and offer a one-click switch + join. */}
+      {/* The channel lives on another node (private, host-scoped) — preview it from
+          the host and federate it to the member's home node on join (no switch). */}
       <Show when={crossNode()}>
         <div class="join-card">
           <h2 class="join-name">
@@ -140,9 +144,12 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
           <p class="join-private-hint">
             {t('channel_on_other_node', { node: hostLabel(crossNode()!.host) })}
           </p>
-          <button class="join-btn" onClick={handleSwitchAndJoin}>
-            {t('channel_switch_and_join')}
+          <button class="join-btn" onClick={handleFederateAndJoin} disabled={joining()}>
+            {joining() ? t('loading') : t('channel_join')}
           </button>
+          <Show when={error()}>
+            <div class="join-error">{error()}</div>
+          </Show>
         </div>
       </Show>
 

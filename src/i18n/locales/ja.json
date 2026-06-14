@@ -491,9 +491,10 @@
   "dm_cannot_decrypt": "復号できません",
   "channel_waiting_for_key": "🔒 チャンネルキーを待っています…",
   "channel_cannot_decrypt": "このメッセージを復号できません",
-  "channel_on_other_node": "このプライベートチャンネルは {{node}} でホストされています。そのノードに切り替えて表示・参加してください。",
+  "channel_on_other_node": "このプライベートチャンネルは {{node}} でホストされています。参加すると自分のノードで受信できます。",
   "channel_switch_and_join": "切り替えて参加",
   "dm_attachments_not_encrypted_yet": "暗号化されたDM添付は近日対応予定です。今はテキストのみ送信してください。",
   "dm_recipient_no_encryption": "この相手はまだ暗号化を有効にしていないため、暗号化されたメッセージを受信できません。",
-  "dm_encrypted_preview": "暗号化されたメッセージ"
+  "dm_encrypted_preview": "暗号化されたメッセージ",
+  "channel_federate_failed": "チャンネルをフェデレーションできませんでした — もう一度お試しください。"
 }

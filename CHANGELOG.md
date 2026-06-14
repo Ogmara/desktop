@@ -5,6 +5,17 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.38.0] - 2026-06-14
+
+### Changed
+
+- **Cross-node private-channel join now FEDERATES instead of switching nodes**
+  (desktop parity, ports web 0.54.0). Opening a private-channel invite link previews
+  the channel from the host and, on join, calls `federateChannel` so this (the
+  member's home) node replicates it — encrypted messages/keys flow here live and the
+  member stays on their node (requires l2-node 0.74.x). New `channel_federate_failed`
+  + reworded `channel_on_other_node` (7 locales).
+
 ## [1.37.0] - 2026-06-14
 
 P2c — desktop parity for encrypted private channels + cross-node invite links

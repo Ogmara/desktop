@@ -491,9 +491,10 @@
   "dm_cannot_decrypt": "无法解密",
   "channel_waiting_for_key": "🔒 正在等待频道密钥…",
   "channel_cannot_decrypt": "无法解密此消息",
-  "channel_on_other_node": "此私密频道托管在 {{node}} 上。切换到该节点以查看并加入。",
+  "channel_on_other_node": "此私密频道托管在 {{node}} 上。加入以在你的节点上接收它。",
   "channel_switch_and_join": "切换并加入",
   "dm_attachments_not_encrypted_yet": "加密私信附件即将推出 — 目前请仅发送文本。",
   "dm_recipient_no_encryption": "对方尚未启用加密，因此无法接收加密消息。",
-  "dm_encrypted_preview": "加密消息"
+  "dm_encrypted_preview": "加密消息",
+  "channel_federate_failed": "无法联邦此频道 — 请重试。"
 }
