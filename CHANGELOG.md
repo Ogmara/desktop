@@ -5,6 +5,22 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.40.0] - 2026-06-14
+
+### Fixed
+
+- **Private-channel messages no longer stay stuck on "waiting for the channel key"**
+  (desktop parity with web 0.56.0). ChatView polls every 3s while any message is waiting
+  and re-decrypts as soon as the channel key arrives (bounded ~60s, cleared on channel
+  switch), instead of requiring you to leave and re-open the channel.
+
+### Changed
+
+- **A brand-new account no longer auto-fills its sidebar with the entire public channel
+  catalogue** (parity with web 0.56.0). First-time init seeds only the default `ogmara`
+  channel plus any private channels the node returned; other public channels are joined
+  explicitly.
+
 ## [1.39.0] - 2026-06-14
 
 ### Added

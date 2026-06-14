@@ -518,6 +518,38 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     }
   });
 
+  // Late channel-key arrival: the decrypt effect above only re-runs when the message
+  // LIST changes, so when a brand-new member joins and an existing member's client
+  // wraps the key to them moments later, the already-rendered messages would sit on
+  // "waiting" until the channel is re-opened. Poll while anything is waiting: re-fetch
+  // the key (fetchChannelKey caches only successes, so a retry resolves once the
+  // envelope lands) and re-decrypt. Stops once nothing is waiting, on channel switch,
+  // or after a bounded number of still-waiting ticks.
+  createEffect(() => {
+    const cid = props.channelId;
+    if (!isPrivate() || !cid) return;
+    let waitTicks = 0;
+    const timer = setInterval(() => {
+      const displays = untrack(() => chanDisplays());
+      const waitingIds = Object.keys(displays).filter((id) => displays[id]?.kind === 'waiting');
+      if (waitingIds.length === 0) return; // nothing to retry this tick
+      if (++waitTicks > 20) { clearInterval(timer); return; } // ~60s of waiting → give up
+      const msgs = untrack(() => allMessages());
+      for (const id of waitingIds) {
+        const msg = msgs.find((m) => m.msg_id === id);
+        if (!msg) continue;
+        decryptChannelMessage(msg.payload, cid)
+          .then((disp) => {
+            if (disp.kind !== 'waiting') {
+              setChanDisplays((prev) => ({ ...prev, [id]: disp }));
+            }
+          })
+          .catch(() => { /* keep waiting; next tick retries */ });
+      }
+    }, 3000);
+    onCleanup(() => clearInterval(timer));
+  });
+
   /** Display text for a message body — decrypted for private channels, else plaintext. */
   const displayContent = (msg: any): string => {
     if (!isPrivate()) return getPayloadContent(msg.payload);

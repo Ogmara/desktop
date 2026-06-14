@@ -11,6 +11,7 @@
  */
 
 import { createSignal } from 'solid-js';
+import { DEFAULT_CHANNEL_SLUG } from './channel-org';
 
 const STORAGE_KEY = 'ogmara_joined_channels';
 
@@ -65,14 +66,15 @@ export function removeJoinedChannel(channelId: number): void {
 /**
  * Sync the joined set with the API channel list.
  * - Private channels in the list → user IS a member (L2 node pre-filters) → auto-add
- * - First-time migration: seed with ALL visible channels
+ * - First-time init (fresh device / cleared storage): seed ONLY the default
+ *   channel + private channels — NOT the whole public catalogue.
  *
- * Why seed with everything on first init: the joined-set is purely a
- * client-side sidebar visibility filter — there is no on-chain or server-side
- * "joined" state for public channels. After a fresh device / cleared browser
- * storage the filter starts empty, so without seeding the sidebar shows
- * nothing even though the API returned a full catalog. The user can still
- * explicitly leave channels afterwards.
+ * The joined-set is purely a client-side sidebar visibility filter — there is no
+ * on-chain or server-side "joined" state for public channels. A brand-new account
+ * should land on just the default `ogmara` channel and discover/join other public
+ * channels explicitly, rather than having every public channel pre-populated. We
+ * still persist on first init (even if only the default matched) so storage is
+ * marked initialised and we don't reseed on the next load.
  */
 export function syncJoinedWithApi(
   apiChannels: { channel_id: number; channel_type: number; slug: string }[],
@@ -81,9 +83,17 @@ export function syncJoinedWithApi(
   let changed = false;
 
   if (!storageInitialized() && apiChannels.length > 0) {
+    // Brand-new account: do NOT auto-populate the sidebar with the entire public
+    // catalogue. Seed only the default channel + any private channels the node
+    // returned (private = membership-gated, so the user really is a member). The
+    // user discovers and joins other public channels explicitly. We still persist
+    // below (changed=true) so storage is marked initialised and we don't reseed.
     for (const ch of apiChannels) {
-      if (!current.has(ch.channel_id)) { current.add(ch.channel_id); changed = true; }
+      if ((ch.slug === DEFAULT_CHANNEL_SLUG || ch.channel_type === 2) && !current.has(ch.channel_id)) {
+        current.add(ch.channel_id);
+      }
     }
+    changed = true;
   } else {
     for (const ch of apiChannels) {
       if (ch.channel_type === 2 && !current.has(ch.channel_id)) {
