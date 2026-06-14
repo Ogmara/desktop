@@ -144,6 +144,13 @@ export async function disconnectWallet(): Promise<void> {
   setIsRegistered(false);
   // Drop the cached own avatar so a different account doesn't inherit it.
   import('./ownAvatar').then(({ clearOwnAvatar }) => clearOwnAvatar()).catch(() => {});
+  // Clear E2E session state so a different account can't read this one's keys:
+  // the in-memory DM/channel content-key caches and the cached vault backup key.
+  Promise.all([
+    import('./dmCrypto').then(({ clearDmKeyCache }) => clearDmKeyCache()),
+    import('./channelCrypto').then(({ clearChannelKeyCache }) => clearChannelKeyCache()),
+    import('./keyVault').then(({ clearKeyVaultSession }) => clearKeyVaultSession()),
+  ]).catch(() => {});
 }
 
 /** Update on-chain registration status and invalidate profile cache. */

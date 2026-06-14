@@ -499,6 +499,32 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   const isPrivate = () =>
     (channelInfo()?.channel?.channel_type ?? 0) === CHANNEL_TYPE_PRIVATE;
 
+  // P4: a channel's content is encrypted when the node flags `encryption_enabled`
+  // (forced on for new public/ReadPublic channels) OR it is private (always
+  // encrypted). This — NOT the channel type — drives encrypt-on-send and
+  // decrypt-on-render. Legacy plaintext channels (no flag) stay v1 (dual-read).
+  const isEncrypted = () =>
+    channelInfo()?.channel?.encryption_enabled === true || isPrivate();
+  // Public channels have no removal-rotation (anti-bulk-readout only, not member-
+  // confidential), so only PRIVATE members are gated to mods for key establishment;
+  // in a public encrypted channel ANY member may seed/cover the epoch key.
+  const canEstablishKey = () => (isPrivate() ? isMod() : true);
+  // The rotation floor only applies to private channels (public never rotates).
+  const encFloor = () => (isPrivate() ? (channelInfo()?.channel?.key_epoch_floor ?? 0) : 0);
+
+  // P4: reading or posting in an encrypted channel requires membership — the node
+  // only wraps the epoch key to members (anyone may join a public channel
+  // permissionlessly and obtain the key). Ensure membership once when opening an
+  // encrypted public channel; private channels use the normal invite/join flow.
+  const autoJoined = new Set<number>();
+  createEffect(() => {
+    const cid = props.channelId;
+    if (!cid || !walletAddress() || !isEncrypted() || isPrivate()) return;
+    if (autoJoined.has(cid)) return;
+    autoJoined.add(cid);
+    void getClient().joinChannel(cid).catch(() => autoJoined.delete(cid));
+  });
+
   // Per-message decrypted display for private channels, keyed by msg_id (async).
   const [chanDisplays, setChanDisplays] = createSignal<Record<string, DmDisplay>>({});
   const decodedEditStamp = new Map<string, number>();
@@ -509,7 +535,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     decodedEditStamp.clear();
   });
   createEffect(() => {
-    if (!isPrivate() || !props.channelId) return;
+    if (!isEncrypted() || !props.channelId) return;
     const msgs = allMessages(); // track
     // Opportunistically wrap the current channel key to any member device that has
     // joined since (throttled, no-op if I don't hold the key yet).
@@ -537,7 +563,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   // or after a bounded number of still-waiting ticks.
   createEffect(() => {
     const cid = props.channelId;
-    if (!isPrivate() || !cid) return;
+    if (!isEncrypted() || !cid) return;
     let waitTicks = 0;
     const timer = setInterval(() => {
       const displays = untrack(() => chanDisplays());
@@ -560,9 +586,9 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     onCleanup(() => clearInterval(timer));
   });
 
-  /** Display text for a message body — decrypted for private channels, else plaintext. */
+  /** Display text for a message body — decrypted for encrypted channels, else plaintext. */
   const displayContent = (msg: any): string => {
-    if (!isPrivate()) return getPayloadContent(msg.payload);
+    if (!isEncrypted()) return getPayloadContent(msg.payload);
     const d = chanDisplays()[msg.msg_id];
     if (!d) return '…';
     if (d.kind === 'text' || d.kind === 'plain') return d.text;
@@ -966,12 +992,14 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       if (merged.size > 0) {
         options.mentions = Array.from(merged);
       }
-      if (isPrivate()) {
+      if (isEncrypted()) {
         // Encrypt the text under the channel epoch key. `'waiting'` means the key
-        // isn't available yet (a non-mod member before a mod has seeded/covered it).
-        const built = await buildEncryptedChannelMsg(props.channelId, isMod(), text, {
-          replyTo: options.replyTo, mentions: options.mentions,
-        }, channelInfo()?.channel?.key_epoch_floor ?? 0);
+        // isn't available yet (a non-mod member of a PRIVATE channel before a mod has
+        // seeded/covered it). Attachments ride as plaintext metadata (media-file
+        // encryption is P5). canEstablishKey(): any member may seed a PUBLIC channel.
+        const built = await buildEncryptedChannelMsg(props.channelId, canEstablishKey(), text, {
+          replyTo: options.replyTo, mentions: options.mentions, attachments: atts,
+        }, encFloor());
         if (built === 'waiting') {
           setSendError(t('channel_waiting_for_key'));
           setTimeout(() => setSendError(null), 6000);
@@ -1238,6 +1266,11 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                   <div class="channel-bar-title">{channelInfo()?.channel?.display_name || channelInfo()?.channel?.slug || `Channel #${props.channelId}`}</div>
                   <div class="channel-bar-meta">
                     <span class="channel-bar-members">{t('chat_member_count', { count: channelInfo()?.member_count || '?' })}</span>
+                    <Show when={isEncrypted()}>
+                      <span class="channel-bar-encrypted" title={isPrivate() ? t('channel_encrypted_private') : t('channel_encrypted_public')}>
+                        🔒 {isPrivate() ? t('channel_encrypted_private') : t('channel_encrypted_public')}
+                      </span>
+                    </Show>
                   </div>
                 </div>
               </div>

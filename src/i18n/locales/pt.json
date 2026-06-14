@@ -491,6 +491,8 @@
   "dm_cannot_decrypt": "não foi possível descriptografar",
   "channel_waiting_for_key": "🔒 aguardando a chave do canal…",
   "channel_cannot_decrypt": "não foi possível descriptografar",
+  "channel_encrypted_private": "Criptografado",
+  "channel_encrypted_public": "Criptografado · público por design",
   "channel_on_other_node": "Este canal privado está hospedado em {{node}}. Entre para recebê-lo no seu nó.",
   "channel_switch_and_join": "Mudar e entrar",
   "dm_attachments_not_encrypted_yet": "Anexos cifrados em MD chegarão em breve — por enquanto envie apenas texto.",

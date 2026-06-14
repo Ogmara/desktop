@@ -8,6 +8,9 @@ import { setContractAddress, setKleverNetwork } from './lib/klever';
 import { getClient, bootstrapNodeSelection } from './lib/api';
 import { getSetting } from './lib/settings';
 import { installNetworkActivityTracker } from './lib/network-activity';
+// Side-effect import: registers the E2E key-recovery vault (P3) backup/restore hooks
+// into the DM + channel key caches.
+import './lib/keyVault';
 import './styles/global.css';
 import './styles/design-styles.css';
 import './styles/chat-view.css';

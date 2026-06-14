@@ -25,12 +25,36 @@ import { getSigner } from './auth';
 import { e2elog, withRetry } from './e2eDebug';
 import {
   deviceCtx, toHex, fromHex, targetKey, toBytes,
+  notifyKeyringChanged, requestVaultRestore,
   type DeviceCtx, type Target, type DmDisplay,
 } from './dmCrypto';
 
 /** Channel group-key cache: `${channelScopeHex}:${epoch}` → 32-byte key. */
 const channelKeys = new Map<string, Uint8Array>();
 const ckey = (scopeHex: string, epoch: number) => `${scopeHex}:${epoch}`;
+
+/** Cache a channel epoch key and signal the vault layer to back it up (P3). */
+function cacheChannelKey(k: string, key: Uint8Array): void {
+  channelKeys.set(k, key);
+  notifyKeyringChanged();
+}
+/** Snapshot channel epoch keys for the vault (`${scopeHex}:${epoch}` → key). */
+export function exportChannelKeysForVault(): Record<string, Uint8Array> {
+  const out: Record<string, Uint8Array> = {};
+  for (const [k, v] of channelKeys) out[k] = v;
+  return out;
+}
+/** Merge vault-restored channel keys in; never clobber a key already cached. */
+export function importChannelKeysFromVault(rec: Record<string, Uint8Array>): number {
+  let added = 0;
+  for (const [k, v] of Object.entries(rec)) {
+    if (!channelKeys.has(k) && v instanceof Uint8Array && v.length === 32) {
+      channelKeys.set(k, v);
+      added++;
+    }
+  }
+  return added;
+}
 
 /** Highest cached epoch for a channel scope, or null. */
 function cachedLatest(scopeHex: string): { key: Uint8Array; epoch: number } | null {
@@ -52,6 +76,7 @@ const lastCoverMs = new Map<number, number>();
 const COVER_THROTTLE_MS = 10_000;
 
 export function clearChannelKeyCache(): void {
+  for (const v of channelKeys.values()) v.fill(0);
   channelKeys.clear();
   establishing.clear();
   wrappedToDevices.clear();
@@ -120,7 +145,7 @@ async function fetchChannelKey(
     const wrapped: WrappedKey = { ephPub: fromHex(env.eph_pub), nonce: fromHex(env.nonce), wrapped: fromHex(env.wrapped) };
     const key = unwrapConvKey(wrapped, ctx.encPriv, scope); // salt = channel scope (matches wrap)
     const ep = resp.epoch ?? env.epoch;
-    channelKeys.set(ckey(scopeHex, ep), key);
+    cacheChannelKey(ckey(scopeHex, ep), key);
     return { key, epoch: ep };
   } catch (e) {
     e2elog('channel fetchKey: unwrap FAILED → corrupt', { channelId, epoch, err: (e as Error)?.message });
@@ -158,7 +183,7 @@ async function establishChannelKey(
   const targets = await getChannelTargets(channelId);
   const key = randomConvKey();
   await wrapKeyToMembers(ctx, channelId, scope, scopeHex, key, epoch, targets);
-  channelKeys.set(ckey(scopeHex, epoch), key);
+  cacheChannelKey(ckey(scopeHex, epoch), key);
   // FWW read-back: adopt the node's stored key if ours lost a concurrent establish.
   const confirmed = await fetchChannelKey(ctx, channelId, scope, scopeHex, epoch);
   if (typeof confirmed !== 'string' && !bytesEq(confirmed.key, key)) {
@@ -300,7 +325,11 @@ export async function ensureChannelKeyForSend(
  *  channel's `key_epoch_floor` (P2d) — the message is encrypted at ≥ floor. */
 export async function buildEncryptedChannelMsg(
   channelId: number, canEstablish: boolean, text: string,
-  opts?: { replyTo?: string; mentions?: string[]; contentRating?: 'general' | 'teen' | 'mature' | 'explicit' },
+  opts?: {
+    replyTo?: string; mentions?: string[];
+    contentRating?: 'general' | 'teen' | 'mature' | 'explicit';
+    attachments?: Array<{ cid: string; mime_type: string; size_bytes: number; filename?: string; thumbnail_cid?: string }>;
+  },
   floor = 0,
 ): Promise<Uint8Array | 'waiting'> {
   const established = await ensureChannelKeyForSend(channelId, canEstablish, floor);
@@ -310,7 +339,8 @@ export async function buildEncryptedChannelMsg(
   if (!signer) throw new Error('no signer');
   return buildEncryptedChannelMessage(signer, {
     channelId, convKey: established.convKey, epoch: established.epoch,
-    text, replyTo: opts?.replyTo, mentions: opts?.mentions, contentRating: opts?.contentRating,
+    text, replyTo: opts?.replyTo, mentions: opts?.mentions,
+    contentRating: opts?.contentRating, attachments: opts?.attachments,
   });
 }
 
@@ -352,7 +382,12 @@ export async function decryptChannelMessage(
   let key = channelKeys.get(ckey(scopeHex, epoch));
   if (!key) {
     const fetched = await fetchChannelKey(ctx, channelId, scope, scopeHex, epoch);
-    if (fetched === 'missing') return { kind: 'waiting' };
+    if (fetched === 'missing') {
+      // Pull the wallet-encrypted vault in the background (forward-only joiners
+      // won't have old epoch keys on the node); next retry finds the restored key.
+      requestVaultRestore();
+      return { kind: 'waiting' };
+    }
     if (fetched === 'corrupt') return { kind: 'error' };
     key = fetched.key;
   }

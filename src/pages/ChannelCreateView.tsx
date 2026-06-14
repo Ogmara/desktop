@@ -71,6 +71,10 @@ export const ChannelCreateView: Component = () => {
         displayName: displayName().trim() || undefined,
         description: description().trim() || undefined,
         rules: rules().trim() || undefined,
+        // P4: all new channels are E2E-encrypted (forced on, no toggle). Public
+        // channels are anti-bulk-readout (not member-confidential); private are
+        // fully confidential. The node also defaults private→encrypted regardless.
+        encryptionEnabled: true,
       });
 
       addJoinedChannel(channelId);

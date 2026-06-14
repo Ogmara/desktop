@@ -496,6 +496,8 @@
   "dm_cannot_decrypt": "can't decrypt",
   "channel_waiting_for_key": "🔒 waiting for the channel key…",
   "channel_cannot_decrypt": "can't decrypt this message",
+  "channel_encrypted_private": "Encrypted",
+  "channel_encrypted_public": "Encrypted · public by design",
   "dm_attachments_not_encrypted_yet": "Encrypted DM attachments are coming soon — send text only for now.",
   "dm_recipient_no_encryption": "This person hasn't enabled encryption yet, so they can't receive encrypted messages.",
   "dm_encrypted_preview": "Encrypted message",

@@ -491,6 +491,8 @@
   "dm_cannot_decrypt": "no se puede descifrar",
   "channel_waiting_for_key": "🔒 esperando la clave del canal…",
   "channel_cannot_decrypt": "no se puede descifrar el mensaje",
+  "channel_encrypted_private": "Cifrado",
+  "channel_encrypted_public": "Cifrado · público por diseño",
   "channel_on_other_node": "Este canal privado está alojado en {{node}}. Únete para recibirlo en tu nodo.",
   "channel_switch_and_join": "Cambiar y unirse",
   "dm_attachments_not_encrypted_yet": "Los adjuntos cifrados en MD llegarán pronto — por ahora envía solo texto.",

@@ -491,6 +491,8 @@
   "dm_cannot_decrypt": "復号できません",
   "channel_waiting_for_key": "🔒 チャンネルキーを待っています…",
   "channel_cannot_decrypt": "このメッセージを復号できません",
+  "channel_encrypted_private": "暗号化",
+  "channel_encrypted_public": "暗号化 · 公開仕様",
   "channel_on_other_node": "このプライベートチャンネルは {{node}} でホストされています。参加すると自分のノードで受信できます。",
   "channel_switch_and_join": "切り替えて参加",
   "dm_attachments_not_encrypted_yet": "暗号化されたDM添付は近日対応予定です。今はテキストのみ送信してください。",

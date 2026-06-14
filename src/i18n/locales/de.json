@@ -491,6 +491,8 @@
   "dm_cannot_decrypt": "Entschlüsselung fehlgeschlagen",
   "channel_waiting_for_key": "🔒 warte auf den Kanalschlüssel…",
   "channel_cannot_decrypt": "Nachricht kann nicht entschlüsselt werden",
+  "channel_encrypted_private": "Verschlüsselt",
+  "channel_encrypted_public": "Verschlüsselt · öffentlich",
   "channel_on_other_node": "Dieser private Kanal wird auf {{node}} gehostet. Tritt bei, um ihn auf deinem Node zu empfangen.",
   "channel_switch_and_join": "Wechseln & beitreten",
   "dm_attachments_not_encrypted_yet": "Verschlüsselte DM-Anhänge kommen bald — bitte vorerst nur Text senden.",

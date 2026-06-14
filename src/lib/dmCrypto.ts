@@ -42,6 +42,56 @@ const convKeys = new Map<string, Uint8Array>();
 const cacheKey = (convIdHex: string, epoch: number, author: string) =>
   `${convIdHex}:${epoch}:${author}`;
 
+// --- key-vault integration (P3) --------------------------------------------
+// The `keyVault.ts` layer registers into these so DM + channel content keys
+// persist to the wallet-encrypted vault and restore on a fresh device. Kept as a
+// callback registry (not a direct import) so dmCrypto/channelCrypto never depend
+// on the vault module — no import cycle.
+let keyringChangeListener: (() => void) | null = null;
+let vaultRestoreRequester: (() => void) | null = null;
+
+/** Register a callback fired whenever a content key is cached (the vault layer
+ *  debounces it into a backup publish). */
+export function setKeyringChangeListener(fn: (() => void) | null): void {
+  keyringChangeListener = fn;
+}
+/** Register the session-once, background vault-restore trigger. */
+export function setVaultRestoreRequester(fn: (() => void) | null): void {
+  vaultRestoreRequester = fn;
+}
+/** Notify the vault layer that the keyring changed (called by channelCrypto too). */
+export function notifyKeyringChanged(): void {
+  keyringChangeListener?.();
+}
+/** Ask the vault layer to restore persisted keys (session-once, background). Called
+ *  from a decrypt-miss so old history (keys wrapped only to a prior device) recovers. */
+export function requestVaultRestore(): void {
+  vaultRestoreRequester?.();
+}
+/** Cache a DM conv_key and signal the vault layer to back it up. */
+function cacheConvKey(k: string, key: Uint8Array): void {
+  convKeys.set(k, key);
+  notifyKeyringChanged();
+}
+/** Snapshot DM conv_keys for the vault (`${convIdHex}:${epoch}:${author}` → key). */
+export function exportConvKeysForVault(): Record<string, Uint8Array> {
+  const out: Record<string, Uint8Array> = {};
+  for (const [k, v] of convKeys) out[k] = v;
+  return out;
+}
+/** Merge vault-restored DM conv_keys in; never clobber a key already cached this
+ *  session (the in-memory one is at least as fresh). Returns how many were added. */
+export function importConvKeysFromVault(rec: Record<string, Uint8Array>): number {
+  let added = 0;
+  for (const [k, v] of Object.entries(rec)) {
+    if (!convKeys.has(k) && v instanceof Uint8Array && v.length === 32) {
+      convKeys.set(k, v);
+      added++;
+    }
+  }
+  return added;
+}
+
 /** Highest cached epoch of `author`'s key for a conversation, or null. */
 function cachedLatest(convIdHex: string, author: string): { key: Uint8Array; epoch: number } | null {
   const suffix = `:${author}`;
@@ -58,8 +108,10 @@ function cachedLatest(convIdHex: string, author: string): { key: Uint8Array; epo
 /** Per-conversation in-flight establishment, so a double-send doesn't fork my key. */
 const establishing = new Map<string, Promise<{ key: Uint8Array; epoch: number }>>();
 
-/** Clear cached keys (e.g. on logout / wallet switch). */
+/** Clear cached keys (e.g. on logout / wallet switch). Zeroes the key buffers first
+ *  (best-effort hygiene — JS can't guarantee it, but it drops the obvious copies). */
 export function clearDmKeyCache(): void {
+  for (const v of convKeys.values()) v.fill(0);
   convKeys.clear();
   establishing.clear();
   wrappedToDevices.clear();
@@ -173,7 +225,7 @@ async function establishMyKey(
   }
   const convKey = randomConvKey();
   await wrapMyKeyToTargets(ctx, conversationId, convIdHex, recipient, convKey, epoch, targets);
-  convKeys.set(cacheKey(convIdHex, epoch, ctx.wallet), convKey);
+  cacheConvKey(cacheKey(convIdHex, epoch, ctx.wallet), convKey);
   const confirmed = await fetchConvKey(ctx, conversationId, convIdHex, ctx.wallet, epoch);
   if (typeof confirmed !== 'string' && !bytesEq(confirmed.key, convKey)) {
     e2elog('establish: adopted node FWW key (local lost the race)', { convIdHex, epoch });
@@ -294,7 +346,7 @@ async function fetchConvKey(
     };
     const key = unwrapConvKey(wrapped, ctx.encPriv, conversationId);
     const ep = resp.epoch ?? env.epoch;
-    convKeys.set(cacheKey(convIdHex, ep, author), key);
+    cacheConvKey(cacheKey(convIdHex, ep, author), key);
     e2elog('fetchConvKey: unwrapped OK', { author, epoch: ep, deviceId: ctx.deviceId });
     return { key, epoch: ep };
   } catch (e) {
@@ -477,7 +529,13 @@ export async function decryptDmMessage(
   let key = convKeys.get(cacheKey(convIdHex, epoch, keyAuthor));
   if (!key) {
     const fetched = await fetchConvKey(ctx, conversationId, convIdHex, keyAuthor, epoch);
-    if (fetched === 'missing') return { kind: 'waiting' };
+    if (fetched === 'missing') {
+      // The node has no envelope for my device at this epoch (e.g. history wrapped
+      // only to a prior device). Pull the wallet-encrypted vault in the background;
+      // the next decrypt retry finds the restored key.
+      requestVaultRestore();
+      return { kind: 'waiting' };
+    }
     if (fetched === 'corrupt') return { kind: 'error' };
     key = fetched.key;
   }

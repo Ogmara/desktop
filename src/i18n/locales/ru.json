@@ -491,6 +491,8 @@
   "dm_cannot_decrypt": "не удалось расшифровать",
   "channel_waiting_for_key": "🔒 ожидание ключа канала…",
   "channel_cannot_decrypt": "не удаётся расшифровать сообщение",
+  "channel_encrypted_private": "Зашифровано",
+  "channel_encrypted_public": "Зашифровано · публичный по замыслу",
   "channel_on_other_node": "Этот приватный канал размещён на {{node}}. Присоединитесь, чтобы получать его на своём узле.",
   "channel_switch_and_join": "Переключиться и войти",
   "dm_attachments_not_encrypted_yet": "Зашифрованные вложения в ЛС скоро появятся — пока отправляйте только текст.",
