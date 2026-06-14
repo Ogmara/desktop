@@ -18,7 +18,7 @@ import {
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { onWsEvent } from '../lib/ws';
-import { coverChannelMembers } from '../lib/channelCrypto';
+import { coverChannelMembers, rotateChannelKey } from '../lib/channelCrypto';
 import { authStatus, walletAddress } from '../lib/auth';
 import { navigate, route } from '../lib/router';
 import { getSetting, setSetting } from '../lib/settings';
@@ -798,7 +798,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   //  - I got kicked/banned → drop the channel locally + bounce out of its view.
   const memberWsCleanup = onWsEvent((event) => {
     if (event.type !== 'channel_members_changed') return;
-    const ev = event as { channel_id: number; action: string; member: string };
+    const ev = event as { channel_id: number; action: string; member: string; key_epoch_floor?: number };
     const me = walletAddress();
     const isMe = !!me && !!ev.member && ev.member.toLowerCase() === me.toLowerCase();
     if (isMe && (ev.action === 'kick' || ev.action === 'ban')) {
@@ -809,6 +809,14 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     }
     if (ev.action === 'join' && !isMe && joinedSignal().has(ev.channel_id)) {
       void coverChannelMembers(ev.channel_id);
+    }
+    // P2d: a removal raised the channel's key-epoch floor — re-key to it (wrapping
+    // a fresh key to the remaining members only) so the removed member can't read
+    // future messages. Any remaining member may rotate; FWW converges. Runs app-wide
+    // (even if I'm not viewing the channel) so rotation isn't deferred to a mod's view.
+    if ((ev.action === 'kick' || ev.action === 'ban' || ev.action === 'leave')
+        && !isMe && ev.key_epoch_floor && joinedSignal().has(ev.channel_id)) {
+      void rotateChannelKey(ev.channel_id, ev.key_epoch_floor);
     }
   });
   onCleanup(memberWsCleanup);

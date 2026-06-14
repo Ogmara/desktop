@@ -5,6 +5,16 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.42.0] - 2026-06-14
+
+### Added
+
+- **P2d private-channel key rotation** (parity with web 0.58.0): on member removal the
+  channel key rotates so the removed member can't read future messages. Clients re-key to
+  the node-published `key_epoch_floor` (wrapping to remaining members only) and refuse to
+  send under a below-floor epoch; rotation triggers on the membership-change event and on
+  channel open (catch-up). Requires l2-node 0.77.0 + sdk-js 0.36.0.
+
 ## [1.41.0] - 2026-06-14
 
 ### Fixed

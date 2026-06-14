@@ -204,37 +204,91 @@ export async function coverChannelMembers(channelId: number): Promise<void> {
   }
 }
 
+/** Best key we hold/can fetch for a scope (cache first, then a node fetch). */
+async function bestChannelKey(
+  ctx: DeviceCtx, channelId: number, scope: Uint8Array, scopeHex: string,
+): Promise<{ key: Uint8Array; epoch: number } | null> {
+  const cached = cachedLatest(scopeHex);
+  if (cached) return cached;
+  const fetched = await fetchChannelKey(ctx, channelId, scope, scopeHex);
+  return typeof fetched === 'string' ? null : fetched;
+}
+
+/**
+ * P2d rotation: establish a fresh epoch ≥ `floor` and wrap it to the CURRENT members
+ * only (a removed member is no longer in the member set, and the node rejects a
+ * channel key wrapped to a non-member — so they can't obtain the new key). No-op if
+ * we already hold a key at ≥ floor. ANY member may rotate (not just mods): the node
+ * bounds key flow to members, and the floor (set node-side on removal) caps the
+ * target epoch, so a member can't over-rotate or grief. FWW + read-back-adopt
+ * converge concurrent rotators onto one key.
+ */
+export async function rotateChannelKey(channelId: number, floor: number): Promise<void> {
+  if (floor <= 0) return;
+  const ctx = await deviceCtx();
+  if (!ctx) return;
+  const scope = computeChannelScope(channelId);
+  const scopeHex = toHex(scope);
+  const best = await bestChannelKey(ctx, channelId, scope, scopeHex);
+  if (best && best.epoch >= floor) return; // already rotated
+  const targetEpoch = Math.max((best?.epoch ?? 0) + 1, floor);
+  try {
+    let inflight = establishing.get(channelId);
+    if (!inflight) {
+      inflight = establishChannelKey(ctx, channelId, scope, scopeHex, targetEpoch)
+        .finally(() => establishing.delete(channelId));
+      establishing.set(channelId, inflight);
+    }
+    await inflight;
+    e2elog('channel rotate: established epoch', { channelId, targetEpoch });
+  } catch (e) {
+    e2elog('channel rotate failed', { channelId, err: (e as Error)?.message });
+  }
+}
+
 /**
  * Ensure a channel key for sending. Returns the key, or `'waiting'` when none exists
  * yet and this client may not establish (a non-mod member must wait for a mod to
  * seed/cover the key), or `null` if the device isn't ready.
  *
- * @param canEstablish creator/mods only — gates seeding a fresh epoch (client policy
- *   matching the node's group-key model; see l2-node 0.72.0).
+ * Enforces the rotation floor (P2d): we never send under an epoch below `floor`
+ * (a removed member still holds those keys). If our latest key is below the floor we
+ * rotate to a fresh epoch first.
+ *
+ * @param canEstablish creator/mods only — gates SEEDING the first epoch (client policy
+ *   matching the node's group-key model; see l2-node 0.72.0). Rotation to the floor is
+ *   NOT gated (any member may, per `rotateChannelKey`).
+ * @param floor lowest epoch we may encrypt under (from the channel's `key_epoch_floor`).
  */
 export async function ensureChannelKeyForSend(
-  channelId: number, canEstablish: boolean,
+  channelId: number, canEstablish: boolean, floor = 0,
 ): Promise<{ convKey: Uint8Array; epoch: number } | 'waiting' | null> {
   const ctx = await deviceCtx();
   if (!ctx) return null;
   const scope = computeChannelScope(channelId);
   const scopeHex = toHex(scope);
 
-  const cached = cachedLatest(scopeHex);
-  if (cached) {
+  const best = await bestChannelKey(ctx, channelId, scope, scopeHex);
+  if (best && best.epoch >= floor) {
     void coverChannelMembers(channelId);
-    return { convKey: cached.key, epoch: cached.epoch };
+    return { convKey: best.key, epoch: best.epoch };
   }
-  const fetched = await fetchChannelKey(ctx, channelId, scope, scopeHex);
-  if (typeof fetched !== 'string') {
-    void coverChannelMembers(channelId);
-    return { convKey: fetched.key, epoch: fetched.epoch };
-  }
-  if (!canEstablish) return 'waiting';
 
+  if (best) {
+    // We hold a key but it's below the rotation floor (compromised after a removal).
+    // Rotate (any member may) and use the post-rotation key.
+    await rotateChannelKey(channelId, floor);
+    const after = cachedLatest(scopeHex);
+    if (after && after.epoch >= floor) return { convKey: after.key, epoch: after.epoch };
+    return 'waiting';
+  }
+
+  // No key at all → INITIAL seed (mods only).
+  if (!canEstablish) return 'waiting';
+  const targetEpoch = Math.max(1, floor);
   let inflight = establishing.get(channelId);
   if (!inflight) {
-    inflight = establishChannelKey(ctx, channelId, scope, scopeHex, 1)
+    inflight = establishChannelKey(ctx, channelId, scope, scopeHex, targetEpoch)
       .finally(() => establishing.delete(channelId));
     establishing.set(channelId, inflight);
   }
@@ -242,12 +296,14 @@ export async function ensureChannelKeyForSend(
   return { convKey: res.key, epoch: res.epoch };
 }
 
-/** Build a signed, encrypted ChatMessage for a private channel. */
+/** Build a signed, encrypted ChatMessage for a private channel. `floor` is the
+ *  channel's `key_epoch_floor` (P2d) — the message is encrypted at ≥ floor. */
 export async function buildEncryptedChannelMsg(
   channelId: number, canEstablish: boolean, text: string,
   opts?: { replyTo?: string; mentions?: string[]; contentRating?: 'general' | 'teen' | 'mature' | 'explicit' },
+  floor = 0,
 ): Promise<Uint8Array | 'waiting'> {
-  const established = await ensureChannelKeyForSend(channelId, canEstablish);
+  const established = await ensureChannelKeyForSend(channelId, canEstablish, floor);
   if (established === 'waiting') return 'waiting';
   if (!established) throw new Error('device not ready for encrypted channels');
   const signer = getSigner();
