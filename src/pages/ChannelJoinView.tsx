@@ -99,8 +99,16 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
       // Authenticated users: send join envelope so the node tracks membership.
       // For public channels this is best-effort — the channel is readable without it.
       if (walletAddress()) {
+        const client = getClient();
+        // If the channel is private and the link carries a `?node=` host hint,
+        // (re-)federate so this node refreshes the channel metadata (e.g. a logo
+        // missing from an earlier federation) + re-ensures the gossip subscription.
+        const hintRaw = queryParam('node');
+        const hint = hintRaw ? decodeURIComponent(hintRaw) : '';
+        if (isPrivate() && hint && validateNodeUrl(hint) && hint !== getCurrentNodeUrl()) {
+          try { await client.federateChannel(channelIdNum(), hint); } catch { /* best-effort refresh */ }
+        }
         try {
-          const client = getClient();
           await client.joinChannel(channelIdNum());
         } catch {
           // Non-critical for public channels — user can still read messages

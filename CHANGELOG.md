@@ -5,6 +5,14 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.38.1] - 2026-06-14
+
+### Fixed
+
+- **Re-opening a private-channel invite link refreshes the federated channel's metadata**
+  (logo/display name) — `handleJoin` re-federates on a `?node=` hint (desktop parity with
+  web 0.54.1). Requires l2-node 0.74.3.
+
 ## [1.38.0] - 2026-06-14
 
 ### Changed
