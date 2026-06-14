@@ -5,7 +5,7 @@
 import { Component, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup, onMount, untrack } from 'solid-js';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
-import { authStatus, walletAddress, getSigner } from '../lib/auth';
+import { authStatus, walletAddress, getSigner, isRegistered } from '../lib/auth';
 import { onWsEvent } from '../lib/ws';
 import { navigate } from '../lib/router';
 import { showMobileList } from '../lib/mobile-nav';
@@ -30,6 +30,11 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   const [showReactPicker, setShowReactPicker] = createSignal<string | null>(null);
   const [attachments, setAttachments] = createSignal<MediaAttachment[]>([]);
   const [sendError, setSendError] = createSignal<string | null>(null);
+  // Shown when an UNVERIFIED wallet tries an edit/delete: the node gates these
+  // "trust features" behind on-chain registration (requires_verified_identity).
+  // Rather than silently hiding the action, we prompt the user to verify — a
+  // gentle nudge toward registering their wallet.
+  const [showVerifyPrompt, setShowVerifyPrompt] = createSignal(false);
 
   // Right-click / long-press message context menu (parity with channel chat).
   const [dmMenu, setDmMenu] = createSignal<{ x: number; y: number; msg: any } | null>(null);
@@ -347,6 +352,9 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
     msg.author === walletAddress() && !msg.deleted;
 
   const startEdit = (msg: any) => {
+    // Editing is a verified-wallet feature (node `requires_verified_identity`).
+    // Nudge unverified users to verify instead of letting the edit fail with a 400.
+    if (!isRegistered()) { setShowVerifyPrompt(true); return; }
     // Prefill with decrypted text (raw payload content is ciphertext for encrypted
     // DMs). The edit is re-encrypted under the conv_key on save (see handleEdit), so
     // the node never sees the new plaintext.
@@ -384,6 +392,8 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   };
 
   const handleDeleteDm = async (msg: any) => {
+    // Deleting is likewise a verified-wallet feature — prompt instead of failing.
+    if (!isRegistered()) { setShowVerifyPrompt(true); return; }
     if (!window.confirm(t('chat_delete_confirm'))) return;
     try {
       const client = getClient();
@@ -494,6 +504,20 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
           </For>
         </Show>
       </div>
+
+      {/* Verify-wallet nudge — shown when an unverified wallet tries edit/delete */}
+      <Show when={showVerifyPrompt()}>
+        <div class="dm-verify-overlay" onClick={() => setShowVerifyPrompt(false)}>
+          <div class="dm-verify-modal" onClick={(e) => e.stopPropagation()}>
+            <div class="dm-verify-icon">🔓</div>
+            <p class="dm-verify-text">{t('verification_required')}</p>
+            <div class="dm-verify-actions">
+              <button class="dm-verify-cancel" onClick={() => setShowVerifyPrompt(false)}>{t('chat_edit_cancel')}</button>
+              <button class="dm-verify-go" onClick={() => { setShowVerifyPrompt(false); navigate('/wallet'); }}>{t('verification_go_to_wallet')}</button>
+            </div>
+          </div>
+        </div>
+      </Show>
 
       {/* Right-click / long-press message context menu */}
       <Show when={dmMenu()}>
@@ -795,6 +819,41 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
         }
         .dm-ctx-item:hover { background: var(--color-bg-tertiary); }
         .dm-ctx-danger { color: var(--color-error, #e5484d); }
+        .dm-verify-overlay {
+          position: fixed;
+          inset: 0;
+          z-index: 1100;
+          background: rgba(0, 0, 0, 0.5);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: var(--spacing-lg);
+        }
+        .dm-verify-modal {
+          background: var(--color-bg-secondary);
+          border: 1px solid var(--color-border);
+          border-radius: var(--radius-lg);
+          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+          padding: var(--spacing-xl);
+          max-width: 360px;
+          text-align: center;
+          display: flex;
+          flex-direction: column;
+          gap: var(--spacing-md);
+        }
+        .dm-verify-icon { font-size: 32px; }
+        .dm-verify-text { margin: 0; color: var(--color-text-primary); line-height: 1.5; }
+        .dm-verify-actions { display: flex; gap: var(--spacing-sm); justify-content: center; }
+        .dm-verify-cancel, .dm-verify-go {
+          padding: 8px 16px;
+          border-radius: var(--radius-md);
+          cursor: pointer;
+          font-size: var(--font-size-sm);
+          border: 1px solid var(--color-border);
+        }
+        .dm-verify-cancel { background: var(--color-bg-tertiary); color: var(--color-text-secondary); }
+        .dm-verify-go { background: var(--color-accent-primary); color: #fff; border-color: var(--color-accent-primary); font-weight: 600; }
+        .dm-verify-go:hover { opacity: 0.9; }
         .dm-react-picker { display: flex; gap: 4px; padding: var(--spacing-xs) 0; }
         .dm-react-btn { font-size: var(--font-size-md); padding: 2px 4px; border-radius: var(--radius-sm); cursor: pointer; }
         .dm-react-btn:hover { background: var(--color-bg-tertiary); }

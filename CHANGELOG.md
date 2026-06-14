@@ -5,6 +5,19 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.36.3] - 2026-06-14
+
+### Changed
+
+- **Editing/deleting a DM with an unverified wallet now shows a "verify your
+  wallet" prompt** instead of silently doing nothing (or failing with a server
+  400). The node gates edits/deletes behind on-chain registration
+  (`requires_verified_identity`); the actions stay visible on your own messages
+  so unverified users discover the feature and are nudged to verify (modal links
+  to the wallet page). This corrects 1.36.2, which dropped the client gate and let
+  the action hit a raw 400. Reuses the existing `verification_required` copy.
+
+## [1.36.2] - 2026-06-14
 ## [1.36.2] - 2026-06-14
 
 ### Fixed
