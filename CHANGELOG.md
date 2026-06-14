@@ -5,6 +5,18 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.39.0] - 2026-06-14
+
+### Added
+
+- **Live private-channel key delivery + removal handling** (desktop parity with web
+  0.55.0). The sidebar handles the `channel_members_changed` WebSocket event (l2-node
+  0.75.0, sdk-js 0.34.0): a join to a private channel I'm in triggers
+  `coverChannelMembers` to wrap the channel epoch key to the new member (reliable key
+  delivery without actively viewing the channel); a kick/ban targeting me drops the
+  channel locally and navigates out. The wrap targets come from the node's authoritative
+  member list, not the (untrusted) event payload. Requires l2-node 0.75.0.
+
 ## [1.38.1] - 2026-06-14
 
 ### Fixed

@@ -18,6 +18,7 @@ import {
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { onWsEvent } from '../lib/ws';
+import { coverChannelMembers } from '../lib/channelCrypto';
 import { authStatus, walletAddress } from '../lib/auth';
 import { navigate, route } from '../lib/router';
 import { getSetting, setSetting } from '../lib/settings';
@@ -788,6 +789,29 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     }
     return null;
   };
+
+  // Live private-channel membership changes (member-targeted push from our node):
+  //  - someone joined a channel I'm in → wrap the channel epoch key to them so they
+  //    can read (E2E: only a member's client holds the key — no node custody). This
+  //    is the reliable key-delivery path; it no longer depends on me actively viewing
+  //    the channel when a new member joins.
+  //  - I got kicked/banned → drop the channel locally + bounce out of its view.
+  const memberWsCleanup = onWsEvent((event) => {
+    if (event.type !== 'channel_members_changed') return;
+    const ev = event as { channel_id: number; action: string; member: string };
+    const me = walletAddress();
+    const isMe = !!me && !!ev.member && ev.member.toLowerCase() === me.toLowerCase();
+    if (isMe && (ev.action === 'kick' || ev.action === 'ban')) {
+      removeJoinedChannel(ev.channel_id);
+      window.dispatchEvent(new Event('ogmara:channels-changed'));
+      if (currentChannelId() === ev.channel_id) navigate('/news');
+      return;
+    }
+    if (ev.action === 'join' && !isMe && joinedSignal().has(ev.channel_id)) {
+      void coverChannelMembers(ev.channel_id);
+    }
+  });
+  onCleanup(memberWsCleanup);
 
   const isView = (view: string) => {
     const r = route();
