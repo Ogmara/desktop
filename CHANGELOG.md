@@ -5,6 +5,15 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.41.0] - 2026-06-14
+
+### Fixed
+
+- **Deleting a channel now propagates across nodes** (via sdk-js 0.35.0):
+  `deleteChannel` sends a signed `ChannelDelete` message that the node gossips +
+  reconcile-indexes, so a deleted channel no longer resurrects on other nodes or
+  shows in their channel list / search. Requires l2-node 0.76.0.
+
 ## [1.40.0] - 2026-06-14
 
 ### Fixed
