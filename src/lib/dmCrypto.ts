@@ -16,6 +16,7 @@ import {
   unwrapConvKey,
   buildChannelKeyEnvelope,
   buildEncryptedDirectMessage,
+  buildEncryptedDmEdit,
   decryptDmContent,
   encPublicKeyHex,
   KeyScopeKind,
@@ -96,10 +97,17 @@ const targetKey = (t: Target) => `${t.target}:${(t.deviceId ?? '').toLowerCase()
  *  `(target, device_id)` (the node keys channel_keys by device_id, FWW). */
 async function getConvTargets(ctx: DeviceCtx, recipient: string): Promise<Target[]> {
   const client = getClient();
-  const empty = () => ({ keys: [] as { device_id: string; enc_pub: string; created_at: number }[] });
+  // Let a genuine fetch FAILURE propagate (don't swallow to empty): an empty key
+  // set drives the "recipient hasn't enabled encryption" gate, so a server/network
+  // error must NOT be mistaken for a genuinely keyless recipient. A real keyless
+  // recipient returns a 200 with `keys: []`, which resolves normally. withRetry
+  // absorbs transient 429s first; callers that can tolerate failure (coverDevices)
+  // already wrap this in try/catch.
+  const fetchKeys = (addr: string) =>
+    withRetry(() => client.getEncKeys(addr), 'fetch enc keys');
   const [recipKeys, myKeys] = await Promise.all([
-    client.getEncKeys(recipient).catch(empty),
-    client.getEncKeys(ctx.wallet).catch(empty),
+    fetchKeys(recipient),
+    fetchKeys(ctx.wallet),
   ]);
   const raw: Target[] = [
     ...recipKeys.keys.map((k) => ({ target: recipient, deviceId: k.device_id, encPub: k.enc_pub, createdAt: k.created_at ?? 0 })),
@@ -156,6 +164,12 @@ async function establishMyKey(
   });
   if (targets.length === 0) {
     throw new Error('no device encryption keys found for either participant');
+  }
+  // The recipient must have at least one registered enc key, or the message would
+  // be wrapped only to my own devices and they could never decrypt it. Surface a
+  // distinguishable error so the UI can tell the user instead of silently waiting.
+  if (!targets.some((t) => t.target === recipient)) {
+    throw new Error('RECIPIENT_NO_ENC_KEYS');
   }
   const convKey = randomConvKey();
   await wrapMyKeyToTargets(ctx, conversationId, convIdHex, recipient, convKey, epoch, targets);
@@ -346,6 +360,29 @@ export async function buildEncryptedDm(
     epoch: established.epoch,
     text,
     replyTo,
+  });
+}
+
+/**
+ * Build a signed, encrypted `DirectMessageEdit` envelope. The new content is
+ * sealed under the conversation's current `conv_key` (same path as a fresh DM),
+ * so the node never sees the edited plaintext.
+ */
+export async function buildEncryptedDmEditEnvelope(
+  recipient: string,
+  msgId: string,
+  text: string,
+): Promise<Uint8Array> {
+  const established = await ensureConvKeyForSend(recipient);
+  if (!established) throw new Error('device not ready for encrypted DMs');
+  const signer = getSigner();
+  if (!signer) throw new Error('no signer');
+  return buildEncryptedDmEdit(signer, {
+    recipient,
+    msgId,
+    convKey: established.convKey,
+    epoch: established.epoch,
+    content: text,
   });
 }
 

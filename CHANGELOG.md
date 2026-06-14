@@ -5,6 +5,26 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.36.0] - 2026-06-14
+
+### Added
+
+- **DM edits are now end-to-end encrypted.** Editing a direct message re-encrypts
+  the new text under the conversation's `conv_key` (`buildEncryptedDmEditEnvelope`)
+  and sends it via the DM POST path — the node never sees the edited plaintext
+  (requires l2-node 0.70.0+). Replaces the old plaintext `editDm` call.
+- **"Recipient hasn't enabled encryption" feedback.** When the recipient has no
+  registered device encryption keys, the DM send is blocked with a clear message
+  (new `dm_recipient_no_encryption` string, all 7 locales) instead of silently
+  appearing to send. A transient key-fetch failure is no longer mistaken for a
+  keyless recipient (`getConvTargets` lets genuine fetch errors propagate).
+
+### Fixed
+
+- **Edited DMs now re-render in place.** The per-message decrypt effect re-decrypts
+  a bubble when its `last_edited_at` advances, so an edit (mine or the peer's)
+  shows the new text without a reload; the sender also sees it optimistically.
+
 ## [1.35.3] - 2026-06-13
 
 ### Fixed

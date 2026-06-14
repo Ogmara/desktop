@@ -490,5 +490,6 @@
   "dm_waiting_for_key": "鍵を待っています…",
   "dm_cannot_decrypt": "復号できません",
   "dm_attachments_not_encrypted_yet": "暗号化されたDM添付は近日対応予定です。今はテキストのみ送信してください。",
+  "dm_recipient_no_encryption": "この相手はまだ暗号化を有効にしていないため、暗号化されたメッセージを受信できません。",
   "dm_encrypted_preview": "暗号化されたメッセージ"
 }

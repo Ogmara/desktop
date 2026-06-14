@@ -14,7 +14,7 @@ import { FormattedText } from '../components/FormattedText';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
 import { getPayloadAttachments, buildOptimisticChatPayload, safeAttachmentName } from '../lib/payload';
 import { EmojiPicker } from '../components/EmojiPicker';
-import { buildEncryptedDm, decryptDmMessage, coverPeerDevices, type DmDisplay } from '../lib/dmCrypto';
+import { buildEncryptedDm, buildEncryptedDmEditEnvelope, decryptDmMessage, coverPeerDevices, type DmDisplay } from '../lib/dmCrypto';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
 
 interface DmConversationProps {
@@ -162,20 +162,23 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   // conv_key may need a node round-trip); `waiting` entries are retried on the next
   // poll/refetch (e.g. once a key envelope arrives for a freshly-joined device).
   const [dmDisplays, setDmDisplays] = createSignal<Record<string, DmDisplay>>({});
+  // Non-reactive record of the edit stamp we last decrypted per msg_id. An edit
+  // replaces the message's ciphertext (node-side projection), so a resolved bubble
+  // must be re-decrypted when `last_edited_at` advances — otherwise an edited DM
+  // (mine OR the peer's) keeps showing the pre-edit text until a full reload.
+  const decodedEditStamp = new Map<string, number>();
   createEffect(() => {
     const msgs = allMessages(); // track
     const cur = untrack(() => dmDisplays());
     for (const msg of msgs) {
       const id = msg.msg_id;
       if (!id) continue;
+      const stamp = Number(msg.last_edited_at ?? 0);
       const existing = cur[id];
-      if (existing && existing.kind !== 'waiting') continue;
+      if (existing && existing.kind !== 'waiting' && decodedEditStamp.get(id) === stamp) continue;
+      decodedEditStamp.set(id, stamp);
       decryptDmMessage(msg.payload, msg.author)
-        .then((disp) => {
-          setDmDisplays((prev) =>
-            prev[id] && prev[id].kind !== 'waiting' ? prev : { ...prev, [id]: disp },
-          );
-        })
+        .then((disp) => setDmDisplays((prev) => ({ ...prev, [id]: disp })))
         .catch(() => setDmDisplays((prev) => ({ ...prev, [id]: { kind: 'error' } })));
     }
   });
@@ -261,7 +264,11 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
       }, 50);
     } catch (err: any) {
       console.error('sendDm failed:', err);
-      const msg = err?.message || String(err);
+      const raw = err?.message || String(err);
+      // Recipient has no registered encryption keys → they can't receive E2E DMs.
+      const msg = raw.includes('RECIPIENT_NO_ENC_KEYS')
+        ? t('dm_recipient_no_encryption')
+        : raw;
       setSendError(msg);
       setTimeout(() => setSendError(null), 6000);
     } finally {
@@ -299,7 +306,8 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
 
   const startEdit = (msg: any) => {
     // Prefill with decrypted text (raw payload content is ciphertext for encrypted
-    // DMs). DM edit/delete content E2E is a P1 follow-up (tracked in the E2E plan).
+    // DMs). The edit is re-encrypted under the conv_key on save (see handleEdit), so
+    // the node never sees the new plaintext.
     const text = dmText(msg);
     setEditingMsg({ msgId: msgIdToHex(msg.msg_id), content: text });
     setMessageInput(text);
@@ -314,15 +322,22 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
     setSending(true);
     try {
       const client = getClient();
-      await client.editDm(props.peerAddress, edit.msgId, messageInput().trim());
+      const newText = messageInput().trim();
+      // Re-encrypt the new content under the conv_key and send as a DM edit
+      // envelope via the same DM POST path as a fresh message.
+      const envelope = await buildEncryptedDmEditEnvelope(props.peerAddress, edit.msgId, newText);
+      await client.sendDm(props.peerAddress, envelope);
+      // Optimistic: show the new text immediately. The decrypt effect re-confirms
+      // it from the re-encrypted server echo once `last_edited_at` advances.
+      setDmDisplays((p) => ({ ...p, [edit.msgId]: { kind: 'text', text: newText } }));
       setLocalMessages((prev) => prev.map((m) =>
-        msgIdToHex(m.msg_id) === edit.msgId
-          ? { ...m, payload: messageInput().trim(), edited: true }
-          : m,
+        msgIdToHex(m.msg_id) === edit.msgId ? { ...m, edited: true } : m,
       ));
       setEditingMsg(null);
       setMessageInput('');
-    } catch { /* failed */ }
+    } catch (err) {
+      console.error('DM edit failed:', err);
+    }
     finally { setSending(false); }
   };
 

@@ -493,5 +493,6 @@
   "dm_waiting_for_key": "waiting for key…",
   "dm_cannot_decrypt": "can't decrypt",
   "dm_attachments_not_encrypted_yet": "Encrypted DM attachments are coming soon — send text only for now.",
+  "dm_recipient_no_encryption": "This person hasn't enabled encryption yet, so they can't receive encrypted messages.",
   "dm_encrypted_preview": "Encrypted message"
 }
