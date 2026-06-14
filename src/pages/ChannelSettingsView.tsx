@@ -8,7 +8,8 @@
 
 import { Component, createResource, createSignal, createEffect, For, Show } from 'solid-js';
 import { t } from '../i18n/init';
-import { getClient } from '../lib/api';
+import { getClient, getCurrentNodeUrl } from '../lib/api';
+import { buildChannelInviteUrl } from '../lib/share';
 import { walletAddress } from '../lib/auth';
 import { navigate, goBack } from '../lib/router';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
@@ -286,10 +287,16 @@ export const ChannelSettingsView: Component<ChannelSettingsProps> = (props) => {
   // `tauri://localhost` (production) — neither is shareable. The web build
   // ships at `https://ogmara.org`, so the same URL works for any recipient
   // regardless of which device the link was copied from.
-  const PUBLIC_INVITE_BASE = 'https://ogmara.org';
   const [linkCopied, setLinkCopied] = createSignal(false);
   const handleCopyLink = () => {
-    const url = `${PUBLIC_INVITE_BASE}/app/#/join/${channelIdNum()}`;
+    // Private channels live only on their host node — embed the current node so a
+    // recipient on another node can find + switch to it. Public channels omit it
+    // (they're chain-discoverable everywhere).
+    const url = buildChannelInviteUrl(
+      channelIdNum(),
+      isPrivateChannel() ? getCurrentNodeUrl() : undefined,
+    );
+    if (!url) return;
     navigator.clipboard.writeText(url).then(() => {
       setLinkCopied(true);
       setTimeout(() => setLinkCopied(false), 2000);

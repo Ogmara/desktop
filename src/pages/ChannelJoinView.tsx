@@ -6,21 +6,29 @@
  * Private channels: shows invite-required message.
  */
 
-import { Component, createResource, createSignal, Show } from 'solid-js';
+import { Component, createResource, createSignal, createEffect, Show } from 'solid-js';
+import { OgmaraClient, validateNodeUrl, type ChannelDetailResponse } from '@ogmara/sdk';
 import { t } from '../i18n/init';
-import { getClient } from '../lib/api';
+import { getClient, getCurrentNodeUrl, switchNode } from '../lib/api';
 import { authStatus, walletAddress } from '../lib/auth';
-import { navigate } from '../lib/router';
+import { navigate, queryParam } from '../lib/router';
 import { addJoinedChannel } from '../components/Sidebar';
 
 interface ChannelJoinProps {
   channelId: string;
 }
 
+const hostLabel = (url: string): string => {
+  try { return new URL(url).hostname; } catch { return url; }
+};
+
 export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
   const [joining, setJoining] = createSignal(false);
   const [error, setError] = createSignal('');
   const [notFound, setNotFound] = createSignal(false);
+  // The channel isn't on the current node, but the invite link names a host node
+  // where it lives (private channels are host-scoped). We preview it from there.
+  const [crossNode, setCrossNode] = createSignal<{ host: string; detail: ChannelDetailResponse } | null>(null);
 
   const channelIdNum = () => parseInt(props.channelId, 10);
 
@@ -28,15 +36,52 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
     () => props.channelId,
     async (id) => {
       setNotFound(false);
+      setCrossNode(null);
+      const cid = parseInt(id, 10);
       try {
-        const client = getClient();
-        return await client.getChannelDetail(parseInt(id, 10));
+        return await getClient().getChannelDetail(cid);
       } catch {
+        // Not on the current node. If the link carries a `?node=` host hint we
+        // don't currently use, fetch a PREVIEW from there so the user sees the
+        // channel before deciding to switch nodes.
+        const hintRaw = queryParam('node');
+        const hint = hintRaw ? decodeURIComponent(hintRaw) : '';
+        const cur = getCurrentNodeUrl();
+        if (hint && validateNodeUrl(hint) && hint !== cur) {
+          try {
+            const detail = await new OgmaraClient({ nodeUrl: hint }).getChannelDetail(cid);
+            setCrossNode({ host: hint, detail });
+            return null;
+          } catch {
+            // host unreachable or channel really gone — fall through to not-found
+          }
+        }
         setNotFound(true);
         return null;
       }
     },
   );
+
+  // After a "Switch & join" the app reloads on the host node; auto-complete the
+  // join once the channel resolves there (and auth is ready for private channels).
+  createEffect(() => {
+    const ch = channel();
+    const ready = authStatus() === 'ready';
+    if (!ch) return;
+    let pending = '';
+    try { pending = sessionStorage.getItem('ogmara:pendingJoin') || ''; } catch { /* ignore */ }
+    if (pending !== props.channelId) return;
+    if (isPrivate() && !ready) return; // private join needs auth — wait for it
+    try { sessionStorage.removeItem('ogmara:pendingJoin'); } catch { /* ignore */ }
+    void handleJoin();
+  });
+
+  const handleSwitchAndJoin = () => {
+    const cn = crossNode();
+    if (!cn) return;
+    try { sessionStorage.setItem('ogmara:pendingJoin', props.channelId); } catch { /* ignore */ }
+    switchNode(cn.host); // persists the node + full reload → channel loads from host
+  };
 
   const isPrivate = () => {
     const ch = channel()?.channel;
@@ -71,14 +116,37 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
 
   return (
     <div class="join-view">
-      <Show when={notFound()}>
+      <Show when={notFound() && !crossNode()}>
         <div class="join-card">
           <h2 class="join-name">{t('channel_not_found')}</h2>
           <p class="join-desc">{t('channel_not_found_desc')}</p>
           <button class="join-btn" onClick={() => navigate('/news')}>{t('nav_news')}</button>
         </div>
       </Show>
-      <Show when={!notFound() && !channel()}>
+
+      {/* The channel lives on a different node (private, host-scoped) — preview it
+          from the host and offer a one-click switch + join. */}
+      <Show when={crossNode()}>
+        <div class="join-card">
+          <h2 class="join-name">
+            🔒 {crossNode()!.detail.channel.display_name || crossNode()!.detail.channel.slug}
+          </h2>
+          <Show when={(crossNode()!.detail.channel as any).description}>
+            <p class="join-desc">{(crossNode()!.detail.channel as any).description}</p>
+          </Show>
+          <div class="join-meta">
+            {(crossNode()!.detail as any)?.member_count ?? crossNode()!.detail.channel.member_count ?? 0} {t('channel_members')}
+          </div>
+          <p class="join-private-hint">
+            {t('channel_on_other_node', { node: hostLabel(crossNode()!.host) })}
+          </p>
+          <button class="join-btn" onClick={handleSwitchAndJoin}>
+            {t('channel_switch_and_join')}
+          </button>
+        </div>
+      </Show>
+
+      <Show when={!notFound() && !crossNode() && !channel()}>
         <div class="join-loading">{t('loading')}</div>
       </Show>
       <Show when={!notFound() && channel()}>

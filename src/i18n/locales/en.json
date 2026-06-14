@@ -280,6 +280,8 @@
   "channel_private_invite_link": "This is a private channel. Click join to request access.",
   "channel_not_found": "Channel not found",
   "channel_not_found_desc": "This channel may have been deleted or the link is invalid.",
+  "channel_on_other_node": "This private channel is hosted on {{node}}. Switch to that node to view and join it.",
+  "channel_switch_and_join": "Switch & join",
   "channel_copy_link": "Copy invite link",
   "channel_link_copied": "Link copied!",
   "channel_view_profile": "View profile",
@@ -492,6 +494,8 @@
   "chat_search_no_matches": "No messages match your search.",
   "dm_waiting_for_key": "waiting for key…",
   "dm_cannot_decrypt": "can't decrypt",
+  "channel_waiting_for_key": "🔒 waiting for the channel key…",
+  "channel_cannot_decrypt": "can't decrypt this message",
   "dm_attachments_not_encrypted_yet": "Encrypted DM attachments are coming soon — send text only for now.",
   "dm_recipient_no_encryption": "This person hasn't enabled encryption yet, so they can't receive encrypted messages.",
   "dm_encrypted_preview": "Encrypted message"

@@ -11,7 +11,9 @@ import { authStatus, getSigner, walletAddress, isRegistered } from '../lib/auth'
 // Desktop tracks `wsConnected` so we can pause polling while the WS is alive
 // (avoids the duplicate-messages bug fixed in v1.15.1).
 import { onWsEvent, wsSubscribeChannels, wsUnsubscribeChannels, wsConnected } from '../lib/ws';
-import { canPost, CHANNEL_TYPE_READ_PUBLIC } from '@ogmara/sdk';
+import { canPost, CHANNEL_TYPE_READ_PUBLIC, CHANNEL_TYPE_PRIVATE } from '@ogmara/sdk';
+import { buildEncryptedChannelMsg, decryptChannelMessage, coverChannelMembers } from '../lib/channelCrypto';
+import type { DmDisplay } from '../lib/dmCrypto';
 import { MentionPopover } from '../components/MentionPopover';
 import { navigate } from '../lib/router';
 import { setSetting } from '../lib/settings';
@@ -482,6 +484,50 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   const isBroadcastChannel = () =>
     (channelInfo()?.channel?.channel_type ?? 0) === CHANNEL_TYPE_READ_PUBLIC;
 
+  // P2: private channels are end-to-end encrypted. Only creator/mods may ESTABLISH
+  // an epoch key (matches the node's group-key model); regular members fetch + wait.
+  const isPrivate = () =>
+    (channelInfo()?.channel?.channel_type ?? 0) === CHANNEL_TYPE_PRIVATE;
+
+  // Per-message decrypted display for private channels, keyed by msg_id (async).
+  const [chanDisplays, setChanDisplays] = createSignal<Record<string, DmDisplay>>({});
+  const decodedEditStamp = new Map<string, number>();
+  // Reset the per-channel decrypt caches when switching channels.
+  createEffect(() => {
+    props.channelId; // track
+    setChanDisplays({});
+    decodedEditStamp.clear();
+  });
+  createEffect(() => {
+    if (!isPrivate() || !props.channelId) return;
+    const msgs = allMessages(); // track
+    // Opportunistically wrap the current channel key to any member device that has
+    // joined since (throttled, no-op if I don't hold the key yet).
+    void coverChannelMembers(props.channelId);
+    const cur = untrack(() => chanDisplays());
+    for (const msg of msgs) {
+      const id = msg.msg_id;
+      if (!id) continue;
+      const stamp = Number(msg.last_edited_at ?? 0);
+      const existing = cur[id];
+      if (existing && existing.kind !== 'waiting' && decodedEditStamp.get(id) === stamp) continue;
+      decodedEditStamp.set(id, stamp);
+      decryptChannelMessage(msg.payload, props.channelId)
+        .then((disp) => setChanDisplays((prev) => ({ ...prev, [id]: disp })))
+        .catch(() => setChanDisplays((prev) => ({ ...prev, [id]: { kind: 'error' } })));
+    }
+  });
+
+  /** Display text for a message body — decrypted for private channels, else plaintext. */
+  const displayContent = (msg: any): string => {
+    if (!isPrivate()) return getPayloadContent(msg.payload);
+    const d = chanDisplays()[msg.msg_id];
+    if (!d) return '…';
+    if (d.kind === 'text' || d.kind === 'plain') return d.text;
+    if (d.kind === 'waiting') return `🔒 ${t('channel_waiting_for_key')}`;
+    return `🔒 ${t('channel_cannot_decrypt')}`;
+  };
+
   const MAX_LOCAL_MESSAGES = 200;
 
   // Apply an in-place update (reaction/edit/delete) to the target message
@@ -848,6 +894,14 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     if ((!text && atts.length === 0) || !props.channelId) return;
     if (!getSigner() || !walletAddress()) { navigate('/wallet'); return; }
 
+    // P2: encrypted media is a fast-follow (P5) — block attachments on private
+    // channels rather than silently leaking them plaintext.
+    if (isPrivate() && atts.length > 0) {
+      setSendError(t('dm_attachments_not_encrypted_yet'));
+      setTimeout(() => setSendError(null), 6000);
+      return;
+    }
+
     setSending(true);
     setSendError(null);
     try {
@@ -863,7 +917,22 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       if (merged.size > 0) {
         options.mentions = Array.from(merged);
       }
-      await client.sendMessage(props.channelId, text, options);
+      if (isPrivate()) {
+        // Encrypt the text under the channel epoch key. `'waiting'` means the key
+        // isn't available yet (a non-mod member before a mod has seeded/covered it).
+        const built = await buildEncryptedChannelMsg(props.channelId, isMod(), text, {
+          replyTo: options.replyTo, mentions: options.mentions,
+        });
+        if (built === 'waiting') {
+          setSendError(t('channel_waiting_for_key'));
+          setTimeout(() => setSendError(null), 6000);
+          setSending(false);
+          return; // keep the text so the user can retry once the key arrives
+        }
+        await client.sendMessageEnvelope(built);
+      } else {
+        await client.sendMessage(props.channelId, text, options);
+      }
 
       // Optimistic: add message locally for instant display.
       //
@@ -907,7 +976,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   };
 
   const handleReply = (msg: any) => {
-    const content = getPayloadContent(msg.payload);
+    const content = displayContent(msg);
     const preview = content.length > 80 ? content.slice(0, 80) + '...' : content;
     setReplyTo({ msgId: msgIdToHex(msg.msg_id), author: msg.author, preview });
     inputRef()?.focus();
@@ -950,6 +1019,9 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     msg.author === walletAddress() &&
     !msg.deleted &&
     !isPending(msg) &&
+    // Encrypted private-channel message edits are a later phase — disable editing on
+    // private channels to avoid sending the new text as plaintext.
+    !isPrivate() &&
     (Date.now() - normalizeTs(msg.timestamp)) < EDIT_WINDOW_MS;
 
   const canDelete = (msg: any) =>
@@ -1210,7 +1282,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                           <Show when={!msg.muted || expandedMuted().has(msgHex)} fallback={
                             <div class="message-body message-muted-text" onClick={() => setExpandedMuted(prev => { const next = new Set(prev); next.add(msgHex); return next; })}>{t('message_muted_show')}</div>
                           }>
-                            <div class="message-body"><FormattedText content={getPayloadContent(msg.payload)} attachments={getPayloadAttachments(msg.payload)} /></div>
+                            <div class="message-body"><FormattedText content={displayContent(msg)} attachments={getPayloadAttachments(msg.payload)} /></div>
                           </Show>
                         </Show>
                         <Show when={walletAddress() && !msg.deleted}>
@@ -1268,7 +1340,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                               <div class="message-body message-muted-text" onClick={() => setExpandedMuted(prev => { const next = new Set(prev); next.add(msgHex); return next; })}>{t('message_muted_show')}</div>
                             }>
                               <div class="message-body">
-                                <FormattedText content={getPayloadContent(msg.payload)} attachments={getPayloadAttachments(msg.payload)} />
+                                <FormattedText content={displayContent(msg)} attachments={getPayloadAttachments(msg.payload)} />
                                 <span class="message-meta-inline">
                                   <Show when={msg.edited}><span class="edited-indicator">{t('message_edited')}</span></Show>
                                   <span class="message-time">{formatMessageTime(msg.timestamp)}</span>

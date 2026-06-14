@@ -49,6 +49,26 @@ export function buildChatShareUrl(channelId: number | string, msgIdHex: string):
 }
 
 /**
+ * Build a channel invite/join deep link. For a PRIVATE channel, pass the host
+ * node URL — private channels live only on their host node, so a recipient on a
+ * different node needs the hint to find + switch to it (the join view reads `?node`).
+ * Public channels are chain-discoverable everywhere, so they omit it. Returns null
+ * if `channelId` isn't a positive integer.
+ */
+export function buildChannelInviteUrl(
+  channelId: number | string,
+  hostNodeUrl?: string,
+): string | null {
+  const ch = sanitizeChannelId(channelId);
+  if (!ch) return null;
+  let url = `${SHARE_BASE}/#/join/${ch}`;
+  if (hostNodeUrl && /^https?:\/\//.test(hostNodeUrl)) {
+    url += `?node=${encodeURIComponent(hostNodeUrl)}`;
+  }
+  return url;
+}
+
+/**
  * Copy `text` to the clipboard. Returns true on success.
  *
  * Tauri's webview exposes the standard `navigator.clipboard` API, so we use

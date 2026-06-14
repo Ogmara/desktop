@@ -28,10 +28,10 @@ import { getSigner, walletAddress } from './auth';
 import { getOrCreateEncKeypair, getOrCreateDeviceId } from './deviceEnc';
 import { e2elog, withRetry } from './e2eDebug';
 
-const toHex = (b: Uint8Array): string =>
+export const toHex = (b: Uint8Array): string =>
   Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 
-function fromHex(h: string): Uint8Array {
+export function fromHex(h: string): Uint8Array {
   const out = new Uint8Array(h.length / 2);
   for (let i = 0; i < out.length; i++) out[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
   return out;
@@ -66,14 +66,14 @@ export function clearDmKeyCache(): void {
   lastCoverMs.clear();
 }
 
-interface DeviceCtx {
+export interface DeviceCtx {
   signer: ReturnType<typeof getSigner>;
   encPriv: Uint8Array;
   deviceId: string;
   wallet: string;
 }
 
-async function deviceCtx(): Promise<DeviceCtx | null> {
+export async function deviceCtx(): Promise<DeviceCtx | null> {
   const signer = getSigner();
   const wallet = walletAddress();
   if (!signer || !wallet) return null;
@@ -86,12 +86,12 @@ async function deviceCtx(): Promise<DeviceCtx | null> {
  * of both participants, publish one `ChannelKeyEnvelope` (0x61) per device (authored
  * by me). `peer` is always the recipient. Caches + returns my key.
  */
-interface Target { target: string; deviceId: string; encPub: string; createdAt: number }
+export interface Target { target: string; deviceId: string; encPub: string; createdAt: number }
 
 /** Which `(target, deviceId)` we've already wrapped MY key to, per `${convIdHex}:${epoch}`. */
 const wrappedToDevices = new Map<string, Set<string>>();
 const wrappedSetKey = (convIdHex: string, epoch: number) => `${convIdHex}:${epoch}`;
-const targetKey = (t: Target) => `${t.target}:${(t.deviceId ?? '').toLowerCase()}`;
+export const targetKey = (t: Target) => `${t.target}:${(t.deviceId ?? '').toLowerCase()}`;
 
 /** Current device set of both participants, deduped to the newest enc_pub per
  *  `(target, device_id)` (the node keys channel_keys by device_id, FWW). */
@@ -393,7 +393,7 @@ interface RawDmPayload {
   key_epoch?: number;
 }
 
-function toBytes(payload: number[] | Uint8Array | string): Uint8Array | null {
+export function toBytes(payload: number[] | Uint8Array | string): Uint8Array | null {
   if (typeof payload === 'string') {
     try {
       const bin = atob(payload);

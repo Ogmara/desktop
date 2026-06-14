@@ -5,7 +5,24 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.36.3] - 2026-06-14
+## [1.37.0] - 2026-06-14
+
+P2c — desktop parity for encrypted private channels + cross-node invite links
+(ports web 0.52.0 / 0.53.0).
+
+### Added
+
+- **End-to-end-encrypted private channels** (`channelCrypto.ts`): a single
+  `channel_key` per epoch, wrapped per member device and fetched author-agnostically;
+  creator/mods establish (read-back-adopt), regular members fetch + `'waiting'`;
+  `coverChannelMembers` covers new joiners. ChatView encrypts text on send, decrypts
+  on render with 🔒 waiting / can't-decrypt placeholders. Attachments blocked +
+  editing disabled on private channels (later phases). Public channels unchanged.
+- **Cross-node private-channel invite links**: private-channel invite links embed
+  the host node; the join page previews the channel from the host node and offers
+  **"Switch & join"** (switches the app to the host node + auto-joins after reload)
+  instead of a dead-end "Channel not found". New i18n strings, all 7 locales.
+
 
 ### Changed
 
