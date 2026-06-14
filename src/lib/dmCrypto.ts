@@ -433,10 +433,19 @@ export async function decryptDmMessage(
     return { kind: 'error' };
   }
   if (typeof decoded.content === 'string') return { kind: 'plain', text: decoded.content };
+
+  // An EDITED DM's payload is re-encoded server-side with rmp_serde, which emits
+  // `Vec<u8>` / `[u8;N]` as msgpack ARRAYS (not `bin`), so @msgpack/msgpack yields
+  // `number[]` here — not `Uint8Array`. A fresh DM arrives as `bin` → `Uint8Array`.
+  // Coerce so an edited DM decrypts exactly like a never-edited one.
+  const asBytes = (v: unknown): Uint8Array | null =>
+    v instanceof Uint8Array ? v : Array.isArray(v) ? Uint8Array.from(v as number[]) : null;
+  const contentBytes = asBytes(decoded.content);
+
   if ((decoded.key_epoch ?? 0) === 0) {
-    if (decoded.content instanceof Uint8Array) {
+    if (contentBytes) {
       try {
-        return { kind: 'plain', text: new TextDecoder().decode(decoded.content) };
+        return { kind: 'plain', text: new TextDecoder().decode(contentBytes) };
       } catch {
         return { kind: 'error' };
       }
@@ -444,16 +453,17 @@ export async function decryptDmMessage(
     e2elog('decode: legacy epoch0 but content not bytes', { contentType: typeof decoded.content });
     return { kind: 'error' };
   }
-  if (!(decoded.content instanceof Uint8Array) || !(decoded.nonce instanceof Uint8Array)) {
+  const nonceBytes = asBytes(decoded.nonce);
+  if (!contentBytes || !nonceBytes) {
     e2elog('decode: content/nonce not bytes', {
       keyEpoch: decoded.key_epoch ?? null,
-      contentType: decoded.content instanceof Uint8Array ? 'bytes' : typeof decoded.content,
-      nonceType: decoded.nonce instanceof Uint8Array ? 'bytes' : typeof decoded.nonce,
+      contentType: contentBytes ? 'bytes' : typeof decoded.content,
+      nonceType: nonceBytes ? 'bytes' : typeof decoded.nonce,
     });
     return { kind: 'error' };
   }
-  const conversationId = decoded.conversation_id;
-  if (!(conversationId instanceof Uint8Array)) {
+  const conversationId = asBytes(decoded.conversation_id);
+  if (!conversationId) {
     e2elog('decode: conversation_id not bytes', { convIdType: typeof decoded.conversation_id });
     return { kind: 'error' };
   }
@@ -472,7 +482,7 @@ export async function decryptDmMessage(
     key = fetched.key;
   }
   try {
-    const pt = decryptDmContent(key, conversationId, epoch, decoded.content, decoded.nonce);
+    const pt = decryptDmContent(key, conversationId, epoch, contentBytes, nonceBytes);
     return { kind: 'text', text: pt.text };
   } catch (e) {
     e2elog('decrypt: AEAD failed', { author: keyAuthor, epoch, err: (e as Error)?.message });

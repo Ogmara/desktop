@@ -5,7 +5,7 @@
 import { Component, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup, onMount, untrack } from 'solid-js';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
-import { authStatus, walletAddress, getSigner, isRegistered } from '../lib/auth';
+import { authStatus, walletAddress, getSigner } from '../lib/auth';
 import { onWsEvent } from '../lib/ws';
 import { navigate } from '../lib/router';
 import { showMobileList } from '../lib/mobile-nav';
@@ -35,7 +35,7 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   const [dmMenu, setDmMenu] = createSignal<{ x: number; y: number; msg: any } | null>(null);
   let dmMenuRef: HTMLDivElement | undefined;
   let dmLongPressTimer: ReturnType<typeof setTimeout> | null = null;
-  const DM_MENU_W = 200, DM_MENU_H = 220, DM_MENU_MARGIN = 8;
+  const DM_MENU_W = 260, DM_MENU_H = 220, DM_MENU_MARGIN = 8;
   const openDmMenu = (clientX: number, clientY: number, msg: any) => {
     if (!walletAddress()) return; // nothing actionable when not connected
     const maxX = window.innerWidth - DM_MENU_W - DM_MENU_MARGIN;
@@ -148,6 +148,14 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   const cleanup = onWsEvent((event) => {
     if (event.type === 'dm') {
       const msg = event.envelope;
+      // A DM edit/delete carries `target_msg_id` (vs a fresh message which doesn't).
+      // It changes an EXISTING message in place, so pull the authoritative,
+      // server-projected conversation rather than appending a phantom entry. Covers
+      // both the peer's edits and our own (the node echoes to both participants).
+      if (msg.target_msg_id) {
+        if (props.peerAddress && authStatus() === 'ready') refetchDmMessages();
+        return;
+      }
       // Only incoming messages from THIS peer. Our own sends are shown
       // optimistically; matching `author === me` here would pull a DM we sent to a
       // DIFFERENT peer into whichever conversation happens to be open.
@@ -327,13 +335,16 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
     return String(id);
   };
 
+  // NOTE: unlike NewsEdit, the node does NOT require on-chain registration for DM
+  // (or chat) edits/deletes — only own-message + within the edit window. Gating on
+  // isRegistered() here wrongly hid the actions whenever registration detection was
+  // stale (e.g. the node-not-ready boot race), so it's deliberately omitted.
   const canEdit = (msg: any) =>
-    isRegistered() &&
     msg.author === walletAddress() && !msg.deleted &&
     (Date.now() - new Date(msg.timestamp).getTime()) < EDIT_WINDOW_MS;
 
   const canDelete = (msg: any) =>
-    isRegistered() && msg.author === walletAddress() && !msg.deleted;
+    msg.author === walletAddress() && !msg.deleted;
 
   const startEdit = (msg: any) => {
     // Prefill with decrypted text (raw payload content is ciphertext for encrypted
@@ -489,7 +500,21 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
         <div
           class="dm-context-menu"
           style={{ left: `${dmMenu()!.x}px`, top: `${dmMenu()!.y}px` }}
-          ref={(el) => { dmMenuRef = el; }}
+          ref={(el) => {
+            dmMenuRef = el;
+            // The pre-clamp uses an ESTIMATED size; the emoji row makes the real
+            // menu wider, so re-measure once mounted and nudge fully on-screen.
+            if (!el) return;
+            requestAnimationFrame(() => {
+              const r = el.getBoundingClientRect();
+              if (r.right > window.innerWidth - DM_MENU_MARGIN) {
+                el.style.left = `${Math.max(DM_MENU_MARGIN, window.innerWidth - r.width - DM_MENU_MARGIN)}px`;
+              }
+              if (r.bottom > window.innerHeight - DM_MENU_MARGIN) {
+                el.style.top = `${Math.max(DM_MENU_MARGIN, window.innerHeight - r.height - DM_MENU_MARGIN)}px`;
+              }
+            });
+          }}
         >
           <Show when={walletAddress() && !dmMenu()!.msg.deleted}>
             <div class="dm-ctx-emoji">

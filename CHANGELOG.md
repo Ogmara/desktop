@@ -5,6 +5,30 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.36.2] - 2026-06-14
+
+### Fixed
+
+- **DM edits now reach the recipient and decrypt correctly.** Three fixes behind
+  "the edit never arrived / shows can't-decrypt":
+  - An edited DM's payload is re-encoded server-side by rmp_serde as msgpack
+    arrays (not `bin`), so the client decoded `content`/`nonce`/`conversation_id`
+    as `number[]` and the `instanceof Uint8Array` check rejected it → "can't
+    decrypt". The decrypt path now coerces these to bytes, so an edited DM
+    decrypts exactly like a fresh one.
+  - The client refetches the authoritative conversation on a DM `target_msg_id`
+    (edit/delete) WS event instead of appending a phantom message — paired with
+    l2-node 0.71.0 which actually delivers DM edits/deletes cross-node.
+  - An edited bubble re-decrypts when its `last_edited_at` advances (peer edits
+    too).
+- **Edit/Delete now appear in the DM context menu reliably.** They were gated on
+  `isRegistered()`, which the node does NOT require for DM edits (only NewsEdit) —
+  so a stale registration-detection (boot race) wrongly showed an empty menu.
+- **DM context menu no longer opens partly off-screen** — it re-measures its real
+  size on mount and nudges fully into the viewport (the emoji row is wider than
+  the pre-clamp estimate).
+
+## [1.36.1] - 2026-06-14
 ## [1.36.1] - 2026-06-14
 
 ### Fixed
