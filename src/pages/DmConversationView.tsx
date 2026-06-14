@@ -31,6 +31,37 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   const [attachments, setAttachments] = createSignal<MediaAttachment[]>([]);
   const [sendError, setSendError] = createSignal<string | null>(null);
 
+  // Right-click / long-press message context menu (parity with channel chat).
+  const [dmMenu, setDmMenu] = createSignal<{ x: number; y: number; msg: any } | null>(null);
+  let dmMenuRef: HTMLDivElement | undefined;
+  let dmLongPressTimer: ReturnType<typeof setTimeout> | null = null;
+  const DM_MENU_W = 200, DM_MENU_H = 220, DM_MENU_MARGIN = 8;
+  const openDmMenu = (clientX: number, clientY: number, msg: any) => {
+    if (!walletAddress()) return; // nothing actionable when not connected
+    const maxX = window.innerWidth - DM_MENU_W - DM_MENU_MARGIN;
+    const maxY = window.innerHeight - DM_MENU_H - DM_MENU_MARGIN;
+    setShowReactPicker(null);
+    setDmMenu({
+      x: Math.max(DM_MENU_MARGIN, Math.min(clientX, maxX)),
+      y: Math.max(DM_MENU_MARGIN, Math.min(clientY, maxY)),
+      msg,
+    });
+  };
+  const handleDmTouchStart = (e: TouchEvent, msg: any) => {
+    if (dmLongPressTimer) clearTimeout(dmLongPressTimer);
+    const touch = e.touches[0];
+    dmLongPressTimer = setTimeout(() => openDmMenu(touch.clientX, touch.clientY, msg), 500);
+  };
+  const cancelDmLongPress = () => { if (dmLongPressTimer) { clearTimeout(dmLongPressTimer); dmLongPressTimer = null; } };
+  if (typeof document !== 'undefined') {
+    const closeDmMenu = (e: MouseEvent) => {
+      if (dmMenuRef && dmMenuRef.contains(e.target as Node)) return;
+      setDmMenu(null);
+    };
+    document.addEventListener('click', closeDmMenu);
+    onCleanup(() => document.removeEventListener('click', closeDmMenu));
+  }
+
   // Peer profile for header
   const [peerProfile, setPeerProfile] = createSignal<CachedProfile>({});
   createEffect(() => {
@@ -398,6 +429,10 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
             {(msg) => (
               <div
                 class={`dm-msg ${msg.author === walletAddress() ? 'own' : 'peer'} ${msg.deleted ? 'deleted' : ''}`}
+                onContextMenu={(e) => { if (msg.deleted) return; e.preventDefault(); openDmMenu(e.clientX, e.clientY, msg); }}
+                onTouchStart={(e) => handleDmTouchStart(e, msg)}
+                onTouchEnd={cancelDmLongPress}
+                onTouchMove={cancelDmLongPress}
               >
                 <Show
                   when={!msg.deleted}
@@ -448,6 +483,29 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
           </For>
         </Show>
       </div>
+
+      {/* Right-click / long-press message context menu */}
+      <Show when={dmMenu()}>
+        <div
+          class="dm-context-menu"
+          style={{ left: `${dmMenu()!.x}px`, top: `${dmMenu()!.y}px` }}
+          ref={(el) => { dmMenuRef = el; }}
+        >
+          <Show when={walletAddress() && !dmMenu()!.msg.deleted}>
+            <div class="dm-ctx-emoji">
+              {['👍', '❤️', '😂', '🔥', '😮', '👎'].map((emoji) => (
+                <button onClick={() => { handleReactDm(dmMenu()!.msg, emoji); setDmMenu(null); }}>{emoji}</button>
+              ))}
+            </div>
+          </Show>
+          <Show when={canEdit(dmMenu()!.msg)}>
+            <button class="dm-ctx-item" onClick={() => { startEdit(dmMenu()!.msg); setDmMenu(null); }}>✏ {t('chat_edit')}</button>
+          </Show>
+          <Show when={canDelete(dmMenu()!.msg)}>
+            <button class="dm-ctx-item dm-ctx-danger" onClick={() => { handleDeleteDm(dmMenu()!.msg); setDmMenu(null); }}>🗑 {t('chat_delete')}</button>
+          </Show>
+        </div>
+      </Show>
 
       <Show when={editingMsg()}>
         <div class="dm-edit-indicator">
@@ -666,6 +724,52 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
         .dm-msg:hover .dm-msg-actions { opacity: 1; }
         .dm-action-btn { font-size: var(--font-size-xs); color: var(--color-text-secondary); cursor: pointer; padding: 2px 4px; border-radius: var(--radius-sm); }
         .dm-action-btn:hover { color: var(--color-accent-primary); background: var(--color-bg-tertiary); }
+        .dm-context-menu {
+          position: fixed;
+          z-index: 1000;
+          min-width: 160px;
+          background: var(--color-bg-secondary);
+          border: 1px solid var(--color-border);
+          border-radius: var(--radius-md);
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+          padding: 4px;
+          display: flex;
+          flex-direction: column;
+        }
+        .dm-ctx-emoji {
+          display: flex;
+          gap: 2px;
+          padding: 4px 6px;
+          border-bottom: 1px solid var(--color-border);
+          margin-bottom: 4px;
+        }
+        .dm-ctx-emoji button {
+          font-size: 20px;
+          padding: 4px 5px;
+          border-radius: var(--radius-sm);
+          cursor: pointer;
+          line-height: 1;
+          background: none;
+          border: none;
+          transition: transform 0.1s;
+        }
+        .dm-ctx-emoji button:hover { transform: scale(1.2); }
+        .dm-ctx-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          width: 100%;
+          padding: 8px 12px;
+          background: none;
+          border: none;
+          border-radius: var(--radius-sm);
+          color: var(--color-text-primary);
+          font-size: var(--font-size-sm);
+          text-align: left;
+          cursor: pointer;
+        }
+        .dm-ctx-item:hover { background: var(--color-bg-tertiary); }
+        .dm-ctx-danger { color: var(--color-error, #e5484d); }
         .dm-react-picker { display: flex; gap: 4px; padding: var(--spacing-xs) 0; }
         .dm-react-btn { font-size: var(--font-size-md); padding: 2px 4px; border-radius: var(--radius-sm); cursor: pointer; }
         .dm-react-btn:hover { background: var(--color-bg-tertiary); }
