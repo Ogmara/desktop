@@ -20,6 +20,7 @@ import { setSetting } from '../lib/settings';
 import { FormattedText } from '../components/FormattedText';
 import { EmojiPicker } from '../components/EmojiPicker';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
+import { encryptAndUploadFile, revokePreviewUrls } from '../lib/mediaCrypto';
 import { getPayloadContent, getPayloadAttachments, getPayloadMentions, decodePayload, rewriteContentInPayload, buildOptimisticChatPayload, safeAttachmentName } from '../lib/payload';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
 import { showMobileList } from '../lib/mobile-nav';
@@ -596,6 +597,19 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     return `🔒 ${t('channel_cannot_decrypt')}`;
   };
 
+  /** Decrypted media descriptors for an encrypted-channel message (P5), else undefined. */
+  const displayMedia = (msg: any) => {
+    if (!isEncrypted()) return undefined;
+    const d = chanDisplays()[msg.msg_id];
+    return d && (d.kind === 'text' || d.kind === 'plain') ? d.media : undefined;
+  };
+
+  /** Plaintext on-wire attachments to render. For an encrypted message these carry
+   *  only opaque ciphertext CIDs (the real media comes from `displayMedia`), so we
+   *  suppress them there. */
+  const displayAttachments = (msg: any) =>
+    isEncrypted() ? [] : getPayloadAttachments(msg.payload);
+
   const MAX_LOCAL_MESSAGES = 200;
 
   // Apply an in-place update (reaction/edit/delete) to the target message
@@ -960,6 +974,34 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     }, 100);
   });
 
+  // Attach a picked/pasted file to the composer. On an encrypted channel the
+  // bytes are sealed before upload (P5) and the per-file key rides in `descriptor`;
+  // on a plaintext channel the file uploads as-is. Single path for every inline
+  // attach/paste button so encryption is never accidentally skipped.
+  const attachChatFile = async (file: File, filename?: string) => {
+    try {
+      if (isEncrypted()) {
+        const named = filename && filename !== file.name
+          ? new File([file], filename, { type: file.type }) : file;
+        const desc = await encryptAndUploadFile(named);
+        setAttachments((prev) => [...prev, {
+          cid: desc.cid, mime_type: desc.mime, size_bytes: desc.size,
+          filename: desc.name, descriptor: desc, previewUrl: URL.createObjectURL(file),
+        }]);
+      } else {
+        const result = await getClient().uploadMedia(file, filename || file.name);
+        setAttachments((prev) => [...prev, {
+          cid: result.cid, mime_type: file.type || 'application/octet-stream',
+          size_bytes: file.size, filename: filename || file.name,
+          thumbnail_cid: result.thumbnail_cid,
+        }]);
+      }
+    } catch (err: any) {
+      setSendError(err?.message || t('media_upload_failed'));
+      setTimeout(() => setSendError(null), 6000);
+    }
+  };
+
   const handleSend = async () => {
     // Route to edit handler when in edit mode
     if (editingMsg()) { await handleEdit(); return; }
@@ -968,14 +1010,6 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     const atts = attachments();
     if ((!text && atts.length === 0) || !props.channelId) return;
     if (!getSigner() || !walletAddress()) { navigate('/wallet'); return; }
-
-    // P2: encrypted media is a fast-follow (P5) — block attachments on private
-    // channels rather than silently leaking them plaintext.
-    if (isPrivate() && atts.length > 0) {
-      setSendError(t('dm_attachments_not_encrypted_yet'));
-      setTimeout(() => setSendError(null), 6000);
-      return;
-    }
 
     setSending(true);
     setSendError(null);
@@ -995,10 +1029,12 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       if (isEncrypted()) {
         // Encrypt the text under the channel epoch key. `'waiting'` means the key
         // isn't available yet (a non-mod member of a PRIVATE channel before a mod has
-        // seeded/covered it). Attachments ride as plaintext metadata (media-file
-        // encryption is P5). canEstablishKey(): any member may seed a PUBLIC channel.
+        // seeded/covered it). Attachments were encrypted before upload (P5) and ride
+        // as `MediaDescriptor`s inside the ciphertext — the node sees only an opaque
+        // CID. canEstablishKey(): any member may seed a PUBLIC channel.
+        const media = atts.map((a) => a.descriptor).filter((d): d is NonNullable<typeof d> => !!d);
         const built = await buildEncryptedChannelMsg(props.channelId, canEstablishKey(), text, {
-          replyTo: options.replyTo, mentions: options.mentions, attachments: atts,
+          replyTo: options.replyTo, mentions: options.mentions, media,
         }, encFloor());
         if (built === 'waiting') {
           setSendError(t('channel_waiting_for_key'));
@@ -1020,23 +1056,33 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       // showed an empty bubble (just a timestamp) until the user left
       // and re-opened the channel and the WS event repaired it.
       const addr = walletAddress() || '';
+      // For encrypted channels the bubble renders from the decrypted display record
+      // (`chanDisplays`), not the raw payload's plaintext attachments — so DON'T put
+      // the (ciphertext-CID) attachments on the optimistic payload there; seed the
+      // display directly with the decrypted media descriptors instead.
       const optimisticPayload = buildOptimisticChatPayload({
         content: text,
-        attachments: atts,
+        attachments: isEncrypted() ? undefined : atts,
         mentions: options.mentions,
         replyTo: replyTo()?.msgId ?? null,
       });
+      const localId = `local-${Date.now()}`;
       setLocalMessages((prev) => [...prev, {
-        msg_id: `local-${Date.now()}`,
+        msg_id: localId,
         author: addr,
         timestamp: Date.now(),
         payload: optimisticPayload,
         _optimistic: true,
       }]);
+      if (isEncrypted()) {
+        const media = atts.map((a) => a.descriptor).filter((d): d is NonNullable<typeof d> => !!d);
+        setChanDisplays((prev) => ({ ...prev, [localId]: { kind: 'text', text, media: media.length > 0 ? media : undefined } }));
+      }
 
       setMessageInput('');
       setReplyTo(null);
       setShowEmoji(false);
+      revokePreviewUrls(atts);
       setAttachments([]);
       setPendingMentions([]);
     } catch (err: any) {
@@ -1364,7 +1410,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                           <Show when={!msg.muted || expandedMuted().has(msgHex)} fallback={
                             <div class="message-body message-muted-text" onClick={() => setExpandedMuted(prev => { const next = new Set(prev); next.add(msgHex); return next; })}>{t('message_muted_show')}</div>
                           }>
-                            <div class="message-body"><FormattedText content={displayContent(msg)} attachments={getPayloadAttachments(msg.payload)} /></div>
+                            <div class="message-body"><FormattedText content={displayContent(msg)} attachments={displayAttachments(msg)} encryptedMedia={displayMedia(msg)} /></div>
                           </Show>
                         </Show>
                         <Show when={walletAddress() && !msg.deleted}>
@@ -1422,7 +1468,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                               <div class="message-body message-muted-text" onClick={() => setExpandedMuted(prev => { const next = new Set(prev); next.add(msgHex); return next; })}>{t('message_muted_show')}</div>
                             }>
                               <div class="message-body">
-                                <FormattedText content={displayContent(msg)} attachments={getPayloadAttachments(msg.payload)} />
+                                <FormattedText content={displayContent(msg)} attachments={displayAttachments(msg)} encryptedMedia={displayMedia(msg)} />
                                 <span class="message-meta-inline">
                                   <Show when={msg.edited}><span class="edited-indicator">{t('message_edited')}</span></Show>
                                   <span class="message-time">{formatMessageTime(msg.timestamp)}</span>
@@ -1490,6 +1536,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
         <Show when={canPostHere() && walletAddress() && !editingMsg()}>
           <div class="chat-media-bar">
             <MediaUpload
+              encrypted={isEncrypted()}
               attachments={attachments()}
               onAttach={(a) => setAttachments((prev) => [...prev, a])}
               onRemove={(i) => setAttachments((prev) => prev.filter((_, idx) => idx !== i))}
@@ -1562,19 +1609,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                   if (file) {
                     e.preventDefault();
                     const filename = `paste-${Date.now()}.${file.type.split('/')[1] || 'png'}`;
-                    getClient().uploadMedia(file, filename)
-                      .then((result) => {
-                        setAttachments((prev) => [...prev, {
-                          cid: result.cid,
-                          mime_type: file!.type,
-                          size_bytes: file!.size,
-                          filename,
-                          thumbnail_cid: result.thumbnail_cid,
-                        }]);
-                      }).catch((err: any) => {
-                        setSendError(err?.message || 'Upload failed');
-                        setTimeout(() => setSendError(null), 6000);
-                      });
+                    void attachChatFile(file, filename);
                     return;
                   }
                   // Tauri clipboard plugin fallback for webkit2gtk (Linux).
@@ -1603,14 +1638,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                       const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
                       if (!blob) return;
                       const pasteFile = new File([blob], `paste-${Date.now()}.png`, { type: 'image/png' });
-                      const result = await getClient().uploadMedia(pasteFile, pasteFile.name);
-                      setAttachments((prev) => [...prev, {
-                        cid: result.cid,
-                        mime_type: 'image/png',
-                        size_bytes: pasteFile.size,
-                        filename: pasteFile.name,
-                        thumbnail_cid: result.thumbnail_cid,
-                      }]);
+                      await attachChatFile(pasteFile);
                     } catch {
                       // No image in clipboard — text paste already happened.
                     }
@@ -1647,7 +1675,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                       >
                         <img
                           class="modern-attach-thumb"
-                          src={getClient().getMediaUrl(att.thumbnail_cid || att.cid)}
+                          src={att.previewUrl || getClient().getMediaUrl(att.thumbnail_cid || att.cid)}
                           alt={att.filename || ''}
                           loading="lazy"
                         />
@@ -1655,7 +1683,14 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                       <span class="modern-attach-name">{safeAttachmentName(att, 10)}</span>
                       <button
                         class="modern-attach-remove"
-                        onClick={() => setAttachments((prev) => prev.filter((_, idx) => idx !== i()))}
+                        onClick={() =>
+                          setAttachments((prev) => {
+                            // Revoke the removed item's local plaintext preview URL.
+                            const gone = prev[i()];
+                            if (gone?.previewUrl) URL.revokeObjectURL(gone.previewUrl);
+                            return prev.filter((_, idx) => idx !== i());
+                          })
+                        }
                         title={t('cancel')}
                       >
                         ✕
@@ -1675,18 +1710,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
               </button>
               <input type="file" class="modern-attach-input" style="display:none" onChange={(e) => {
                 const file = e.currentTarget.files?.[0];
-                if (file && walletAddress()) {
-                  getClient().uploadMedia(file, file.name).then((result) => {
-                    setAttachments((p) => [...p, { cid: result.cid, mime_type: file.type || 'application/octet-stream', size_bytes: file.size, filename: file.name, thumbnail_cid: result.thumbnail_cid }]);
-                  }).catch((err: any) => {
-                    // Surface upload failures the same way the paste path
-                    // does. Previously this silently swallowed errors,
-                    // leaving the user with no idea why their attachment
-                    // didn't appear.
-                    setSendError(err?.message || 'Upload failed');
-                    setTimeout(() => setSendError(null), 6000);
-                  });
-                }
+                if (file && walletAddress()) void attachChatFile(file);
                 e.currentTarget.value = '';
               }} />
               <textarea
@@ -1714,19 +1738,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                   if (file) {
                     e.preventDefault();
                     const filename = `paste-${Date.now()}.${file.type.split('/')[1] || 'png'}`;
-                    getClient().uploadMedia(file, filename)
-                      .then((r) => {
-                        setAttachments((p) => [...p, {
-                          cid: r.cid,
-                          mime_type: file!.type,
-                          size_bytes: file!.size,
-                          filename,
-                          thumbnail_cid: r.thumbnail_cid,
-                        }]);
-                      }).catch((err: any) => {
-                        setSendError(err?.message || 'Upload failed');
-                        setTimeout(() => setSendError(null), 6000);
-                      });
+                    void attachChatFile(file, filename);
                     return;
                   }
                   // Tauri clipboard plugin fallback for webkit2gtk (Linux).
@@ -1752,14 +1764,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                       const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
                       if (!blob) return;
                       const pasteFile = new File([blob], `paste-${Date.now()}.png`, { type: 'image/png' });
-                      const result = await getClient().uploadMedia(pasteFile, pasteFile.name);
-                      setAttachments((p) => [...p, {
-                        cid: result.cid,
-                        mime_type: 'image/png',
-                        size_bytes: pasteFile.size,
-                        filename: pasteFile.name,
-                        thumbnail_cid: result.thumbnail_cid,
-                      }]);
+                      await attachChatFile(pasteFile);
                     } catch {
                       // No image in clipboard — text paste already happened.
                     }

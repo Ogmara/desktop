@@ -7,18 +7,25 @@
 
 import { Component, For, Show, createSignal } from 'solid-js';
 import { JSX } from 'solid-js/jsx-runtime';
-import { parseMessageContent, type TextSegment, type Attachment } from '@ogmara/sdk';
+import { parseMessageContent, type TextSegment, type Attachment, type MediaDescriptor } from '@ogmara/sdk';
 import { getClient } from '../lib/api';
 import { navigate } from '../lib/router';
 import { getSetting } from '../lib/settings';
 import { VideoAttachment } from './VideoAttachment';
 import { MediaImage } from './MediaImage';
+import { EncryptedMedia } from './EncryptedMedia';
 import { safeAttachmentName } from '../lib/payload';
 
 interface Props {
   content: string;
-  /** IPFS attachments from the message envelope. */
+  /** IPFS attachments from the message envelope (plaintext targets). */
   attachments?: Attachment[];
+  /**
+   * P5 decrypted-media descriptors (encrypted DMs / channels). When present these
+   * render via fetch→decrypt→object-URL instead of the plaintext `attachments`
+   * (which for an encrypted message carry only an opaque ciphertext CID).
+   */
+  encryptedMedia?: MediaDescriptor[];
 }
 
 /** Image MIME types that should render inline. SVG rendered via <img> tag (safe — scripts don't execute in <img>). */
@@ -173,6 +180,18 @@ export const FormattedText: Component<Props> = (props) => {
           }
         }}
       </For>
+
+      {/* P5 encrypted attachments — fetch ciphertext, decrypt to an object URL.
+          These take precedence: an encrypted message's plaintext `attachments`
+          carry only an opaque ciphertext CID, so we render the decrypted `media`
+          instead. */}
+      <Show when={props.encryptedMedia && props.encryptedMedia.length > 0}>
+        <div class="msg-attachments">
+          <For each={props.encryptedMedia}>
+            {(m) => <EncryptedMedia media={m} onOpen={(url) => setLightboxUrl(url)} />}
+          </For>
+        </div>
+      </Show>
 
       {/* Render attachments: images, videos, and files */}
       <Show when={props.attachments && props.attachments.length > 0}>

@@ -21,6 +21,7 @@ import {
   encPublicKeyHex,
   KeyScopeKind,
   type WrappedKey,
+  type MediaDescriptor,
 } from '@ogmara/sdk';
 import { decode } from '@msgpack/msgpack';
 import { getClient } from './api';
@@ -396,11 +397,14 @@ export async function ensureConvKeyForSend(
   return { convKey: res.key, epoch: res.epoch, conversationId };
 }
 
-/** Build a signed, encrypted DirectMessage envelope for `recipient`. */
+/** Build a signed, encrypted DirectMessage envelope for `recipient`. `media` (P5)
+ *  descriptors ride inside the ciphertext — the file bytes were encrypted +
+ *  uploaded separately (see `mediaCrypto.encryptAndUploadFile`). */
 export async function buildEncryptedDm(
   recipient: string,
   text: string,
   replyTo?: string,
+  media?: MediaDescriptor[],
 ): Promise<Uint8Array> {
   const established = await ensureConvKeyForSend(recipient);
   if (!established) throw new Error('device not ready for encrypted DMs');
@@ -412,6 +416,7 @@ export async function buildEncryptedDm(
     epoch: established.epoch,
     text,
     replyTo,
+    media: media && media.length > 0 ? media : undefined,
   });
 }
 
@@ -459,10 +464,11 @@ export function toBytes(payload: number[] | Uint8Array | string): Uint8Array | n
   return payload instanceof Uint8Array ? payload : new Uint8Array(payload);
 }
 
-/** Display outcome for a DM message. */
+/** Display outcome for a DM message. `media` (P5) carries decrypted-attachment
+ *  descriptors that ride inside the ciphertext — only present on decrypted kinds. */
 export type DmDisplay =
-  | { kind: 'text'; text: string }
-  | { kind: 'plain'; text: string }
+  | { kind: 'text'; text: string; media?: MediaDescriptor[] }
+  | { kind: 'plain'; text: string; media?: MediaDescriptor[] }
   | { kind: 'waiting' }
   | { kind: 'error' };
 
@@ -541,7 +547,7 @@ export async function decryptDmMessage(
   }
   try {
     const pt = decryptDmContent(key, conversationId, epoch, contentBytes, nonceBytes);
-    return { kind: 'text', text: pt.text };
+    return { kind: 'text', text: pt.text, media: pt.media };
   } catch (e) {
     e2elog('decrypt: AEAD failed', { author: keyAuthor, epoch, err: (e as Error)?.message });
     return { kind: 'error' };

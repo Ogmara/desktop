@@ -495,7 +495,8 @@
   "channel_encrypted_public": "已加密 · 公开设计",
   "channel_on_other_node": "此私密频道托管在 {{node}} 上。加入以在你的节点上接收它。",
   "channel_switch_and_join": "切换并加入",
-  "dm_attachments_not_encrypted_yet": "加密私信附件即将推出 — 目前请仅发送文本。",
+  "media_decrypting": "正在解密…",
+  "media_encrypted_attachment": "加密附件",
   "dm_recipient_no_encryption": "对方尚未启用加密，因此无法接收加密消息。",
   "dm_encrypted_preview": "加密消息",
   "channel_federate_failed": "无法联邦此频道 — 请重试。"

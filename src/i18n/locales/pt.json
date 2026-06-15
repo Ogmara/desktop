@@ -495,7 +495,8 @@
   "channel_encrypted_public": "Criptografado · público por design",
   "channel_on_other_node": "Este canal privado está hospedado em {{node}}. Entre para recebê-lo no seu nó.",
   "channel_switch_and_join": "Mudar e entrar",
-  "dm_attachments_not_encrypted_yet": "Anexos cifrados em MD chegarão em breve — por enquanto envie apenas texto.",
+  "media_decrypting": "A descodificar…",
+  "media_encrypted_attachment": "Anexo cifrado",
   "dm_recipient_no_encryption": "Esta pessoa ainda não ativou a criptografia, por isso não pode receber mensagens criptografadas.",
   "dm_encrypted_preview": "Mensagem cifrada",
   "channel_federate_failed": "Não foi possível federar este canal — tente novamente."

@@ -5,6 +5,44 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.45.0] - 2026-06-15
+
+### Added
+
+- **Encrypted media attachments (P5 / protocol §8 / spec 04 §9).** File attachments now
+  work in encrypted DMs and encrypted channels (private + public-by-design). File bytes are
+  sealed with a fresh per-file key BEFORE upload (`encryptFile` → `uploadMedia(Blob([cipher]),
+  undefined, { encrypted: true })`); the per-file key/nonce/real-MIME/filename ride INSIDE the
+  message ciphertext as a `MediaDescriptor` (`media[]` send param), and only a stripped
+  `{ cid, size }` reaches the wire (the node sees opaque ciphertext, never the bytes, MIME, or
+  name). An encrypted thumbnail is generated for images. On render the ciphertext blob is
+  fetched, `decryptMedia`-d, and shown via a cached `blob:` object URL with a "🔒 Decrypting…"
+  placeholder and a "🔒 Encrypted attachment" fallback. Requires sdk-js 0.40.0+.
+- New `src/lib/mediaCrypto.ts` (encrypt-and-upload + fetch-decrypt-to-object-URL with a
+  cid-keyed object-URL cache, revoked on logout/wallet-switch) and
+  `src/components/EncryptedMedia.tsx` (decrypted image/video/file renderer).
+- i18n: `media_decrypting` + `media_encrypted_attachment` across all 7 locales (replacing the
+  retired `dm_attachments_not_encrypted_yet`).
+
+### Changed
+
+- Removed the "encrypted attachments coming soon" send-blocks in `ChatView` (private channels)
+  and `DmConversationView` (DMs) — attachments now encrypt and send instead of being rejected.
+- All composer attach paths (MediaUpload picker, inline file picker, web + Tauri-clipboard
+  paste, in both classic and modern layouts) route through a single encryption-aware helper;
+  composer previews use a local `URL.createObjectURL(file)` (the CID is ciphertext) and are
+  revoked on cleanup.
+- Tauri multipart builder (`src/index.tsx`): documented that non-file form fields carry the
+  P5 `encrypted=1` flag the node requires to accept an opaque ciphertext blob (no behavioural
+  change — the existing field-emitting branch already forwarded it).
+
+### Fixed
+
+- `vite.config.ts`: alias `@noble/ciphers` to the app's local copy (same fix already in place
+  for `@noble/ed25519`/`@noble/hashes`). The `file:`-linked SDK resolves its XChaCha20 import
+  from its own real path, outside the app's `node_modules`, which broke the production build
+  once the encrypted-media code path pulled `@noble/ciphers` into the bundle.
+
 ## [1.44.0] - 2026-06-14
 
 ### Added

@@ -5,19 +5,34 @@
  * ready to include in post/comment envelopes.
  */
 
-import { Component, createSignal, For, Show } from 'solid-js';
+import { Component, createSignal, For, Show, onCleanup } from 'solid-js';
+import type { MediaDescriptor } from '@ogmara/sdk';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { mediaUploadsAvailable } from '../lib/media';
 import { safeAttachmentName } from '../lib/payload';
+import { encryptAndUploadFile } from '../lib/mediaCrypto';
 
-/** Attachment data returned after successful upload. */
+/**
+ * Attachment data returned after a successful upload.
+ *
+ * For ENCRYPTED targets (DMs / private / encrypted-public channels) the file is
+ * sealed before upload (P5): `cid` is the CIPHERTEXT blob, `descriptor` carries
+ * the per-file key/nonce that ride inside the message ciphertext, and
+ * `previewUrl` is a local `blob:` URL of the plaintext for the composer preview
+ * (the CID would render as opaque ciphertext). For plaintext targets `descriptor`
+ * is absent and the CID is shown directly.
+ */
 export interface MediaAttachment {
   cid: string;
   mime_type: string;
   size_bytes: number;
   filename?: string;
   thumbnail_cid?: string;
+  /** P5: present when the file bytes were encrypted before upload. */
+  descriptor?: MediaDescriptor;
+  /** Local object URL of the plaintext, for the composer preview of encrypted files. */
+  previewUrl?: string;
 }
 
 /** Accepted file types for uploads. */
@@ -42,6 +57,8 @@ export const MediaUpload: Component<{
   onAttach: (attachment: MediaAttachment) => void;
   onRemove: (index: number) => void;
   disabled?: boolean;
+  /** P5: when true, encrypt file bytes before upload (DMs / encrypted channels). */
+  encrypted?: boolean;
 }> = (props) => {
   const [uploading, setUploading] = createSignal(false);
   const [uploadError, setUploadError] = createSignal('');
@@ -83,15 +100,30 @@ export const MediaUpload: Component<{
     setUploading(true);
     setUploadError('');
     try {
-      const client = getClient();
-      const result = await client.uploadMedia(file, file.name);
-      props.onAttach({
-        cid: result.cid,
-        mime_type: file.type || 'application/octet-stream',
-        size_bytes: file.size,
-        filename: file.name,
-        thumbnail_cid: result.thumbnail_cid,
-      });
+      if (props.encrypted) {
+        // P5: encrypt-before-upload. The CID is the ciphertext; the per-file key
+        // rides inside `descriptor` (sealed into the message). Preview from a
+        // local object URL since the CID renders as opaque ciphertext.
+        const descriptor = await encryptAndUploadFile(file);
+        props.onAttach({
+          cid: descriptor.cid,
+          mime_type: descriptor.mime,
+          size_bytes: descriptor.size,
+          filename: descriptor.name,
+          descriptor,
+          previewUrl: URL.createObjectURL(file),
+        });
+      } else {
+        const client = getClient();
+        const result = await client.uploadMedia(file, file.name);
+        props.onAttach({
+          cid: result.cid,
+          mime_type: file.type || 'application/octet-stream',
+          size_bytes: file.size,
+          filename: file.name,
+          thumbnail_cid: result.thumbnail_cid,
+        });
+      }
     } catch (e: any) {
       setUploadError(e?.message || t('media_upload_failed'));
     } finally {
@@ -100,6 +132,22 @@ export const MediaUpload: Component<{
   };
 
   const isImage = (mime: string) => mime.startsWith('image/');
+
+  // Revoke a pending attachment's local plaintext preview URL before the parent
+  // drops it, so removing an unsent encrypted attachment doesn't leak the blob.
+  const removeAt = (i: number) => {
+    const att = props.attachments[i];
+    if (att?.previewUrl) URL.revokeObjectURL(att.previewUrl);
+    props.onRemove(i);
+  };
+
+  // Revoke any still-pending preview URLs if the composer unmounts (navigate away
+  // with queued attachments). Send-time cleanup is handled via `revokePreviewUrls`.
+  onCleanup(() => {
+    for (const att of props.attachments) {
+      if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
+    }
+  });
 
   return (
     <div class="media-upload">
@@ -112,7 +160,7 @@ export const MediaUpload: Component<{
                 <Show when={isImage(att.mime_type)}>
                   <img
                     class="media-thumb"
-                    src={getClient().getMediaUrl(att.thumbnail_cid || att.cid)}
+                    src={att.previewUrl || getClient().getMediaUrl(att.thumbnail_cid || att.cid)}
                     alt={att.filename || ''}
                     loading="lazy"
                   />
@@ -123,7 +171,7 @@ export const MediaUpload: Component<{
                 <span class="media-filename">{safeAttachmentName(att)}</span>
                 <button
                   class="media-remove"
-                  onClick={() => props.onRemove(i())}
+                  onClick={() => removeAt(i())}
                   title={t('cancel')}
                 >
                   ✕

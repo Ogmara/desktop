@@ -495,7 +495,8 @@
   "channel_encrypted_public": "Cifrado · público por diseño",
   "channel_on_other_node": "Este canal privado está alojado en {{node}}. Únete para recibirlo en tu nodo.",
   "channel_switch_and_join": "Cambiar y unirse",
-  "dm_attachments_not_encrypted_yet": "Los adjuntos cifrados en MD llegarán pronto — por ahora envía solo texto.",
+  "media_decrypting": "Descifrando…",
+  "media_encrypted_attachment": "Adjunto cifrado",
   "dm_recipient_no_encryption": "Esta persona aún no ha activado el cifrado, por lo que no puede recibir mensajes cifrados.",
   "dm_encrypted_preview": "Mensaje cifrado",
   "channel_federate_failed": "No se pudo federar este canal — inténtalo de nuevo."

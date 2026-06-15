@@ -41,6 +41,10 @@ if ((window as any).__TAURI_INTERNALS__) {
               parts.push(new Uint8Array(await value.arrayBuffer()));
               parts.push(enc.encode('\r\n'));
             } else {
+              // Non-file form fields are emitted as plain multipart fields. This is
+              // how the P5 `encrypted=1` flag reaches the node: the SDK's
+              // `uploadMedia(..., { encrypted: true })` does `formData.append("encrypted", "1")`,
+              // so the node accepts the opaque ciphertext blob (spec 04 §9.4).
               parts.push(enc.encode(
                 `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`
               ));

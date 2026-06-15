@@ -495,7 +495,8 @@
   "channel_encrypted_public": "Verschlüsselt · öffentlich",
   "channel_on_other_node": "Dieser private Kanal wird auf {{node}} gehostet. Tritt bei, um ihn auf deinem Node zu empfangen.",
   "channel_switch_and_join": "Wechseln & beitreten",
-  "dm_attachments_not_encrypted_yet": "Verschlüsselte DM-Anhänge kommen bald — bitte vorerst nur Text senden.",
+  "media_decrypting": "Wird entschlüsselt…",
+  "media_encrypted_attachment": "Verschlüsselter Anhang",
   "dm_recipient_no_encryption": "Diese Person hat die Verschlüsselung noch nicht aktiviert und kann daher keine verschlüsselten Nachrichten empfangen.",
   "dm_encrypted_preview": "Verschlüsselte Nachricht",
   "channel_federate_failed": "Kanal konnte nicht föderiert werden — bitte erneut versuchen."
