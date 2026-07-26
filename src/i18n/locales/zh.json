@@ -475,6 +475,7 @@
   "portfolio_receive": "接收",
   "portfolio_receive_title": "接收代币",
   "portfolio_receive_warning": "请仅向此地址发送 Klever 网络资产。其他链将导致资金丢失。",
+  "portfolio_receive_qr_alt": "钱包地址二维码",
   "portfolio_copy_address": "复制地址",
   "portfolio_copied": "已复制",
   "portfolio_total_value": "总价值",

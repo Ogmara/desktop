@@ -475,6 +475,7 @@
   "portfolio_receive": "Получить",
   "portfolio_receive_title": "Получить токены",
   "portfolio_receive_warning": "Отправляйте на этот адрес только активы сети Klever. Другие сети приведут к потере средств.",
+  "portfolio_receive_qr_alt": "QR-код адреса кошелька",
   "portfolio_copy_address": "Копировать адрес",
   "portfolio_copied": "Скопировано",
   "portfolio_total_value": "Общая стоимость",

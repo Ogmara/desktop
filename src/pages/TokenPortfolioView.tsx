@@ -15,6 +15,7 @@ import {
 import { ex } from '../lib/klever-explorer-links';
 import { navigate } from '../lib/router';
 import { invoke } from '@tauri-apps/api/core';
+import QRCode from 'qrcode';
 import { currentCurrency } from '../lib/settings';
 import {
   loadPrices,
@@ -117,6 +118,16 @@ export const TokenPortfolioView: Component = () => {
   const [tokenNames, setTokenNames] = createSignal<Record<string, string>>({});
   const [receiveOpen, setReceiveOpen] = createSignal(false);
   const [copyHint, setCopyHint] = createSignal(false);
+
+  // Generate the receive QR only while the dialog is open, so we don't
+  // pay the encode cost on every wallet address change in the background.
+  const [receiveQr] = createResource(
+    () => (receiveOpen() ? walletAddress() : null),
+    async (address) => {
+      if (!address) return null;
+      return QRCode.toDataURL(address, { margin: 1, width: 220 });
+    },
+  );
 
   // Fetch balances when wallet is connected
   const [balances, { refetch }] = createResource(
@@ -671,6 +682,11 @@ export const TokenPortfolioView: Component = () => {
                 <button class="send-close-btn" onClick={closeReceive}>✕</button>
               </div>
               <p class="receive-warning">{t('portfolio_receive_warning')}</p>
+              <Show when={receiveQr()}>
+                <div class="receive-qr-box">
+                  <img class="receive-qr" src={receiveQr() || ''} alt={t('portfolio_receive_qr_alt')} width="220" height="220" />
+                </div>
+              </Show>
               <div class="receive-address-box">
                 <code class="receive-address">{walletAddress() || ''}</code>
               </div>
@@ -1103,6 +1119,20 @@ export const TokenPortfolioView: Component = () => {
           color: var(--color-warning);
           margin: 0 0 var(--spacing-md);
           line-height: 1.5;
+        }
+        .receive-qr-box {
+          display: flex;
+          justify-content: center;
+          padding: var(--spacing-md);
+          background: #ffffff;
+          border: 1px solid var(--color-border);
+          border-radius: var(--radius-md);
+          margin-bottom: var(--spacing-md);
+        }
+        .receive-qr {
+          display: block;
+          width: 220px;
+          height: 220px;
         }
         .receive-address-box {
           padding: var(--spacing-md);

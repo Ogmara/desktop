@@ -475,6 +475,7 @@
   "portfolio_receive": "受取",
   "portfolio_receive_title": "トークンを受け取る",
   "portfolio_receive_warning": "このアドレスにはKleverネットワークの資産のみを送信してください。他のチェーンでは資金を失います。",
+  "portfolio_receive_qr_alt": "ウォレットアドレスのQRコード",
   "portfolio_copy_address": "アドレスをコピー",
   "portfolio_copied": "コピーしました",
   "portfolio_total_value": "合計値",

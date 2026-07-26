@@ -475,6 +475,7 @@
   "portfolio_receive": "Receber",
   "portfolio_receive_title": "Receber tokens",
   "portfolio_receive_warning": "Envie apenas ativos da rede Klever para este endereço. Outras chains resultarão em perda de fundos.",
+  "portfolio_receive_qr_alt": "Código QR do endereço da carteira",
   "portfolio_copy_address": "Copiar endereço",
   "portfolio_copied": "Copiado",
   "portfolio_total_value": "Valor total",

@@ -5,6 +5,26 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.46.0] - 2026-07-26
+
+### Added
+
+- **QR code in the Receive dialog.** The wallet "Receive" popup (`TokenPortfolioView.tsx`)
+  now renders a scannable QR code of the wallet address above the existing copy-address box,
+  so a mobile wallet can scan-to-send instead of retyping/copy-pasting the address. Generated
+  client-side via the `qrcode` package (`QRCode.toDataURL`) only while the dialog is open — no
+  address data leaves the device to a third-party QR API. New i18n key
+  `portfolio_receive_qr_alt` (alt text) across all 7 locales.
+- New dependency: `qrcode` (+ `@types/qrcode` dev dep).
+
+### Security
+
+- `npm audit fix`: bumped transitive `@babel/core`/`postcss`/`seroval` (pulled in via
+  `vite`/`vite-plugin-solid`/`solid-js`/`sdk-js`'s `tsup`/`vitest`) to patched versions,
+  resolving 1 critical + 1 high + 1 low advisory. Dev/build-tooling only — none of the
+  three affected packages ship in the built app; unrelated to the new `qrcode` dependency,
+  which introduced no vulnerabilities of its own.
+
 ## [1.45.0] - 2026-06-15
 
 ### Added
