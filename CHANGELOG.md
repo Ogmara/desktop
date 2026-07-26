@@ -5,6 +5,17 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.46.1] - 2026-07-26
+
+### Fixed
+
+- **P3 key-recovery vault backup (via sdk-js 0.40.1).** Bundled SDK fix: `buildKeyVaultSync`
+  no longer throws `Unknown message type: 56`, so the encrypted key-vault now actually
+  publishes (`GET /api/v1/key-vault` returns the blob instead of 404) and cross-device key
+  recovery works. No desktop source change — the fix rides in via the linked `@ogmara/sdk`;
+  this bump tracks the rebuild that ships it. Verified: DM decrypt on web + desktop, vault
+  publish confirmed (200).
+
 ## [1.46.0] - 2026-07-26
 
 ### Added
