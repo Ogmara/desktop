@@ -5,6 +5,16 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.46.2] - 2026-07-26
+
+### Fixed
+
+- **Private-channel "waiting for the channel key" could stick forever after a cross-node
+  join.** Same fix as web 0.61.2: the late-key-arrival poll gave up after ~60s with no way
+  to resume short of reopening the channel, but live testnet diagnosis showed the real
+  cross-node key-delivery round trip can legitimately run longer. Extended the give-up
+  budget to ~5 minutes and renewed it on the existing `channel_members_changed` WS event.
+
 ## [1.46.1] - 2026-07-26
 
 ### Fixed
