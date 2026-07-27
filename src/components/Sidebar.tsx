@@ -821,6 +821,20 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   });
   onCleanup(memberWsCleanup);
 
+  // Channel deleted by its creator: drop it locally + bounce out of its view,
+  // same as the kick/ban handling above. Reaches every member's node (host or
+  // federated) via the node's channel_deleted broadcast — without this the
+  // channel just sits in the sidebar forever since "joined channels" is a
+  // client-local list, not something that resyncs from the server on its own.
+  const channelDeletedWsCleanup = onWsEvent((event) => {
+    if (event.type !== 'channel_deleted') return;
+    const ev = event as { channel_id: number };
+    removeJoinedChannel(ev.channel_id);
+    window.dispatchEvent(new Event('ogmara:channels-changed'));
+    if (currentChannelId() === ev.channel_id) navigate('/news');
+  });
+  onCleanup(channelDeletedWsCleanup);
+
   const isView = (view: string) => {
     const r = route();
     if (view === 'news') return r.view === 'news' || r.view === 'news-detail' || r.view === 'compose';
