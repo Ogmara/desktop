@@ -131,6 +131,8 @@
   "compose_cancel": "取消",
   "dm_title": "私信",
   "dm_empty": "暂无对话",
+  "dm_delete": "删除对话",
+  "dm_delete_confirm": "从列表中移除此对话？如果对方再次发消息，它会重新出现。",
   "dm_compose": "新消息",
   "dm_placeholder": "输入klv1...地址",
   "dm_no_messages": "开始对话",

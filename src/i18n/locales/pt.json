@@ -131,6 +131,8 @@
   "compose_cancel": "Cancelar",
   "dm_title": "Mensagens diretas",
   "dm_empty": "Sem conversas",
+  "dm_delete": "Excluir conversa",
+  "dm_delete_confirm": "Remover esta conversa da sua lista? Ela reaparecerá se receber uma nova mensagem.",
   "dm_compose": "Nova mensagem",
   "dm_placeholder": "Digite endereço klv1...",
   "dm_no_messages": "Iniciar conversa",

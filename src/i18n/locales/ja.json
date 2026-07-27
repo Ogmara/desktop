@@ -131,6 +131,8 @@
   "compose_cancel": "キャンセル",
   "dm_title": "ダイレクトメッセージ",
   "dm_empty": "会話はまだありません",
+  "dm_delete": "会話を削除",
+  "dm_delete_confirm": "この会話をリストから削除しますか？相手から再びメッセージが届くと表示されます。",
   "dm_compose": "新しいメッセージ",
   "dm_placeholder": "klv1...アドレスを入力",
   "dm_no_messages": "会話を始める",

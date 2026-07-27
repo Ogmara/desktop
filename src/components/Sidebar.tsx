@@ -54,6 +54,7 @@ import {
   type ResolvedGroup,
 } from '../lib/channel-org';
 import { downloadChannelOrg } from '../lib/settings-sync';
+import { hideConversation, isConversationHidden } from '../lib/dm-hide';
 import { vaultExportKey } from '../lib/vault';
 
 // Re-exported for existing importers (ChannelJoinView, ChannelCreateView) that
@@ -255,6 +256,12 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     },
   );
 
+  // Conversations hidden via "Delete conversation" — filtered out until the
+  // peer sends new activity (see lib/dm-hide.ts).
+  const visibleDmConversations = () => (dmConversations() ?? []).filter(
+    (conv) => !isConversationHidden(conv.peer, conv.last_message_at),
+  );
+
   const channelInitial = (ch: { display_name?: string; slug: string }) =>
     (ch.display_name || ch.slug || '#').slice(0, 1).toUpperCase();
 
@@ -293,6 +300,17 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       setDmUnreadTotal((t) => Math.max(0, t - (ctx.unread || 0)));
       refetchDmConvs();
     } catch { /* ignore */ }
+  };
+
+  // "Delete conversation" — hides it from this user's list (see lib/dm-hide.ts);
+  // reappears automatically if the peer sends a new message. No server call:
+  // purely local, synced cross-device via the encrypted SettingsSync blob.
+  const handleDmDelete = () => {
+    const ctx = dmContextMenu();
+    setDmContextMenu(null);
+    if (!ctx) return;
+    if (!window.confirm(t('dm_delete_confirm'))) return;
+    hideConversation(ctx.address);
   };
 
   // Close context menus on any click
@@ -1096,13 +1114,13 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
               <p>{t('auth_connect_prompt')}</p>
             </div>
           }>
-            <Show when={dmConversations() && dmConversations()!.length > 0} fallback={
+            <Show when={visibleDmConversations().length > 0} fallback={
               <div style="padding:40px 20px; text-align:center; color:var(--color-text-secondary)">
                 <div style="font-size:28px; margin-bottom:8px">✉️</div>
                 <p>{t('dm_empty')}</p>
               </div>
             }>
-              <For each={dmConversations()}>
+              <For each={visibleDmConversations()}>
                 {(conv) => {
                   const isActive = () => route().view === 'dm-conversation' && route().params.address === conv.peer;
                   const dmProf = () => memberProfiles?.().get(conv.peer);
@@ -1279,7 +1297,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         </div>
       </Show>
 
-      {/* DM right-click menu — mark as read */}
+      {/* DM right-click menu — mark as read / delete conversation */}
       <Show when={dmContextMenu()}>
         <div
           class="channel-context-menu"
@@ -1287,6 +1305,9 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         >
           <button class="context-menu-item" onClick={handleDmMarkRead}>
             ✓ {t('channel_mark_read')}
+          </button>
+          <button class="context-menu-item context-menu-danger" onClick={handleDmDelete}>
+            🗑 {t('dm_delete')}
           </button>
         </div>
       </Show>

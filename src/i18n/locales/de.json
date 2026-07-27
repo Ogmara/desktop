@@ -131,6 +131,8 @@
   "compose_cancel": "Abbrechen",
   "dm_title": "Direktnachrichten",
   "dm_empty": "Noch keine Unterhaltungen",
+  "dm_delete": "Unterhaltung löschen",
+  "dm_delete_confirm": "Diese Unterhaltung aus deiner Liste entfernen? Sie erscheint wieder, wenn dir erneut geschrieben wird.",
   "dm_compose": "Neue Nachricht",
   "dm_placeholder": "klv1...-Adresse eingeben",
   "dm_no_messages": "Unterhaltung beginnen",

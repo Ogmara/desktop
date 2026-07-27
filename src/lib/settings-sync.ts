@@ -9,6 +9,7 @@ import { getClient } from './api';
 import { DESIGN_STYLES, COLOR_SCHEMES, type DesignStyle, type ColorScheme } from './theme';
 import { getChannelOrg, applyRemoteOrg } from './channel-org';
 import { addJoinedChannels } from './joined-channels';
+import { getHiddenDms, applyRemoteHiddenDms } from './dm-hide';
 
 /** JSON-encoded settings keys synced across devices (read/write via getSetting/setSetting). */
 const SYNC_KEYS = ['lang', 'notificationSound', 'compactLayout', 'fontSize'] as const;
@@ -16,6 +17,8 @@ const SYNC_KEYS = ['lang', 'notificationSound', 'compactLayout', 'fontSize'] as 
 /** Object-valued synced settings. Stored under their own key in the blob and
  *  applied with bespoke merge logic rather than the scalar setSetting path. */
 const CHANNEL_ORG_KEY = 'channelOrg';
+/** Hidden DM conversations (per-peer hide timestamp) — same object-valued pattern. */
+const HIDDEN_DMS_KEY = 'hiddenDms';
 
 /** Theme-style keys stored as raw strings in localStorage (read/write via lib/theme.ts).
  *  Kept on a separate path to avoid JSON-encoding breakage when the value is a
@@ -74,6 +77,8 @@ export async function encryptSettings(hexKey: string): Promise<{ encrypted_setti
   // Channel organization (groups + custom ordering) — an object value, carried
   // with its own LWW `updatedAt` so the receiver can resolve multi-device edits.
   settings[CHANNEL_ORG_KEY] = getChannelOrg();
+  // Hidden DM conversations — per-peer hide timestamps, merged by max() on receipt.
+  settings[HIDDEN_DMS_KEY] = getHiddenDms();
   const plaintext = new TextEncoder().encode(JSON.stringify(settings));
   const key = await deriveKey(hexKey);
   const nonce = crypto.getRandomValues(new Uint8Array(12));
@@ -131,6 +136,10 @@ export async function decryptAndApplySettings(
       const placedIds = applyRemoteOrg(v);
       if (placedIds.length) addJoinedChannels(placedIds);
     }
+    // Hidden DM conversations: per-peer max() merge (see dm-hide.ts).
+    if (k === HIDDEN_DMS_KEY && v && typeof v === 'object') {
+      applyRemoteHiddenDms(v);
+    }
   }
 }
 
@@ -163,10 +172,11 @@ export async function downloadSettings(hexKey: string): Promise<boolean> {
 }
 
 /**
- * Download the synced blob and apply ONLY the channel organization (LWW), not
- * theme/lang/etc. Used for the automatic on-login pull so a fresh device shows
- * the user's groups + ordering without overriding this device's other prefs.
- * Best-effort: swallows errors and returns false on any failure.
+ * Download the synced blob and apply ONLY the device-local-but-synced object
+ * settings (channel organization, hidden DMs) — not theme/lang/etc. Used for
+ * the automatic on-login pull so a fresh device shows the user's groups,
+ * ordering, and hidden conversations without overriding this device's other
+ * prefs. Best-effort: swallows errors and returns false on any failure.
  */
 export async function downloadChannelOrg(hexKey: string): Promise<boolean> {
   try {
@@ -179,13 +189,19 @@ export async function downloadChannelOrg(hexKey: string): Promise<boolean> {
       new Uint8Array(resp.encrypted_settings),
     );
     const settings = JSON.parse(new TextDecoder().decode(plaintext));
+    let applied = false;
     const org = settings?.[CHANNEL_ORG_KEY];
     if (org && typeof org === 'object') {
       const placedIds = applyRemoteOrg(org);
       if (placedIds.length) addJoinedChannels(placedIds);
-      return true;
+      applied = true;
     }
-    return false;
+    const hidden = settings?.[HIDDEN_DMS_KEY];
+    if (hidden && typeof hidden === 'object') {
+      applyRemoteHiddenDms(hidden);
+      applied = true;
+    }
+    return applied;
   } catch {
     return false;
   }

@@ -123,6 +123,8 @@
   "compose_cancel": "Cancel",
   "dm_title": "Direct Messages",
   "dm_empty": "No conversations yet",
+  "dm_delete": "Delete conversation",
+  "dm_delete_confirm": "Remove this conversation from your list? It will reappear if they message you again.",
   "dm_compose": "New Message",
   "dm_placeholder": "Enter klv1... address",
   "dm_no_messages": "Start a conversation",

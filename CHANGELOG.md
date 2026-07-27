@@ -5,6 +5,21 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.48.0] - 2026-07-27
+
+### Added
+
+- **Delete a DM conversation.** Right-click a conversation in the DM list for
+  a new "Delete conversation" option, alongside the existing "mark as read".
+  This is a per-user "hide from my list" action, not a destructive delete —
+  DMs are two-wallet, so the other party's copy is untouched. A hidden
+  conversation reappears automatically if the peer sends a new message
+  afterward. New `src/lib/dm-hide.ts`: a synced `{peerAddress: hiddenAtMs}`
+  map, riding the existing encrypted `SettingsSync` blob (same mechanism
+  already syncing theme/language/channel groups) — no new server endpoint or
+  SDK method, and no protocol-level message type. Cross-device merge is a
+  simple per-peer `max()` (mirrors web's identical implementation).
+
 ## [1.47.0] - 2026-07-27
 
 ### Added
