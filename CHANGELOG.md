@@ -5,6 +5,41 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.48.1] - 2026-07-29
+
+### Fixed
+
+- **Cross-node encrypted media 404s permanently.** A freshly-uploaded CID can
+  404 for a few seconds on a receiving client talking to a different node,
+  while it propagates over IPFS bitswap. `decryptMediaToUrl` (`src/lib/mediaCrypto.ts`)
+  now retries a 404 or network error on a flat 3s poll for up to 45s before
+  falling back to the "🔒 encrypted attachment" state — previously it failed
+  permanently on the first attempt (and, since nothing awaited the rejected
+  promise, surfaced as an unhandled rejection). Non-transient error statuses
+  still fail immediately.
+
+### Security
+
+- `cargo audit` on `src-tauri/` found 7 advisories (all transitive, none in
+  our own code), fixed via `Cargo.lock`-only bumps (no `Cargo.toml` changes):
+  - `quinn-proto` 0.11.14 → 0.11.15 (RUSTSEC-2026-0185, remote memory
+    exhaustion via unbounded out-of-order stream reassembly) — **runtime**,
+    pulled in through `reqwest`'s QUIC support.
+  - `quick-xml` fixed on all 3 co-installed vulnerable versions
+    (RUSTSEC-2026-0194/0195, quadratic parsing / unbounded allocation DoS),
+    each via bumping the immediate parent to a release that itself moved to
+    patched quick-xml `>=0.41.0`, since the vulnerable versions' direct
+    requirements didn't allow it: `tauri-winrt-notification` 0.7.2 → 0.7.3
+    (Windows-only notification path — **runtime** on Windows; the new release
+    drops quick-xml entirely in favor of the `windows` crate's XML DOM),
+    `plist` 1.8.0 → 1.10.0 (macOS bundle/Info.plist metadata — **build-time**
+    on macOS packaging), `wayland-scanner` 0.31.10 → 0.31.11 (Linux Wayland
+    protocol codegen — **build-time** only, not exercised against
+    attacker-controlled input at runtime).
+  - Verified with a full `cargo build --release` after the bumps; `cargo
+    audit` now reports 0 vulnerabilities (22 pre-existing unmaintained/unsound
+    warnings remain, unchanged, all in optional GTK3/X11 backends).
+
 ## [1.48.0] - 2026-07-27
 
 ### Added

@@ -141,10 +141,45 @@ function evictIfNeeded(): void {
   }
 }
 
+// A freshly-uploaded cross-node CID can 404 for a few seconds while it
+// propagates over IPFS bitswap to the node the receiving client is talking to.
+// Retry a 404/network error on a flat poll (mirrors the channel-key-arrival
+// poll in web's ChatView) instead of failing permanently on the first attempt.
+const MEDIA_FETCH_RETRY_MS = 3000;
+const MEDIA_FETCH_MAX_WAIT_MS = 45000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Fetch the ciphertext for `cid`, retrying a 404 or network error until it
+ *  resolves or `MEDIA_FETCH_MAX_WAIT_MS` elapses. Other error statuses fail
+ *  immediately (not transient). */
+async function fetchCipherWithRetry(cid: string): Promise<Uint8Array> {
+  const start = Date.now();
+  for (;;) {
+    let res: Response;
+    try {
+      res = await fetch(getClient().getMediaUrl(cid));
+    } catch (err) {
+      if (Date.now() - start >= MEDIA_FETCH_MAX_WAIT_MS) throw err;
+      await sleep(MEDIA_FETCH_RETRY_MS);
+      continue;
+    }
+    if (res.ok) return new Uint8Array(await res.arrayBuffer());
+    if (res.status !== 404 || Date.now() - start >= MEDIA_FETCH_MAX_WAIT_MS) {
+      throw new Error(`media fetch failed: ${res.status}`);
+    }
+    await sleep(MEDIA_FETCH_RETRY_MS);
+  }
+}
+
 /**
  * Fetch the encrypted blob for `cid`, decrypt it with `key`/`nonce`, and return a
  * `blob:` object URL (typed with `mime` for robust `<video>`/save-as). Cached by
- * cid + key fingerprint. Throws if the fetch or AEAD fails.
+ * cid + key fingerprint. A 404/network error is retried for up to
+ * `MEDIA_FETCH_MAX_WAIT_MS` (the caller's existing "decrypting…" placeholder
+ * covers the wait) before the returned promise rejects.
  */
 export function decryptMediaToUrl(
   cid: string,
@@ -161,9 +196,7 @@ export function decryptMediaToUrl(
     return cached;
   }
   const p = (async () => {
-    const res = await fetch(getClient().getMediaUrl(cid));
-    if (!res.ok) throw new Error(`media fetch failed: ${res.status}`);
-    const cipher = new Uint8Array(await res.arrayBuffer());
+    const cipher = await fetchCipherWithRetry(cid);
     const plain = decryptMedia(cipher, key, nonce);
     // Copy into a fresh ArrayBuffer-backed Uint8Array so the Blob owns its bytes.
     return URL.createObjectURL(new Blob([toBlobPart(plain)], { type: mime || 'application/octet-stream' }));
