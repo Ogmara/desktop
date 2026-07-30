@@ -61,7 +61,7 @@ import { FollowListView } from './pages/FollowListView';
 import { StatusBar } from './components/StatusBar';
 import { NoNodeLandingPage } from './components/NoNodeLandingPage';
 import { activeNodeUrl } from './lib/api';
-import { ImageLightbox } from './components/FormattedText';
+import { ImageLightbox } from './components/ImageLightbox';
 import { route, navigate } from './lib/router';
 
 type AppState = 'loading' | 'locked' | 'unlocked';

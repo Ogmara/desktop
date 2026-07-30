@@ -5,6 +5,20 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.49.0] - 2026-07-29
+
+### Added
+
+- **Image lightbox with zoom, pan, and download.** The existing fullscreen
+  `ImageLightbox` only fit the image to the screen with no way to zoom in on
+  small text/detail and no save option. Extracted into its own component
+  (`src/components/ImageLightbox.tsx`) with: mouse wheel / pinch (2-pointer)
+  zoom anchored to the cursor/pinch midpoint, drag-to-pan once zoomed,
+  double-click to toggle zoom, Escape/click-outside to close, and a download
+  button that re-fetches the image as a blob so the saved file gets its real
+  filename instead of the CID. Same wiring as before (`FormattedText` for
+  plaintext + P5 encrypted media), just richer interaction.
+
 ## [1.48.1] - 2026-07-29
 
 ### Fixed

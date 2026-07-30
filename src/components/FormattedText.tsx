@@ -5,7 +5,7 @@
  * URLs open in a new browser tab.
  */
 
-import { Component, For, Show, createSignal } from 'solid-js';
+import { Component, For, Show } from 'solid-js';
 import { JSX } from 'solid-js/jsx-runtime';
 import { parseMessageContent, type TextSegment, type Attachment, type MediaDescriptor } from '@ogmara/sdk';
 import { getClient } from '../lib/api';
@@ -14,6 +14,7 @@ import { getSetting } from '../lib/settings';
 import { VideoAttachment } from './VideoAttachment';
 import { MediaImage } from './MediaImage';
 import { EncryptedMedia } from './EncryptedMedia';
+import { openLightbox } from './ImageLightbox';
 import { safeAttachmentName } from '../lib/payload';
 
 interface Props {
@@ -95,31 +96,6 @@ function renderTextWithBreaksAndHashtags(text: string): JSX.Element {
   return <>{elements}</>;
 }
 
-// Shared lightbox state — only one image fullscreen at a time
-const [lightboxUrl, setLightboxUrl] = createSignal<string | null>(null);
-
-// Close on Escape key
-if (typeof document !== 'undefined') {
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && lightboxUrl()) setLightboxUrl(null);
-  });
-}
-
-/** Fullscreen image lightbox overlay. */
-export const ImageLightbox: Component = () => (
-  <Show when={lightboxUrl()}>
-    <div class="lightbox-overlay" onClick={() => setLightboxUrl(null)}>
-      <img
-        src={lightboxUrl()!}
-        class="lightbox-image"
-        onClick={(e) => e.stopPropagation()}
-        alt="Full size"
-      />
-      <button class="lightbox-close" onClick={() => setLightboxUrl(null)}>✕</button>
-    </div>
-  </Show>
-);
-
 export const FormattedText: Component<Props> = (props) => {
   const segments = () => parseMessageContent(props.content);
 
@@ -188,7 +164,7 @@ export const FormattedText: Component<Props> = (props) => {
       <Show when={props.encryptedMedia && props.encryptedMedia.length > 0}>
         <div class="msg-attachments">
           <For each={props.encryptedMedia}>
-            {(m) => <EncryptedMedia media={m} onOpen={(url) => setLightboxUrl(url)} />}
+            {(m) => <EncryptedMedia media={m} onOpen={(url) => openLightbox(url, safeAttachmentName({ filename: m.name, cid: m.cid }))} />}
           </For>
         </div>
       </Show>
@@ -202,6 +178,7 @@ export const FormattedText: Component<Props> = (props) => {
               const isVideo = VIDEO_TYPES.includes(att.mime_type);
               const mediaUrl = getClient().getMediaUrl(att.cid);
               const autoload = getSetting('mediaAutoload') !== 'never';
+              const safeName = safeAttachmentName(att);
 
               if (isImage && autoload) {
                 return (
@@ -209,9 +186,9 @@ export const FormattedText: Component<Props> = (props) => {
                     src={att.thumbnail_cid
                       ? getClient().getMediaUrl(att.thumbnail_cid)
                       : mediaUrl}
-                    alt={att.filename || 'image'}
+                    alt={safeName}
                     class="msg-image"
-                    onOpen={() => setLightboxUrl(mediaUrl)}
+                    onOpen={() => openLightbox(mediaUrl, safeName)}
                   />
                 );
               }
@@ -234,7 +211,7 @@ export const FormattedText: Component<Props> = (props) => {
                   rel="noopener noreferrer"
                   class="msg-file"
                 >
-                  {icon} {safeAttachmentName(att)}
+                  {icon} {safeName}
                 </a>
               );
             }}
@@ -316,39 +293,6 @@ export const FormattedText: Component<Props> = (props) => {
           background: color-mix(in srgb, var(--color-accent-primary) 30%, transparent);
           text-decoration: none;
         }
-
-        .lightbox-overlay {
-          position: fixed;
-          inset: 0;
-          background: rgba(0, 0, 0, 0.9);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          z-index: 10000;
-          cursor: zoom-out;
-        }
-        .lightbox-image {
-          max-width: 95vw;
-          max-height: 95vh;
-          object-fit: contain;
-          border-radius: var(--radius-md);
-          cursor: default;
-          box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
-        }
-        .lightbox-close {
-          position: fixed;
-          top: 16px;
-          right: 16px;
-          font-size: 24px;
-          padding: 8px 14px;
-          border-radius: 50%;
-          background: rgba(255, 255, 255, 0.15);
-          color: white;
-          cursor: pointer;
-          z-index: 10001;
-          transition: background 0.15s;
-        }
-        .lightbox-close:hover { background: rgba(255, 255, 255, 0.3); }
       `}</style>
     </span>
   );
