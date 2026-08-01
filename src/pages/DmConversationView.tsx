@@ -77,6 +77,13 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   const EDIT_WINDOW_MS = 30 * 60 * 1000;
   let inputRef: HTMLTextAreaElement | undefined;
   let messagesRef: HTMLDivElement | undefined;
+  // A DOM-detached `document.createElement('input')` + synchronous `.click()`
+  // (the old pattern here) is unreliable in WebKitGTK: nothing keeps the
+  // element referenced once the click handler returns and the native file
+  // dialog is async, so it can silently get GC'd before `onchange` ever
+  // fires — no error, the attach just does nothing. A persistent, DOM-mounted
+  // input (matching ChatView's modern-input pattern) doesn't have this problem.
+  let modernDmAttachInputRef: HTMLInputElement | undefined;
 
   // Auto-scroll DM messages
   let prevDmCount = 0;
@@ -659,9 +666,19 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
                 <button class="input-icon-btn" onClick={() => walletAddress() && setShowEmoji(!showEmoji())} disabled={!walletAddress()}>😊</button>
                 <Show when={showEmoji()}><EmojiPicker onSelect={insertEmoji} onClose={() => setShowEmoji(false)} /></Show>
               </div>
-              <button class="input-icon-btn" onClick={() => { const inp = document.createElement('input'); inp.type = 'file'; inp.onchange = (ev) => { const file = (ev.target as HTMLInputElement).files?.[0]; if (file) void attachEncryptedFile(file); }; inp.click(); }} disabled={!walletAddress()}>
+              <button class="input-icon-btn" onClick={() => modernDmAttachInputRef?.click()} disabled={!walletAddress()}>
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
               </button>
+              <input
+                type="file"
+                ref={modernDmAttachInputRef}
+                style="display:none"
+                onChange={(e) => {
+                  const file = e.currentTarget.files?.[0];
+                  if (file) void attachEncryptedFile(file);
+                  e.currentTarget.value = '';
+                }}
+              />
               <textarea ref={inputRef} class="dm-textarea" rows={1} placeholder={t('chat_placeholder')} value={messageInput()}
                 onInput={(e) => { setMessageInput(e.currentTarget.value); e.currentTarget.style.height = 'auto'; e.currentTarget.style.height = Math.min(e.currentTarget.scrollHeight, 160) + 'px'; }}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && (messageInput().trim() || attachments().length > 0)) { e.preventDefault(); handleSend(); } }}

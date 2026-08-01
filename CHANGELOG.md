@@ -5,6 +5,23 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.49.1] - 2026-08-01
+
+### Fixed
+
+- **DM attachment picker intermittently did nothing — no error, just silence.**
+  The modern-style DM composer's attach button built a file input via
+  `document.createElement('input')`, called `.click()` on it, and never
+  appended it to the DOM. Nothing kept that detached element referenced once
+  the click handler returned, so between the synchronous `.click()` and the
+  async native file dialog resolving (particularly flaky on Tauri's
+  WebKitGTK on Linux), the element could get garbage-collected before
+  `onchange` ever fired — the attach handler was simply never called, with
+  nothing to catch or report. The channel composer never had this bug
+  because it already used a persistent, DOM-mounted input. Replaced with the
+  same pattern: a real `<input type="file" style="display:none">` in the
+  JSX tree, clicked via a ref.
+
 ## [1.49.0] - 2026-07-29
 
 ### Added
