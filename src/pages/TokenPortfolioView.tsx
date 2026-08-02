@@ -151,8 +151,18 @@ export const TokenPortfolioView: Component = () => {
     },
   );
 
+  // Solid resources RE-THROW when called while `.state === 'errored'` (by
+  // design, for `<ErrorBoundary>` to catch declaratively). `totalKlvValue`
+  // renders unconditionally (not gated behind `balances.error` the way the
+  // table/loading states below are), so a raw `balances()` read here would
+  // throw during render on any balance-fetch failure (network blip, testnet
+  // API hiccup) with no local ErrorBoundary to catch it — the same freeze
+  // class found live in encrypted-channel media (EncryptedMedia.tsx, 2026-08).
+  // Same fix: never call the resource accessor without checking `.error`.
+  const safeBalances = () => (balances.error ? undefined : balances());
+
   const totalKlvValue = createMemo(() => {
-    const list = balances();
+    const list = safeBalances();
     if (!list) return '0';
     const klv = list.find((b) => b.assetId === 'KLV');
     return klv ? formatBalance(klv.balance, klv.precision) : '0';
@@ -216,7 +226,7 @@ export const TokenPortfolioView: Component = () => {
   };
 
   const totalFiat = createMemo<number | null>(() => {
-    const list = balances();
+    const list = safeBalances();
     const map = prices();
     const rate = fiatRate();
     if (!list || !map || !rate) return null;
@@ -255,7 +265,7 @@ export const TokenPortfolioView: Component = () => {
   }
 
   const sortedBalances = createMemo<TokenBalance[]>(() => {
-    const list = balances();
+    const list = safeBalances();
     if (!list) return [];
     const key = sortKey();
     const dir = sortDir();
@@ -492,7 +502,7 @@ export const TokenPortfolioView: Component = () => {
         </Show>
 
         {/* Token list */}
-        <Show when={balances() && !balances.loading}>
+        <Show when={safeBalances() && !balances.loading}>
           <div class="portfolio-table with-fiat">
             <div class="portfolio-table-header">
               <button class="col-token col-sort" onClick={() => cycleSort('token')}>

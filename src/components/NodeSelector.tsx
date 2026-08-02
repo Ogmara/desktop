@@ -203,7 +203,12 @@ export const NodeSelector: Component = () => {
             </div>
           </Show>
           <Show when={!nodes.loading} fallback={<div class="node-loading">{t('loading')}</div>}>
-            <For each={nodes()}>
+            {/* `getAvailableNodes()`'s two network calls are already individually
+                `.catch()`-guarded, so this resource realistically never errors —
+                but a raw `nodes()` read still re-throws on `.error` per Solid's
+                resource semantics, so guard it the same way as the other fixes
+                in this pass rather than rely on that invariant holding forever. */}
+            <For each={nodes.error ? [] : (nodes() ?? [])}>
               {(node: NodeWithPing) => {
                 // Show the ✕ on any known-nodes breadcrumb that isn't the
                 // currently-selected node. (We no longer exempt a hardcoded

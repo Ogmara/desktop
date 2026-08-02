@@ -43,14 +43,26 @@ export const EncryptedMedia: Component<{
     (m) => decryptMediaToUrl(m!.tcid!, m!.key, m!.tnonce!, 'image/jpeg'),
   );
 
+  // Solid resources RE-THROW when called while `.state === 'errored'` (by
+  // design, so `<ErrorBoundary>` can catch them declaratively). This
+  // component has no local error boundary, so calling `fullUrl()`/`thumbUrl()`
+  // directly whenever either has failed — e.g. a 429 from the node's media
+  // rate limiter — throws during render and poisons the owning computation:
+  // observed live as the whole channel view "freezing" (stuck on whichever
+  // channel was open, switching did nothing) the moment any attachment in
+  // the message list errored. Never call the resource accessor without
+  // checking `.error` first.
+  const safeFull = () => (fullUrl.error ? undefined : fullUrl());
+  const safeThumb = () => (thumbUrl.error ? undefined : thumbUrl());
+
   // Something is displayable once EITHER the thumbnail (images) or the full blob
   // resolves. For images with a thumbnail we don't block on the (larger) full blob;
   // for everything else we wait for the full blob.
   const hasThumb = () => !!(props.media.tcid && props.media.tnonce);
-  const ready = () => !!fullUrl() || (isImage() && hasThumb() && !!thumbUrl());
+  const ready = () => !!safeFull() || (isImage() && hasThumb() && !!safeThumb());
   const decrypting = () => !ready() && !fullUrl.error;
   // Only a FULL-blob failure is terminal (a thumbnail miss falls back to the full blob).
-  const failed = () => !!fullUrl.error && !fullUrl() && !(isImage() && !!thumbUrl());
+  const failed = () => !!fullUrl.error && !safeFull() && !(isImage() && !!safeThumb());
 
   return (
     <Show
@@ -77,7 +89,7 @@ export const EncryptedMedia: Component<{
               fallback={
                 <a
                   class="msg-file"
-                  href={fullUrl()}
+                  href={safeFull()}
                   download={safeName()}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -87,7 +99,7 @@ export const EncryptedMedia: Component<{
               }
             >
               <VideoAttachment
-                src={fullUrl()!}
+                src={safeFull()!}
                 filename={props.media.name}
                 videoClass="msg-video"
                 fallbackClass="msg-file"
@@ -96,10 +108,10 @@ export const EncryptedMedia: Component<{
           }
         >
           <MediaImage
-            src={thumbUrl() || fullUrl()!}
+            src={safeThumb() || safeFull()!}
             alt={safeName()}
             class="msg-image"
-            onOpen={() => { const u = fullUrl() || thumbUrl(); if (u) props.onOpen?.(u); }}
+            onOpen={() => { const u = safeFull() || safeThumb(); if (u) props.onOpen?.(u); }}
           />
         </Show>
       </Show>

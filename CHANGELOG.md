@@ -5,6 +5,50 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.50.2] - 2026-08-02
+
+### Fixed
+
+- **Encrypted channels (private and public) could freeze the whole app** —
+  reported live: opening a channel with several encrypted images made the
+  message list and channel switching stop responding entirely (any channel
+  selected kept showing the same stuck view), with repeated `media fetch
+  failed: 429` errors. Two compounding causes:
+  - **The real trigger**: `fetchCipherWithRetry` (`lib/mediaCrypto.ts`) fired
+    one ciphertext GET per attachment/thumbnail with no concurrency limit.
+    Tauri's HTTP stack has no implicit per-origin concurrency cap the way a
+    browser tab does, so a channel with more than a handful of images bursts
+    past the node's per-IP media-concurrency cap (4 concurrent requests by
+    default, `l2-node api/media_limiter.rs`) and gets `429` back — this is
+    why web (browser-throttled) and DMs (fewer attachments in the test
+    conversation) didn't show it. Added a `MAX_CONCURRENT_MEDIA_FETCHES = 3`
+    slot queue so bursts of attachments queue instead of flooding the node,
+    and 429 is now retried (honoring the node's `Retry-After` header,
+    clamped to the remaining retry budget) instead of failing immediately.
+  - **The actual freeze**: `components/EncryptedMedia.tsx` read the
+    `createResource`-backed `fullUrl`/`thumbUrl` accessors directly inside
+    boolean helpers and render sites without checking `.error` first. Solid
+    resources RE-THROW when called while in the `errored` state (by design,
+    for `<ErrorBoundary>` to catch) — with no local error boundary, ANY
+    single attachment failing (a 429, a wrong key, an unreachable node) threw
+    during render and poisoned the surrounding computation, which is what
+    made channel switching itself stop working. Added `safeFull()`/
+    `safeThumb()` guards and routed every read through them. The same latent
+    pattern was found and fixed in two more places found during audit:
+    `pages/TokenPortfolioView.tsx` (`totalKlvValue`/`totalFiat`/
+    `sortedBalances` memos and the table's `<Show>` gate all read the
+    `balances` resource unguarded — a real, easily-triggered risk since a
+    Klever API hiccup throws there today, unlike the media path) and
+    `components/NodeSelector.tsx` (`<For each={nodes()}>`, lower risk since
+    its fetcher already catches internally, hardened for consistency).
+
+### Security
+
+- The `Retry-After` value the node returns is untrusted input; the retry
+  wait is now clamped to the remaining `MEDIA_FETCH_MAX_WAIT_MS` budget so a
+  large or malformed value can't stall a single attachment past the
+  documented wait window (audit finding).
+
 ## [1.50.1] - 2026-08-02
 
 ### Fixed
