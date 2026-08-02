@@ -5,6 +5,23 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.50.1] - 2026-08-02
+
+### Fixed
+
+- **Cross-node media retry budget (45s) was sometimes shorter than the
+  node's own worst-case fallback.** l2-node's cross-node media fallback
+  (spec 03-l2-node §3.3.1) dials up to 3 candidate peers at 5s connect / 30s
+  total each — up to ~90s server-side before it even reports a miss. A 45s
+  client retry budget could give up before the node's own fallback had a
+  realistic chance to land, permanently failing an attachment until the
+  user navigated away and back (confirmed live: an image 404'd through the
+  full retry window as an unhandled-rejection console error, then decoded
+  fine after switching channels and returning — same CID, same key, it just
+  needed more time). Raised the budget to 3 minutes and the poll interval
+  to 5s (fewer redundant requests over the longer window) in
+  `src/lib/mediaCrypto.ts`.
+
 ## [1.50.0] - 2026-08-02
 
 ### Security

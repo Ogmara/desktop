@@ -145,8 +145,17 @@ function evictIfNeeded(): void {
 // propagates over IPFS bitswap to the node the receiving client is talking to.
 // Retry a 404/network error on a flat poll (mirrors the channel-key-arrival
 // poll in web's ChatView) instead of failing permanently on the first attempt.
-const MEDIA_FETCH_RETRY_MS = 3000;
-const MEDIA_FETCH_MAX_WAIT_MS = 45000;
+//
+// Budget sized against the NODE's own worst case, not just typical bitswap
+// latency: l2-node's cross-node media fallback (spec 03-l2-node §3.3.1) dials
+// up to `peer_fallback_fanout` (default 3) candidates at 5s connect / 30s
+// total each — up to ~90s server-side before it even reports a miss. A 45s
+// client budget (2026-08) could give up before the node's own fallback had a
+// realistic chance to land, forcing a manual reload/remount to try again
+// (was reported live: an image failed here, then decoded fine after
+// switching channels and back — same CID, same key, just needed more time).
+const MEDIA_FETCH_RETRY_MS = 5000;
+const MEDIA_FETCH_MAX_WAIT_MS = 180000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
