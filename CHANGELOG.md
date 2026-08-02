@@ -5,6 +5,53 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.50.0] - 2026-08-02
+
+### Security
+
+- **Media encryption gate failed OPEN: private/encrypted-channel images could
+  upload to IPFS as plaintext.** `isEncrypted()` read
+  `channelInfo()?.channel?.encryption_enabled`/`channel_type` directly off a
+  `createResource` that returns `undefined` while loading (initial channel
+  open, or mid-refetch) — both clauses default to `false` when the record
+  isn't in yet, so an image attached during that window uploaded UNENCRYPTED
+  even in a private channel, readable by any non-member, the node, or
+  anyone on IPFS. Confirmed live: `GET /media/:cid` returned a valid PNG,
+  not ciphertext.
+  Fixed by extracting the decision into `src/lib/channelEncryption.ts`'s
+  `resolveIsEncrypted()`, which **fails closed**: unless the channel record
+  has definitively resolved (`state === 'ready'`) to a record that is
+  neither private nor `encryption_enabled`, it now returns `true`. Also
+  disabled both attach entry points (`MediaUpload`, the modern-style attach
+  button) until the channel record resolves, so a user can't even try to
+  attach mid-load — belt-and-suspenders alongside the fail-closed check.
+  DMs were verified independently: `attachEncryptedFile` calls the encrypted
+  upload path unconditionally with no resource dependency, so no equivalent
+  race exists there.
+- **`canEdit()` used the wrong check and allowed plaintext edits on
+  public-encrypted (P4) channels.** Found while auditing the fix above: the
+  edit gate checked `!isPrivate()` (channel TYPE) instead of `!isEncrypted()`
+  (whether content is actually encrypted) — a public channel with
+  `encryption_enabled: true` isn't "private" by type, so editing was never
+  blocked there, and an edit would have sent the new text as plaintext.
+  Fixed to check `!isEncrypted()`, which also inherits the fail-closed fix
+  above.
+- Added the first regression tests in this repo:
+  `src/lib/channelEncryption.test.ts` (8 cases, `node --test`, no new
+  dependency — Node 24 strips simple TS syntax natively). New `npm test`
+  script; `tsconfig.json` excludes `*.test.ts` from the app's own
+  bundler-mode typecheck.
+- **Known gap, not yet fixed (flagged by the same audit):** `isPrivate()`
+  itself still fails open the same way while `channelInfo` is unresolved,
+  and separately still drives `encFloor()` (the P2d member-removal
+  rotation-floor check) — a fast channel-switch-then-send could in theory
+  reuse a pre-removal epoch key during that window. This does **not** leak
+  plaintext (`isEncrypted()` still forces encryption), it's a narrower
+  key-freshness issue; tracked as a follow-up.
+- The specific test image that was confirmed to leak in the clear during
+  triage cannot be un-published from IPFS/its pinning peers — noted for the
+  record, no user data was involved.
+
 ## [1.49.1] - 2026-08-01
 
 ### Fixed

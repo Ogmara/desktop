@@ -1,12 +1,13 @@
 {
   "name": "@ogmara/desktop",
-  "version": "1.49.1",
+  "version": "1.50.0",
   "private": true,
   "description": "Ogmara desktop application — decentralized chat and news with standalone wallet",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "test": "node --test src/**/*.test.ts",
     "tauri": "tauri"
   },
   "dependencies": {

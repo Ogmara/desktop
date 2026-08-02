@@ -12,6 +12,7 @@ import { authStatus, getSigner, walletAddress, isRegistered } from '../lib/auth'
 // (avoids the duplicate-messages bug fixed in v1.15.1).
 import { onWsEvent, wsSubscribeChannels, wsUnsubscribeChannels, wsConnected } from '../lib/ws';
 import { canPost, CHANNEL_TYPE_READ_PUBLIC, CHANNEL_TYPE_PRIVATE } from '@ogmara/sdk';
+import { resolveIsEncrypted } from '../lib/channelEncryption';
 import { buildEncryptedChannelMsg, decryptChannelMessage, coverChannelMembers, rotateChannelKey } from '../lib/channelCrypto';
 import type { DmDisplay } from '../lib/dmCrypto';
 import { MentionPopover } from '../components/MentionPopover';
@@ -504,8 +505,15 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   // (forced on for new public/ReadPublic channels) OR it is private (always
   // encrypted). This — NOT the channel type — drives encrypt-on-send and
   // decrypt-on-render. Legacy plaintext channels (no flag) stay v1 (dual-read).
+  // FAILS CLOSED while `channelInfo` hasn't resolved (see channelEncryption.ts) —
+  // never plaintext-upload media just because the channel record isn't in yet.
   const isEncrypted = () =>
-    channelInfo()?.channel?.encryption_enabled === true || isPrivate();
+    resolveIsEncrypted(channelInfo.state, channelInfo()?.channel, CHANNEL_TYPE_PRIVATE);
+  // Belt-and-suspenders alongside the fail-closed `isEncrypted()` above: hold
+  // the attach UI itself disabled until the channel record is in, so a user
+  // can't even try to attach during the exact window `isEncrypted()` used to
+  // get wrong.
+  const channelInfoResolved = () => channelInfo.state === 'ready';
   // Public channels have no removal-rotation (anti-bulk-readout only, not member-
   // confidential), so only PRIVATE members are gated to mods for key establishment;
   // in a public encrypted channel ANY member may seed/cover the epoch key.
@@ -1152,9 +1160,13 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     msg.author === walletAddress() &&
     !msg.deleted &&
     !isPending(msg) &&
-    // Encrypted private-channel message edits are a later phase — disable editing on
-    // private channels to avoid sending the new text as plaintext.
-    !isPrivate() &&
+    // Encrypted-channel message edits are a later phase — disable editing on ANY
+    // encrypted channel, private OR public-encrypted (P4), to avoid sending the new
+    // text as plaintext. Was `!isPrivate()`, which only checked channel TYPE and both
+    // missed public-encrypted channels entirely and shared isPrivate()'s fail-open-
+    // while-loading gap; `isEncrypted()` is the fail-closed, already-correct check
+    // (2026-08-02).
+    !isEncrypted() &&
     (Date.now() - normalizeTs(msg.timestamp)) < EDIT_WINDOW_MS;
 
   const canDelete = (msg: any) =>
@@ -1550,7 +1562,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
               attachments={attachments()}
               onAttach={(a) => setAttachments((prev) => [...prev, a])}
               onRemove={(i) => setAttachments((prev) => prev.filter((_, idx) => idx !== i))}
-              disabled={sending()}
+              disabled={sending() || !channelInfoResolved()}
             />
           </div>
         </Show>
@@ -1715,7 +1727,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                 <button class="input-icon-btn" onClick={() => walletAddress() && setShowEmoji(!showEmoji())} disabled={!walletAddress()}>😊</button>
                 <Show when={showEmoji()}><EmojiPicker onSelect={insertEmoji} onClose={() => setShowEmoji(false)} /></Show>
               </div>
-              <button class="input-icon-btn" onClick={() => walletAddress() && document.querySelector<HTMLInputElement>('.modern-attach-input')?.click()} disabled={!walletAddress()}>
+              <button class="input-icon-btn" onClick={() => walletAddress() && channelInfoResolved() && document.querySelector<HTMLInputElement>('.modern-attach-input')?.click()} disabled={!walletAddress() || !channelInfoResolved()}>
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
               </button>
               <input type="file" class="modern-attach-input" style="display:none" onChange={(e) => {
