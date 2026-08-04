@@ -54,6 +54,7 @@ import {
   type ResolvedGroup,
 } from '../lib/channel-org';
 import { downloadChannelOrg } from '../lib/settings-sync';
+import { confirmDialog, promptDialog } from './Dialogs';
 import { hideConversation, isConversationHidden } from '../lib/dm-hide';
 import { vaultExportKey } from '../lib/vault';
 
@@ -305,11 +306,11 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   // "Delete conversation" — hides it from this user's list (see lib/dm-hide.ts);
   // reappears automatically if the peer sends a new message. No server call:
   // purely local, synced cross-device via the encrypted SettingsSync blob.
-  const handleDmDelete = () => {
+  const handleDmDelete = async () => {
     const ctx = dmContextMenu();
     setDmContextMenu(null);
     if (!ctx) return;
-    if (!window.confirm(t('dm_delete_confirm'))) return;
+    if (!(await confirmDialog(t('dm_delete_confirm')))) return;
     hideConversation(ctx.address);
   };
 
@@ -437,13 +438,13 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
           go(`/user/${ctx.address}`);
           break;
         case 'kick':
-          if (window.confirm(`Kick ${memberDisplayName(ctx.address)}?`))  {
+          if (await confirmDialog(`Kick ${memberDisplayName(ctx.address)}?`))  {
             await client.kickUser(ctx.channelId, ctx.address);
             await refreshMembers(ctx.channelId);
           }
           break;
         case 'ban': {
-          const reason = window.prompt(t('channel_ban_reason'));
+          const reason = await promptDialog(t('channel_ban_reason'));
           if (reason !== null) {
             await client.banUser(ctx.channelId, ctx.address, reason || undefined);
             await refreshMembers(ctx.channelId);
@@ -563,9 +564,9 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     setRenamingGroup(null);
   };
 
-  const handleDeleteGroup = (id: string) => {
+  const handleDeleteGroup = async (id: string) => {
     setGroupMenu(null);
-    if (window.confirm(t('sidebar_delete_group_confirm'))) deleteGroup(id);
+    if (await confirmDialog(t('sidebar_delete_group_confirm'))) deleteGroup(id);
   };
 
   const moveGroup = (id: string, dir: -1 | 1) => {
@@ -1262,7 +1263,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
             const ctx = contextMenu();
             setContextMenu(null);
             if (!ctx) return;
-            if (!window.confirm(t('channel_leave_confirm'))) return;
+            if (!(await confirmDialog(t('channel_leave_confirm')))) return;
             try {
               await getClient().leaveChannel(ctx.channelId);
               removeJoinedChannel(ctx.channelId);
@@ -1280,7 +1281,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
               const ctx = contextMenu();
               setContextMenu(null);
               if (!ctx) return;
-              if (!window.confirm(t('channel_delete_confirm'))) return;
+              if (!(await confirmDialog(t('channel_delete_confirm')))) return;
               try {
                 await getClient().deleteChannel(ctx.channelId);
                 removeJoinedChannel(ctx.channelId);

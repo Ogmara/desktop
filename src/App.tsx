@@ -62,6 +62,7 @@ import { StatusBar } from './components/StatusBar';
 import { NoNodeLandingPage } from './components/NoNodeLandingPage';
 import { activeNodeUrl } from './lib/api';
 import { ImageLightbox } from './components/ImageLightbox';
+import { DialogHost } from './components/Dialogs';
 import { route, navigate } from './lib/router';
 
 type AppState = 'loading' | 'locked' | 'unlocked';
@@ -453,6 +454,10 @@ export const App: Component = () => {
 
       {/* Global image lightbox */}
       <ImageLightbox />
+
+      {/* Global confirm/prompt modal — replaces window.confirm/window.prompt,
+          which are unreliable in the Tauri webview (see components/Dialogs.tsx). */}
+      <DialogHost />
 
       {/* PIN re-prompt for outgoing transactions — shown only when app-lock
           is enabled. Mounted at root so it overlays any route. */}

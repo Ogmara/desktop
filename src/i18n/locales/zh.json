@@ -239,6 +239,7 @@
   "loading": "加载中...",
   "confirm_delete": "确定要删除吗？",
   "cancel": "取消",
+  "dialog_ok": "确定",
   "save": "保存",
   "done": "完成",
   "anchor_verified": "已验证",

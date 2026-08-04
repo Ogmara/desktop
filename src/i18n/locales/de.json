@@ -239,6 +239,7 @@
   "loading": "Laden...",
   "confirm_delete": "Möchtest du das wirklich löschen?",
   "cancel": "Abbrechen",
+  "dialog_ok": "OK",
   "save": "Speichern",
   "done": "Fertig",
   "anchor_verified": "Verifiziert",

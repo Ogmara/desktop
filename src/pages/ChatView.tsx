@@ -21,6 +21,7 @@ import { setSetting } from '../lib/settings';
 import { FormattedText } from '../components/FormattedText';
 import { EmojiPicker } from '../components/EmojiPicker';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
+import { confirmDialog, promptDialog } from '../components/Dialogs';
 import { encryptAndUploadFile, revokePreviewUrls } from '../lib/mediaCrypto';
 import { getPayloadContent, getPayloadAttachments, getPayloadMentions, decodePayload, rewriteContentInPayload, buildOptimisticChatPayload, safeAttachmentName } from '../lib/payload';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
@@ -233,11 +234,11 @@ export const ChatView: Component<ChatViewProps> = (props) => {
           if (targetMsg) await handleDelete(targetMsg);
           break;
         case 'kick':
-          if (window.confirm(`Kick ${ctx.address.slice(0, 12)}...?`))
+          if (await confirmDialog(`Kick ${ctx.address.slice(0, 12)}...?`))
             await client.kickUser(props.channelId, ctx.address);
           break;
         case 'ban': {
-          const reason = window.prompt(t('channel_ban_reason'));
+          const reason = await promptDialog(t('channel_ban_reason'));
           if (reason !== null)
             await client.banUser(props.channelId, ctx.address, reason || undefined);
           break;
@@ -249,7 +250,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
           await client.pinMessage(props.channelId, ctx.msgId);
           break;
         case 'report': {
-          const reason = window.prompt(t('report_reason'));
+          const reason = await promptDialog(t('report_reason'));
           if (reason !== null) {
             await client.reportMessage(ctx.msgId, (reason || 'No reason provided').slice(0, 500), 'other');
           }
@@ -1226,7 +1227,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   const handleDelete = async (msg: any) => {
     if (!props.channelId) return;
     if (isPending(msg)) return; // can't delete an unconfirmed (local-) message
-    if (!window.confirm(t('chat_delete_confirm'))) return;
+    if (!(await confirmDialog(t('chat_delete_confirm')))) return;
     try {
       const client = getClient();
       await client.deleteMessage(props.channelId, msgIdToHex(msg.msg_id));

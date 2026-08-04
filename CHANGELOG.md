@@ -5,6 +5,18 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.50.3] - 2026-08-04
+
+### Fixed
+
+- **`window.confirm` is unconditionally broken in `tauri-plugin-dialog` 2.7.0 — silently blocking kick, ban, report, delete (message/DM/channel/group), and leave-channel everywhere they're used.** Reported live: kicking a channel member did nothing, with console error `dialog.confirm not allowed. Command not found`. Root cause verified by reading the actual plugin source: the dialog plugin's injected script overrides `window.confirm` to invoke an IPC command literally named `confirm`, but the plugin's Rust side only ever registers `open`/`save`/`message` (`generate_handler![...]`) — there is no `confirm` command, so the call fails regardless of granted capabilities. This was never the cross-node registration-lag issue from 0.82.5/1.50.x — the confirmation dialog throws client-side before the kick/ban request is ever sent, and the surrounding `catch { /* ignore */ }` swallows it, producing exactly "nothing happened."
+  Separately, `window.prompt` (used by ban's/report's reason prompt, and PIN removal) isn't touched by that override at all and falls through to the raw webview engine — WebKitGTK (Linux) has long-standing gaps in `window.prompt` support, typically returning `null` immediately with no dialog shown, which explains why a Ban attempt could silently no-op too, without even a console error.
+  Fixed by replacing every `window.confirm`/`window.prompt` call site (14 total, across `ChatView.tsx`, `Sidebar.tsx`, `NewsDetailView.tsx`, `DmConversationView.tsx`, `SettingsView.tsx`) with a new self-hosted, themed modal (`components/Dialogs.tsx`, `confirmDialog()`/`promptDialog()`), mounted once at the app root alongside the existing `ImageLightbox`/`TxConfirmModal` singletons. Also granted `dialog:allow-message` in `capabilities/default.json` (previously only `dialog:allow-save` was granted) so `window.alert` — which DOES map to a real, registered command — works for the 3 error-message call sites in `Sidebar.tsx`'s leave/delete-channel error handling.
+
+### Security
+
+- **PIN-removal prompt now masks input.** The PIN-removal flow in `SettingsView.tsx` used `window.prompt(...)`, which shows typed text in PLAINTEXT with no way to mask it. The new `promptDialog(message, { password: true })` renders `<input type="password">` instead. The shared prompt-input signal is also cleared immediately after any dialog closes (`settle()`), so a previously-entered PIN never lingers in memory or risks pre-filling into an unrelated later prompt (e.g. a ban/report reason).
+
 ## [1.50.2] - 2026-08-02
 
 ### Fixed

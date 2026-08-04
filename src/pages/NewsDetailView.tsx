@@ -18,6 +18,7 @@ import { MediaImage } from '../components/MediaImage';
 import { getPayloadContent, getPayloadTitle, getPayloadAttachments, decodePayload, safeAttachmentName } from '../lib/payload';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
 import { MentionPopover } from '../components/MentionPopover';
+import { confirmDialog, promptDialog } from '../components/Dialogs';
 import { EmojiPicker } from '../components/EmojiPicker';
 import { sendTip, kleverAvailable } from '../lib/klever';
 import { ex } from '../lib/klever-explorer-links';
@@ -304,7 +305,7 @@ export const NewsDetailView: Component = () => {
 
   const handleDeletePost = async () => {
     if (!requireAuthOrRedirect()) return;
-    if (!window.confirm(t('news_delete_confirm'))) return;
+    if (!(await confirmDialog(t('news_delete_confirm')))) return;
     setActionError('');
     try {
       const client = getClient();
@@ -535,7 +536,7 @@ export const NewsDetailView: Component = () => {
                 class="action-btn"
                 onClick={async () => {
                   if (!requireAuthOrRedirect()) return;
-                  const reason = window.prompt(t('report_reason'));
+                  const reason = await promptDialog(t('report_reason'));
                   if (reason !== null) {
                     try {
                       const client = getClient();

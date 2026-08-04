@@ -14,6 +14,7 @@ import { FormattedText } from '../components/FormattedText';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
 import { getPayloadAttachments, buildOptimisticChatPayload, safeAttachmentName } from '../lib/payload';
 import { EmojiPicker } from '../components/EmojiPicker';
+import { confirmDialog } from '../components/Dialogs';
 import { buildEncryptedDm, buildEncryptedDmEditEnvelope, decryptDmMessage, coverPeerDevices, type DmDisplay } from '../lib/dmCrypto';
 import { encryptAndUploadFile, revokePreviewUrls } from '../lib/mediaCrypto';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
@@ -418,7 +419,7 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   const handleDeleteDm = async (msg: any) => {
     // Deleting is likewise a verified-wallet feature — prompt instead of failing.
     if (!isRegistered()) { setShowVerifyPrompt(true); return; }
-    if (!window.confirm(t('chat_delete_confirm'))) return;
+    if (!(await confirmDialog(t('chat_delete_confirm')))) return;
     try {
       const client = getClient();
       await client.deleteDm(props.peerAddress, msgIdToHex(msg.msg_id));

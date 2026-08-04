@@ -13,6 +13,7 @@ import { t, setLanguage, currentLanguage, SUPPORTED_LANGUAGES } from '../i18n/in
 import { getTheme, setTheme, getCustomTheme, setCustomTheme, clearCustomTheme, getDesignStyle, setDesignStyle, DESIGN_STYLES, type Theme, type CustomTheme, type DesignStyle, getColorScheme, setColorScheme, COLOR_SCHEMES, type ColorScheme } from '../lib/theme';
 import { getSetting, setSetting, currentCurrency, setCurrentCurrency } from '../lib/settings';
 import { switchNode } from '../lib/api';
+import { promptDialog } from '../components/Dialogs';
 import { SUPPORTED_CURRENCIES } from '../lib/prices';
 
 const CURRENCY_LABELS: Record<string, string> = {
@@ -96,7 +97,7 @@ const PinLockSection: Component = () => {
           class="settings-wallet-btn"
           style="color: var(--color-error)"
           onClick={async () => {
-            const pin = prompt(t('pin_enter_current') || 'Enter current PIN to remove:');
+            const pin = await promptDialog(t('pin_enter_current') || 'Enter current PIN to remove:', { password: true });
             if (!pin) return;
             setStatus('');
             try {

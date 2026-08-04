@@ -23,6 +23,7 @@
     "clipboard-manager:allow-read-image",
     "clipboard-manager:allow-read-text",
     "dialog:allow-save",
+    "dialog:allow-message",
     "fs:allow-write-text-file",
     "window-state:default",
     "window-state:allow-restore-state",

@@ -239,6 +239,7 @@
   "loading": "Cargando...",
   "confirm_delete": "¿Estás seguro de que quieres eliminar esto?",
   "cancel": "Cancelar",
+  "dialog_ok": "Aceptar",
   "save": "Guardar",
   "done": "Hecho",
   "anchor_verified": "Verificado",
