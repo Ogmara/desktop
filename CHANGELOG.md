@@ -5,6 +5,13 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.50.4] - 2026-08-16
+
+### Fixed
+
+- **Private channels and DMs could go blank in the sidebar after the connected l2-node restarted (e.g. a version upgrade), while the app stayed open.** The desktop app routes all non-local `fetch()` calls through `@tauri-apps/plugin-http` (`src/index.tsx`, bypasses webview CORS) — a pooled Rust/reqwest HTTP client, separate from the WebSocket connection. When the underlying node process restarts, the WebSocket correctly detects the drop and reconnects with a fresh auth handshake, but the pooled HTTP connection can keep failing REST calls for a while after the node is back up and healthy. The channel-list and DM-conversation-list `createResource` fetchers in `Sidebar.tsx` treated any REST failure as "empty" (`catch { return []; }`), so a transient fetch error blanked the sidebar to "no channels / no DMs" — including channels the user owns or is a member of — even though nothing was actually lost server-side. Restarting the app (which tears down and recreates the connection pool) always fixed it immediately, which was the tell.
+  Fixed by caching the last-known-good channel/DM lists per (node, wallet) in `localStorage` and falling back to the cache instead of an empty list on fetch failure, mirroring a pattern the web app already used for its channel list. The cache is scoped by wallet address as well as node — private channel membership and DM peers are wallet-specific, so a cache keyed on node alone could otherwise show a previously-connected wallet's channels/DMs to a newly-connected different wallet on the same node+browser profile until the next successful refetch.
+
 ## [1.50.3] - 2026-08-04
 
 ### Fixed

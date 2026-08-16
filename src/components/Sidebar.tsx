@@ -16,8 +16,41 @@ import {
   type DragEvent,
 } from '@thisbeyond/solid-dnd';
 import { t } from '../i18n/init';
-import { getClient } from '../lib/api';
+import { getClient, getCurrentNodeUrl } from '../lib/api';
 import { onWsEvent } from '../lib/ws';
+
+// Per-node cache of the last-seen channel/DM lists. A REST fetch failure
+// (e.g. the desktop app's pooled Tauri HTTP connection not recovering
+// cleanly after the underlying l2-node process restarts, while the
+// WebSocket reconnects fine) must NOT blank the sidebar to "no channels" /
+// "no conversations" while the node is otherwise healthy — that reads as
+// data loss. Fall back to the last-known-good list instead; the periodic
+// refetch below keeps retrying until a request actually succeeds.
+const CHANNELS_CACHE_PREFIX = 'channelsCache:';
+const DM_CACHE_PREFIX = 'dmConvsCache:';
+// Keyed by node AND wallet: channel visibility (private channels) and DM
+// conversations are both wallet-specific, so a cache keyed on node alone
+// would leak the previous wallet's private channels/DMs into a freshly
+// connected different wallet's sidebar (same node, same browser profile)
+// until the first successful refetch overwrites it.
+function channelsCacheKey(): string {
+  try { return CHANNELS_CACHE_PREFIX + (getCurrentNodeUrl() || '') + ':' + (walletAddress() || ''); } catch { return CHANNELS_CACHE_PREFIX; }
+}
+function dmCacheKey(): string {
+  try { return DM_CACHE_PREFIX + (getCurrentNodeUrl() || '') + ':' + (walletAddress() || ''); } catch { return DM_CACHE_PREFIX; }
+}
+function getCachedChannels(): any[] {
+  try { const raw = localStorage.getItem(channelsCacheKey()); return raw ? JSON.parse(raw) : []; } catch { return []; }
+}
+function setCachedChannels(channels: any[]): void {
+  try { localStorage.setItem(channelsCacheKey(), JSON.stringify(channels)); } catch { /* quota/private mode — ignore */ }
+}
+function getCachedDmConvs(): any[] {
+  try { const raw = localStorage.getItem(dmCacheKey()); return raw ? JSON.parse(raw) : []; } catch { return []; }
+}
+function setCachedDmConvs(convs: any[]): void {
+  try { localStorage.setItem(dmCacheKey(), JSON.stringify(convs)); } catch { /* quota/private mode — ignore */ }
+}
 import { coverChannelMembers, rotateChannelKey } from '../lib/channelCrypto';
 import { authStatus, walletAddress } from '../lib/auth';
 import { navigate, route } from '../lib/router';
@@ -252,9 +285,16 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
             });
           }
         }
+        setCachedDmConvs(resp.conversations);
         return resp.conversations;
-      } catch { return []; }
+      } catch {
+        // On failure keep showing the cached list rather than emptying the
+        // sidebar — a transient fetch error (e.g. right after a node
+        // restart) is not the same thing as "no conversations".
+        return getCachedDmConvs();
+      }
     },
+    { initialValue: getCachedDmConvs() },
   );
 
   // Conversations hidden via "Delete conversation" — filtered out until the
@@ -481,13 +521,18 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       try {
         const client = getClient();
         const resp = await client.listChannels(1, 50);
+        setCachedChannels(resp.channels);
         return resp.channels;
       } catch {
-        return [];
+        // On failure keep showing the cached list rather than emptying the
+        // sidebar (which would also drop private/joined channels the user
+        // owns or is a member of).
+        return getCachedChannels();
       } finally {
         setHasLoadedOnce(true);
       }
     },
+    { initialValue: getCachedChannels() },
   );
 
   // Sync joined set with API data whenever the channel list refreshes.
