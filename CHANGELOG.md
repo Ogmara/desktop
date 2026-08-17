@@ -5,6 +5,29 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.51.0] - 2026-08-17
+
+### Security
+
+- **Cross-network envelope replay (l2-node final pre-mainnet audit C1) —
+  coordinated wire-format cutover.** Bumped `@ogmara/sdk` to 0.42.0, which
+  binds every signed envelope's msg_id/signature to the target Klever
+  network — matches l2-node 0.83.0's `PROTOCOL_VERSION` 1 → 2 hard cutover.
+  No app-level call-site changes needed for the normal `OgmaraClient` path;
+  `src/lib/deviceEnc.ts`'s two direct `buildDeviceEncBinding`/
+  `buildDeviceEncRevoke` calls (these build wallet-authored envelopes
+  outside `OgmaraClient`) now pass the new required `network` parameter via
+  the SDK's new `OgmaraClient.getNetwork()`.
+- **Breaking:** hard wire-format cutover — this build only works against
+  l2-node 0.83.0+; a pre-0.83.0 node rejects every envelope it sends. Ships
+  together with matching bumps in `web` and `mobile`.
+
+### Fixed
+
+- `npm audit`: bumped a transitive `nanoid` (via `vite` → `postcss`,
+  build-tooling only, not shipped) past a high-severity infinite-loop
+  advisory (GHSA-2v37-7h3g-55p8) via `npm audit fix`.
+
 ## [1.50.4] - 2026-08-16
 
 ### Fixed
