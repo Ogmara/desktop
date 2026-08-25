@@ -5,6 +5,28 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.52.0] - 2026-08-25
+
+### Fixed
+
+- **The news feed never updated live.** l2-node 0.119.0 fixes the node half of
+  this (it previously broadcast no news envelope over the WebSocket at all);
+  this is the client half. The feed now refetches when a news envelope arrives
+  over the WS, instead of only when something forced a REST refetch.
+
+  It refetches rather than splicing the envelope into the list: a WS frame is a
+  raw envelope with a MessagePack payload, while the list holds node-decoded
+  posts, so the two are not the same shape. Refetching also covers edits,
+  deletes, reactions and reposts through one code path, and news volume is far
+  too low for the extra request to matter.
+
+  Requires l2-node 0.119.0+ to have any effect; against an older node the
+  behaviour is unchanged rather than broken.
+
+### Changed
+
+- Bumped `@ogmara/sdk` to 0.48.0 for `isNewsEnvelope`.
+
 ## [1.51.0] - 2026-08-17
 
 ### Security
