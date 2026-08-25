@@ -15,6 +15,7 @@ import { navigate, routeParam } from '../lib/router';
 import { FormattedText } from '../components/FormattedText';
 import { VideoAttachment } from '../components/VideoAttachment';
 import { MediaImage } from '../components/MediaImage';
+import { openLightbox } from '../components/ImageLightbox';
 import { getPayloadContent, getPayloadTitle, getPayloadAttachments, decodePayload, safeAttachmentName } from '../lib/payload';
 import { MediaUpload, type MediaAttachment } from '../components/MediaUpload';
 import { MentionPopover } from '../components/MentionPopover';
@@ -83,6 +84,7 @@ const CommentCard: Component<{ comment: any; onReply: (msgId: string, author: st
                   <MediaImage
                     src={getClient().getMediaUrl(att.thumbnail_cid || att.cid)}
                     href={mediaUrl}
+                    onOpen={() => openLightbox(mediaUrl, safeAttachmentName(att))}
                     alt={att.filename || ''}
                     class="comment-attachment-img"
                   />
@@ -446,6 +448,7 @@ export const NewsDetailView: Component = () => {
                       <MediaImage
                         src={getClient().getMediaUrl(att.thumbnail_cid || att.cid)}
                         href={mediaUrl}
+                        onOpen={() => openLightbox(mediaUrl, safeAttachmentName(att))}
                         alt={att.filename || ''}
                         class="detail-attachment-img"
                       />
