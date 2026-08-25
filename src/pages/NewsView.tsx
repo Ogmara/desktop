@@ -20,6 +20,8 @@ import { resolveProfile } from '../lib/profile';
 import { ensureHexMsgId, formatLocalTime, truncateAddress } from '../lib/news-utils';
 import { ReactionPicker } from '../components/ReactionPicker';
 import { buildNewsShareUrl, copyToClipboard } from '../lib/share';
+import { onWsEvent } from '../lib/ws';
+import { isNewsEnvelope } from '@ogmara/sdk';
 
 type FeedMode = 'global' | 'following';
 
@@ -59,7 +61,7 @@ export const NewsView: Component = () => {
   const showFollowingAnonPrompt = () =>
     feedMode() === 'following' && authStatus() !== 'ready';
 
-  const [news] = createResource(
+  const [news, { refetch: refetchNews }] = createResource(
     () => ({ mode: feedMode(), authed: authStatus() === 'ready' }),
     async ({ mode, authed }) => {
       try {
@@ -85,6 +87,24 @@ export const NewsView: Component = () => {
         return [];
       }
     },
+  );
+
+  // Live feed updates. l2-node 0.119.0+ broadcasts news envelopes over the WS;
+  // before that the node pushed nothing for news at all, so the feed only
+  // refreshed when something forced a REST refetch — in practice, navigating
+  // away from the feed and back.
+  //
+  // Refetch rather than splicing the envelope into the list: the WS frame is a
+  // raw envelope (msgpack payload) while this list holds node-decoded posts, so
+  // they are not the same shape. Refetching also picks up edits, deletes,
+  // reactions and reposts with one code path, and news volume is far too low
+  // for the extra request to matter.
+  onCleanup(
+    onWsEvent((event) => {
+      if (event.type !== 'message') return;
+      if (!isNewsEnvelope((event as { envelope?: unknown }).envelope)) return;
+      void refetchNews();
+    }),
   );
 
   const handleNewPost = () => {

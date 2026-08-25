@@ -5,6 +5,17 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.52.1] - 2026-08-25
+
+### Fixed
+
+- **Ships the live-news-update code that 1.52.0 claimed.** The 1.52.0 commit
+  staged only `CHANGELOG.md` and `package.json` — the `NewsView.tsx` change was
+  written to the working tree but never added, so the release carried the
+  changelog entry without the implementation. Desktop consequently still only
+  refreshed the news feed on navigation while web and mobile updated live.
+  The entry under 1.52.0 describes this change and is accurate as of 1.52.1.
+
 ## [1.52.0] - 2026-08-25
 
 ### Fixed
