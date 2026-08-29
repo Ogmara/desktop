@@ -5,6 +5,22 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.53.1] - 2026-08-28
+
+### Fixed
+
+- **Reposts rendered as empty cards** in the feed, a repost's own permalink,
+  bookmarks, and a user's profile posts — header and action row, no title,
+  no body, no link back to what was reposted. A `NewsRepost` payload only
+  carries `{original_id, original_author, comment}`; the code decoded it the
+  same way as a `NewsPost` (`title`/`content`), which is always empty for
+  this type. Requires l2-node 0.122.1, which now enriches repost items with
+  `original_*` preview fields — `NewsCard`, `NewsDetailView`, `BookmarkCard`,
+  and the profile posts list all gained a quote-card branch that renders the
+  reposted post's author/title/content (or "Original post unavailable" /
+  "Message deleted" when it can't be shown), plus the repost's own optional
+  quote-comment text.
+
 ## [1.53.0] - 2026-08-25
 
 ### Fixed

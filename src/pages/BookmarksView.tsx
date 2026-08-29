@@ -24,6 +24,7 @@ const BookmarkCard: Component<{ post: any; onRemoved: () => void }> = (props) =>
   const displayName = () => profile().display_name || truncateAddress(props.post.author);
 
   const msgId = () => ensureHexMsgId(props.post.msg_id);
+  const isRepost = () => props.post.msg_type === 'NewsRepost';
 
   const handleRemoveBookmark = async (e: MouseEvent) => {
     e.stopPropagation();
@@ -69,12 +70,38 @@ const BookmarkCard: Component<{ post: any; onRemoved: () => void }> = (props) =>
           </button>
         </div>
       </div>
-      <Show when={getPayloadTitle(props.post.payload)}>
-        <h3 class="bookmark-title">{getPayloadTitle(props.post.payload)}</h3>
+      <Show when={isRepost()}>
+        <Show when={props.post.repost_comment}>
+          <div class="bookmark-body"><FormattedText content={props.post.repost_comment} /></div>
+        </Show>
+        <Show
+          when={props.post.original_available}
+          fallback={<div class="news-repost-quote-unavailable">{t('news_original_unavailable')}</div>}
+        >
+          <div class="news-repost-quote" onClick={(e) => { e.stopPropagation(); navigate(`/news/${props.post.original_id}`); }}>
+            <div class="news-repost-quote-body">
+              <div class="news-repost-quote-author">{truncateAddress(props.post.original_author ?? '')}</div>
+              <Show when={props.post.original_deleted}>
+                <div class="news-repost-quote-unavailable">{t('message_deleted')}</div>
+              </Show>
+              <Show when={!props.post.original_deleted}>
+                <Show when={props.post.original_title}>
+                  <div class="news-repost-quote-title">{props.post.original_title}</div>
+                </Show>
+                <div class="news-repost-quote-content">{props.post.original_content}</div>
+              </Show>
+            </div>
+          </div>
+        </Show>
       </Show>
-      <div class="bookmark-body">
-        <FormattedText content={getPayloadContent(props.post.payload)} />
-      </div>
+      <Show when={!isRepost()}>
+        <Show when={getPayloadTitle(props.post.payload)}>
+          <h3 class="bookmark-title">{getPayloadTitle(props.post.payload)}</h3>
+        </Show>
+        <div class="bookmark-body">
+          <FormattedText content={getPayloadContent(props.post.payload)} />
+        </div>
+      </Show>
       <div class="bookmark-footer">
         <span class="bookmark-view-thread">{t('news_view_thread')} →</span>
       </div>
@@ -211,6 +238,18 @@ export const BookmarksView: Component = () => {
           font-weight: 500;
         }
         .bookmarks-empty { text-align: center; color: var(--color-text-secondary); padding: var(--spacing-xl); }
+        .news-repost-quote {
+          display: flex;
+          gap: var(--spacing-sm);
+          padding: var(--spacing-sm) var(--spacing-md);
+          border: 1px solid var(--color-border);
+          border-radius: var(--radius-md);
+        }
+        .news-repost-quote-body { min-width: 0; }
+        .news-repost-quote-title { font-weight: 600; color: var(--color-text-primary); }
+        .news-repost-quote-author { font-size: var(--font-size-xs); color: var(--color-text-secondary); margin-bottom: 2px; }
+        .news-repost-quote-content { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+        .news-repost-quote-unavailable { font-size: var(--font-size-sm); color: var(--color-text-secondary); font-style: italic; }
       `}</style>
     </div>
   );

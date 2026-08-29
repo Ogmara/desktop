@@ -28,6 +28,7 @@ import { resolveProfile, type CachedProfile } from '../lib/profile';
 import { ensureHexMsgId, formatLocalTime, truncateAddress } from '../lib/news-utils';
 import { ReactionPicker } from '../components/ReactionPicker';
 import { buildNewsShareUrl, copyToClipboard } from '../lib/share';
+import { MSG_TYPE_NAME } from '@ogmara/sdk';
 
 /** Single comment in the thread. */
 const CommentCard: Component<{ comment: any; onReply: (msgId: string, author: string) => void }> = (props) => {
@@ -133,6 +134,19 @@ export const NewsDetailView: Component = () => {
       return null;
     }
   });
+
+  // `Envelope.msg_type` is typed `number` (the signed wire envelope's
+  // representation), but the node's REST responses serialize it as the
+  // Rust enum's variant NAME string (e.g. "NewsRepost") — see @ogmara/sdk's
+  // `isNewsEnvelope`/`MSG_TYPE_NAME` doc comments for the same duality.
+  // Normalize through `MSG_TYPE_NAME` so this works regardless of which
+  // representation actually arrives.
+  const msgTypeName = () => {
+    const t = postData()?.post?.msg_type;
+    if (t === undefined) return undefined;
+    return typeof t === 'number' ? MSG_TYPE_NAME[t] : (t as unknown as string);
+  };
+  const isRepost = () => msgTypeName() === 'NewsRepost';
 
   // Post author profile
   const [postProfile, setPostProfile] = createSignal<CachedProfile>({});
@@ -430,13 +444,50 @@ export const NewsDetailView: Component = () => {
             </span>
           </div>
 
-          <Show when={getPayloadTitle(postData()!.post.payload)}>
-            <h2 class="detail-title">{getPayloadTitle(postData()!.post.payload)}</h2>
+          <Show when={isRepost()}>
+            <Show when={postData()!.post.repost_comment}>
+              <div class="news-repost-comment"><FormattedText content={postData()!.post.repost_comment ?? ''} /></div>
+            </Show>
+            <Show
+              when={postData()!.post.original_available}
+              fallback={<div class="news-repost-quote-unavailable">{t('news_original_unavailable')}</div>}
+            >
+              <div
+                class="news-repost-quote"
+                onClick={() => navigate(`/news/${postData()!.post.original_id}`)}
+              >
+                <Show when={postData()!.post.original_attachment?.mime_type?.startsWith('image/')}>
+                  <img
+                    class="news-repost-quote-thumb"
+                    src={getClient().getMediaUrl(postData()!.post.original_attachment!.thumbnail_cid || postData()!.post.original_attachment!.cid)}
+                    alt=""
+                    loading="lazy"
+                  />
+                </Show>
+                <div class="news-repost-quote-body">
+                  <div class="news-repost-quote-author">{truncateAddress(postData()!.post.original_author ?? '')}</div>
+                  <Show when={postData()!.post.original_deleted}>
+                    <div class="news-repost-quote-unavailable">{t('message_deleted')}</div>
+                  </Show>
+                  <Show when={!postData()!.post.original_deleted}>
+                    <Show when={postData()!.post.original_title}>
+                      <div class="news-repost-quote-title">{postData()!.post.original_title}</div>
+                    </Show>
+                    <div class="news-repost-quote-content">{postData()!.post.original_content}</div>
+                  </Show>
+                </div>
+              </div>
+            </Show>
           </Show>
-          <div class="detail-body">
-            <FormattedText content={getPayloadContent(postData()!.post.payload)} />
-          </div>
-          <Show when={getPayloadAttachments(postData()!.post.payload).length > 0}>
+          <Show when={!isRepost()}>
+            <Show when={getPayloadTitle(postData()!.post.payload)}>
+              <h2 class="detail-title">{getPayloadTitle(postData()!.post.payload)}</h2>
+            </Show>
+            <div class="detail-body">
+              <FormattedText content={getPayloadContent(postData()!.post.payload)} />
+            </div>
+          </Show>
+          <Show when={!isRepost() && getPayloadAttachments(postData()!.post.payload).length > 0}>
             <div class="detail-attachments">
               <For each={getPayloadAttachments(postData()!.post.payload)}>
                 {(att) => {
@@ -816,6 +867,33 @@ export const NewsDetailView: Component = () => {
         .comment-deleted-text { font-style: italic; color: var(--color-text-secondary); opacity: 0.6; }
         .detail-title { font-size: var(--font-size-xl); margin-bottom: var(--spacing-sm); }
         .detail-body { line-height: 1.7; margin-bottom: var(--spacing-md); font-size: var(--font-size-md); }
+        .news-repost-comment {
+          margin-bottom: var(--spacing-md);
+          font-size: var(--font-size-md);
+          white-space: pre-wrap;
+        }
+        .news-repost-quote {
+          display: flex;
+          gap: var(--spacing-sm);
+          padding: var(--spacing-sm) var(--spacing-md);
+          margin-bottom: var(--spacing-md);
+          border: 1px solid var(--color-border);
+          border-radius: var(--radius-md);
+          cursor: pointer;
+        }
+        .news-repost-quote:hover { border-color: var(--color-accent-primary); }
+        .news-repost-quote-thumb {
+          width: 56px;
+          height: 56px;
+          object-fit: cover;
+          border-radius: var(--radius-sm);
+          flex-shrink: 0;
+        }
+        .news-repost-quote-body { min-width: 0; }
+        .news-repost-quote-title { font-weight: 600; color: var(--color-text-primary); }
+        .news-repost-quote-author { font-size: var(--font-size-xs); color: var(--color-text-secondary); margin-bottom: 2px; }
+        .news-repost-quote-content { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+        .news-repost-quote-unavailable { font-size: var(--font-size-sm); color: var(--color-text-secondary); font-style: italic; }
         .detail-attachments, .comment-attachments {
           display: flex;
           flex-wrap: wrap;

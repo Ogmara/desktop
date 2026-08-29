@@ -188,6 +188,44 @@ export const NewsView: Component = () => {
         }
         .news-comment-context:hover { color: var(--color-accent-primary); }
         .news-comment-parent { font-weight: 600; color: var(--color-text-primary); }
+        .news-repost-note {
+          font-size: var(--font-size-xs);
+          color: var(--color-text-secondary);
+          margin-bottom: var(--spacing-sm);
+        }
+        .news-repost-comment {
+          margin-bottom: var(--spacing-sm);
+          white-space: pre-wrap;
+        }
+        .news-repost-quote {
+          display: flex;
+          gap: var(--spacing-sm);
+          padding: var(--spacing-sm) var(--spacing-md);
+          border: 1px solid var(--color-border);
+          border-radius: var(--radius-md);
+          cursor: pointer;
+        }
+        .news-repost-quote:hover { border-color: var(--color-accent-primary); }
+        .news-repost-quote-thumb {
+          width: 48px;
+          height: 48px;
+          object-fit: cover;
+          border-radius: var(--radius-sm);
+          flex-shrink: 0;
+        }
+        .news-repost-quote-body { min-width: 0; }
+        .news-repost-quote-title { font-weight: 600; color: var(--color-text-primary); }
+        .news-repost-quote-author { font-size: var(--font-size-xs); color: var(--color-text-secondary); margin-bottom: 2px; }
+        .news-repost-quote-content {
+          font-size: var(--font-size-sm);
+          color: var(--color-text-secondary);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+        }
+        .news-repost-quote-unavailable { font-size: var(--font-size-sm); color: var(--color-text-secondary); font-style: italic; }
         .news-card {
           background: var(--color-bg-secondary);
           border: 1px solid var(--color-border);
@@ -576,6 +614,12 @@ const NewsCard: Component<{ post: any }> = (props) => {
 
   const postTags = () => decoded().tags ?? [];
   const isComment = () => props.post.msg_type === 'NewsComment';
+  // A NewsRepost payload only carries {original_id, original_author, comment}
+  // — no title/content — so `decoded()` above is meaningless for this type.
+  // The l2-node enriches repost feed items with original_* / repost_comment
+  // fields (mirroring the parent_* enrichment for comments); render those
+  // instead of the raw (empty) decoded payload.
+  const isRepost = () => props.post.msg_type === 'NewsRepost';
 
   return (
     <article class="news-card">
@@ -623,7 +667,42 @@ const NewsCard: Component<{ post: any }> = (props) => {
       <Show when={props.post.deleted}>
         <div class="news-card-body news-deleted-text">{t('message_deleted')}</div>
       </Show>
-      <Show when={!props.post.deleted}>
+      <Show when={!props.post.deleted && isRepost()}>
+        <Show when={props.post.repost_comment}>
+          <div class="news-repost-comment"><FormattedText content={props.post.repost_comment} /></div>
+        </Show>
+        <Show
+          when={props.post.original_available}
+          fallback={<div class="news-repost-quote-unavailable">{t('news_original_unavailable')}</div>}
+        >
+          <div
+            class="news-repost-quote"
+            onClick={() => navigate(`/news/${props.post.original_id}`)}
+          >
+            <Show when={props.post.original_attachment?.mime_type?.startsWith('image/')}>
+              <img
+                class="news-repost-quote-thumb"
+                src={getClient().getMediaUrl(props.post.original_attachment.thumbnail_cid || props.post.original_attachment.cid)}
+                alt=""
+                loading="lazy"
+              />
+            </Show>
+            <div class="news-repost-quote-body">
+              <div class="news-repost-quote-author">{truncateAddress(props.post.original_author ?? '')}</div>
+              <Show when={props.post.original_deleted}>
+                <div class="news-repost-quote-unavailable">{t('message_deleted')}</div>
+              </Show>
+              <Show when={!props.post.original_deleted}>
+                <Show when={props.post.original_title}>
+                  <div class="news-repost-quote-title">{props.post.original_title}</div>
+                </Show>
+                <div class="news-repost-quote-content">{props.post.original_content}</div>
+              </Show>
+            </div>
+          </div>
+        </Show>
+      </Show>
+      <Show when={!props.post.deleted && !isRepost()}>
         <Show when={decoded().title}>
           <h3 class="news-title" onClick={() => navigate(`/news/${ensureHexMsgId(props.post.msg_id)}`)}>
             {decoded().title}
@@ -648,7 +727,7 @@ const NewsCard: Component<{ post: any }> = (props) => {
           <FormattedText content={decoded().content} />
         </div>
       </Show>
-      <Show when={(decoded().attachments ?? []).length > 0}>
+      <Show when={!isRepost() && (decoded().attachments ?? []).length > 0}>
         <div class="news-attachments">
           <For each={decoded().attachments!}>
             {(att) => {

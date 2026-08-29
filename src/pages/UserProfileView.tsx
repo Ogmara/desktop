@@ -405,14 +405,40 @@ export const UserProfileView: Component<UserProfileProps> = (props) => {
           fallback={<div class="profile-no-posts">{t('profile_no_posts')}</div>}
         >
           <For each={posts()}>
-            {(post) => (
+            {(post: any) => (
               <article class="profile-post-card">
                 <div class="profile-post-time">
                   {new Date(post.timestamp).toLocaleDateString()}
                 </div>
-                <div class="profile-post-body">
-                  <FormattedText content={getPayloadContent(post.payload)} />
-                </div>
+                <Show when={post.msg_type === 'NewsRepost'}>
+                  <Show when={post.repost_comment}>
+                    <div class="profile-post-body"><FormattedText content={post.repost_comment} /></div>
+                  </Show>
+                  <Show
+                    when={post.original_available}
+                    fallback={<div class="news-repost-quote-unavailable">{t('news_original_unavailable')}</div>}
+                  >
+                    <div class="news-repost-quote" onClick={() => navigate(`/news/${post.original_id}`)}>
+                      <div class="news-repost-quote-body">
+                        <div class="news-repost-quote-author">{truncateAddress(post.original_author ?? '')}</div>
+                        <Show when={post.original_deleted}>
+                          <div class="news-repost-quote-unavailable">{t('message_deleted')}</div>
+                        </Show>
+                        <Show when={!post.original_deleted}>
+                          <Show when={post.original_title}>
+                            <div class="news-repost-quote-title">{post.original_title}</div>
+                          </Show>
+                          <div class="news-repost-quote-content">{post.original_content}</div>
+                        </Show>
+                      </div>
+                    </div>
+                  </Show>
+                </Show>
+                <Show when={post.msg_type !== 'NewsRepost'}>
+                  <div class="profile-post-body">
+                    <FormattedText content={getPayloadContent(post.payload)} />
+                  </div>
+                </Show>
               </article>
             )}
           </For>
@@ -533,6 +559,19 @@ export const UserProfileView: Component<UserProfileProps> = (props) => {
         .profile-post-time { font-size: var(--font-size-xs); color: var(--color-text-secondary); margin-bottom: var(--spacing-xs); }
         .profile-post-body { line-height: 1.6; }
         .profile-no-posts { text-align: center; color: var(--color-text-secondary); padding: var(--spacing-xl); }
+        .news-repost-quote {
+          display: flex;
+          gap: var(--spacing-sm);
+          padding: var(--spacing-sm) var(--spacing-md);
+          border: 1px solid var(--color-border);
+          border-radius: var(--radius-md);
+          cursor: pointer;
+        }
+        .news-repost-quote-body { min-width: 0; }
+        .news-repost-quote-title { font-weight: 600; color: var(--color-text-primary); }
+        .news-repost-quote-author { font-size: var(--font-size-xs); color: var(--color-text-secondary); margin-bottom: 2px; }
+        .news-repost-quote-content { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+        .news-repost-quote-unavailable { font-size: var(--font-size-sm); color: var(--color-text-secondary); font-style: italic; }
         .profile-setup-hint {
           padding: var(--spacing-sm) var(--spacing-md);
           background: var(--color-bg-tertiary);
