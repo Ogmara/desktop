@@ -607,7 +607,6 @@ const NewsCard: Component<{ post: any }> = (props) => {
 
   // Decode payload once, memoize for title/content/tags/attachments
   const decoded = createMemo(() => {
-    if (typeof props.post.payload === 'string') return { content: props.post.payload as string };
     try { return decodePayload(props.post.payload); }
     catch { return { content: '' }; }
   });

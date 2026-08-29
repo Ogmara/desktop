@@ -5,6 +5,24 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.53.2] - 2026-08-29
+
+### Fixed
+
+- **Editing an existing news post never restored its tags or attachments.**
+  `ComposeView.tsx` decoded `post.payload` via `tryDecodeBase64Payload()`, on
+  the assumption it was a base64 string — that assumption was always wrong;
+  the L2 node sends `payload` as a raw byte array (`number[]`), which this
+  file's own `getPayloadTitle`/`getPayloadContent` calls one line above
+  already handled correctly. Surfaced by the `@ogmara/sdk` 0.51.0 type fix
+  (`Envelope.payload` is now correctly typed as `number[]`, not `string`) —
+  this file no longer compiled once the lie was corrected. Now decodes
+  `payload` directly via `decodePayload()`, same as the rest of the file.
+- Removed a dead `typeof props.post.payload === 'string'` branch in
+  `NewsView.tsx`'s post-decode memo, left over from the same wrong mental
+  model — `post` always comes from a real API fetch, never a locally
+  constructed string-payload placeholder, so the branch never ran.
+
 ## [1.53.1] - 2026-08-28
 
 ### Fixed
