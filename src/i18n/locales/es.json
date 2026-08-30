@@ -162,6 +162,7 @@
   "channel_pin": "Fijar",
   "channel_unpin": "Desfijar",
   "channel_invite": "Invitar",
+  "channel_invite_sent": "Invitación enviada",
   "channel_reply": "Responder",
   "channel_reply_preview": "Respondiendo a",
   "governance_title": "Gobernanza",

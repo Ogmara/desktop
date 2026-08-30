@@ -9,7 +9,7 @@ import { getClient } from '../lib/api';
 import { avatarUrl } from '../lib/ownAvatar';
 import { authStatus, walletAddress, l2Address, getSigner } from '../lib/auth';
 import { kleverAvailable, registerUser, addressToPubkeyHex } from '../lib/klever';
-import { navigate } from '../lib/router';
+import { navigate, goBack } from '../lib/router';
 import { FormattedText } from '../components/FormattedText';
 import { getPayloadContent } from '../lib/payload';
 
@@ -237,6 +237,7 @@ export const UserProfileView: Component<UserProfileProps> = (props) => {
 
   return (
     <div class="profile-view">
+      <button class="profile-back-btn" onClick={() => goBack('/chat')}>← {t('nav_back')}</button>
       <div class="profile-header">
         <div class="profile-avatar">
           <Show when={profile()?.user?.avatar_cid} fallback={<div class="avatar-placeholder">{props.address.slice(3, 5).toUpperCase()}</div>}>
@@ -447,6 +448,14 @@ export const UserProfileView: Component<UserProfileProps> = (props) => {
 
       <style>{`
         .profile-view { padding: var(--spacing-lg); overflow-y: auto; height: 100%; max-width: 700px; }
+        .profile-back-btn {
+          font-size: var(--font-size-sm);
+          color: var(--color-text-secondary);
+          padding: var(--spacing-xs) var(--spacing-sm);
+          border-radius: var(--radius-md);
+          margin-bottom: var(--spacing-sm);
+        }
+        .profile-back-btn:hover { background: var(--color-bg-tertiary); }
         .profile-header { display: flex; gap: var(--spacing-lg); margin-bottom: var(--spacing-lg); }
         .profile-avatar { flex-shrink: 0; }
         .avatar-placeholder {

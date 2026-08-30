@@ -241,6 +241,7 @@
   "channel_pin": "Pin",
   "channel_unpin": "Unpin",
   "channel_invite": "Invite",
+  "channel_invite_sent": "Invitation sent",
   "channel_reply": "Reply",
   "channel_reply_preview": "Replying to",
   "anchor_verified": "Verified",

@@ -91,7 +91,7 @@ export const ChannelCreateView: Component = () => {
   return (
     <div class="channel-create-view">
       <div class="create-header">
-        <button class="create-back" onClick={goBack}>← {t('nav_back')}</button>
+        <button class="create-back" onClick={() => goBack()}>← {t('nav_back')}</button>
         <h2>{t('channel_create')}</h2>
       </div>
 

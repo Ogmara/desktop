@@ -162,6 +162,7 @@
   "channel_pin": "ピン留め",
   "channel_unpin": "ピン解除",
   "channel_invite": "招待",
+  "channel_invite_sent": "招待を送信しました",
   "channel_reply": "返信",
   "channel_reply_preview": "返信先",
   "governance_title": "ガバナンス",

@@ -63,7 +63,7 @@ import { NoNodeLandingPage } from './components/NoNodeLandingPage';
 import { activeNodeUrl } from './lib/api';
 import { ImageLightbox } from './components/ImageLightbox';
 import { DialogHost } from './components/Dialogs';
-import { route, navigate } from './lib/router';
+import { route, navigate, goBack } from './lib/router';
 
 type AppState = 'loading' | 'locked' | 'unlocked';
 
@@ -321,7 +321,7 @@ export const App: Component = () => {
                 && ['news', 'bookmarks', 'search', 'settings', 'wallet', 'token-portfolio', 'notifications', 'compose', 'user', 'follow-list'].includes(route().view)}>
                 <div style="display:flex; align-items:center; padding:8px 12px; background:var(--color-bg-secondary); border-bottom:1px solid var(--color-border)">
                   <button style="width:38px; height:38px; border-radius:50%; color:var(--color-text-secondary); display:flex; align-items:center; justify-content:center; cursor:pointer"
-                    onClick={() => showMobileList()}>
+                    onClick={() => goBack('/chat')}>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><polyline points="12 19 5 12 12 5"/></svg>
                   </button>
                 </div>

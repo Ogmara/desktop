@@ -154,14 +154,29 @@ window.addEventListener('hashchange', () => {
 
 export { route };
 
+// Counts in-app navigations since this page load, so goBack() can tell a real
+// "came from elsewhere in the app" case apart from a fresh deep link (where
+// window.history has entries, but none of them are ours to return to).
+let navCount = 0;
+
 /** Navigate to a new route. */
 export function navigate(path: string): void {
+  navCount++;
   window.location.hash = path.startsWith('/') ? path : `/${path}`;
 }
 
-/** Navigate back in browser history. */
-export function goBack(): void {
-  window.history.back();
+/**
+ * Navigate back to wherever the user actually came from within the app.
+ * Falls back to `fallback` when there's no in-app history to return to
+ * (e.g. the view was opened via a deep link / page reload).
+ */
+export function goBack(fallback: string = '/chat'): void {
+  if (navCount > 0) {
+    navCount--;
+    window.history.back();
+  } else {
+    navigate(fallback);
+  }
 }
 
 /** Get a route parameter. */

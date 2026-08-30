@@ -7,7 +7,7 @@ import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { authStatus, walletAddress, getSigner, isRegistered } from '../lib/auth';
 import { onWsEvent } from '../lib/ws';
-import { navigate } from '../lib/router';
+import { navigate, goBack } from '../lib/router';
 import { showMobileList } from '../lib/mobile-nav';
 import { isModernStyle } from '../lib/theme';
 import { FormattedText } from '../components/FormattedText';
@@ -446,7 +446,7 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
       <div class="dm-conv-header">
         <Show when={isModernStyle()} fallback={
           <>
-            <button class="dm-back-btn" onClick={() => navigate('/dm')}>← {t('nav_dms')}</button>
+            <button class="dm-back-btn" onClick={() => goBack('/dm')}>← {t('nav_dms')}</button>
             <span class="dm-conv-peer" onClick={() => navigate(`/user/${props.peerAddress}`)}>{truncateAddress(props.peerAddress)}</span>
           </>
         }>

@@ -5,6 +5,46 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.54.0] - 2026-08-30
+
+### Added
+
+- **Invite a wallet address to a Private channel directly**, without a
+  deeplink. `ChannelSettingsView.tsx` gained an "Invite" section (creator/mod
+  only, Private channels only) that calls the SDK's `inviteUser(channelId,
+  address)` — already fully specced end-to-end (`ChannelInvite` message,
+  `POST /api/v1/channels/:id/invite/:address`, node-side pending-invite gate
+  on `ChannelJoin`) but never wired into any client UI. This is what makes
+  inviting a bot/service wallet (which has no UI to click a deeplink)
+  practical: the operator invites its address, then the bot calls
+  `client.joinChannel()` itself.
+
+### Fixed
+
+- **No way back from a "details" view to wherever you actually opened it
+  from.** `UserProfileView.tsx` had no back affordance at all — reachable
+  from a chat message, a channel member list, a news post, a DM, search
+  results, and more, but once there, there was zero way out short of a
+  browser-style back gesture the Tauri webview doesn't expose.
+  `ChannelSettingsView.tsx`, `NewsDetailView.tsx`, and
+  `DmConversationView.tsx` had a back button, but it always returned to one
+  hardcoded parent regardless of where the view was actually opened from
+  (e.g. opening a news post from Bookmarks or Search still sent you back to
+  the main feed). `router.ts`'s `goBack()` (a working wrapper around
+  `history.back()`) existed but was used in exactly one place. Added a
+  navigation-count guard to `goBack(fallback?)` so it safely falls back to a
+  sensible default only when there's no real in-app history to return to
+  (e.g. a fresh deep link), and wired it into all four views plus the
+  mobile-viewport global back button (previously just toggled the list/detail
+  pane, dumping you into the chat list regardless of origin).
+- Fixed a latent bug the above change would have triggered:
+  `ChannelCreateView.tsx`'s back button passed the `goBack` function
+  reference directly as an `onClick` handler, so the click event itself would
+  have been passed as the new optional `fallback` argument.
+- Synced `src-tauri/tauri.conf.json`'s `version` field, which had drifted
+  many releases behind `package.json` (1.45.3 vs. 1.53.2) — the installer's
+  reported version now matches the app version again.
+
 ## [1.53.2] - 2026-08-29
 
 ### Fixed

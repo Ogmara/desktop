@@ -265,6 +265,26 @@ export const ChannelSettingsView: Component<ChannelSettingsProps> = (props) => {
     } catch { /* ignore */ }
   };
 
+  // --- Invite by address (Private channels only — protocol spec §3.9) ---
+  const [inviteAddress, setInviteAddress] = createSignal('');
+  const [inviteError, setInviteError] = createSignal('');
+  const [inviteSuccess, setInviteSuccess] = createSignal(false);
+
+  const handleInviteUser = async () => {
+    const addr = inviteAddress().trim();
+    if (!addr.startsWith('klv1')) return;
+    setInviteError('');
+    setInviteSuccess(false);
+    try {
+      await getClient().inviteUser(channelIdNum(), addr);
+      setInviteAddress('');
+      setInviteSuccess(true);
+      setTimeout(() => setInviteSuccess(false), 2000);
+    } catch (e: any) {
+      setInviteError(e?.message || 'Failed');
+    }
+  };
+
   // --- Unban ---
   const handleUnban = async (addr: string) => {
     try {
@@ -310,7 +330,7 @@ export const ChannelSettingsView: Component<ChannelSettingsProps> = (props) => {
   return (
     <div class="ch-settings">
       <div class="ch-settings-header">
-        <button class="ch-back" onClick={() => navigate(`/chat/${props.channelId}`)}>
+        <button class="ch-back" onClick={() => goBack(`/chat/${props.channelId}`)}>
           ← {t('nav_back')}
         </button>
         <h2>{pageTitle()}</h2>
@@ -338,6 +358,29 @@ export const ChannelSettingsView: Component<ChannelSettingsProps> = (props) => {
           {linkCopied() ? t('channel_link_copied') : t('channel_copy_link')}
         </button>
       </div>
+
+      {/* Invite by address — Private channels only; a URL alone can't grant
+          access (protocol spec §3.9/§5.5.4), so the target address must be
+          explicitly invited before it can send ChannelJoin. */}
+      <Show when={isMod() && isPrivateChannel()}>
+        <div class="ch-section">
+          <h3>{t('channel_invite')}</h3>
+          <div class="ch-add-row">
+            <input
+              class="ch-input"
+              placeholder="klv1..."
+              value={inviteAddress()}
+              onInput={(e) => setInviteAddress(e.currentTarget.value)}
+            />
+            <button class="ch-add-btn" onClick={handleInviteUser} disabled={!inviteAddress().trim()}>
+              {inviteSuccess() ? t('channel_invite_sent') : t('channel_invite')}
+            </button>
+          </div>
+          <Show when={inviteError()}>
+            <span class="ch-error">{inviteError()}</span>
+          </Show>
+        </div>
+      </Show>
 
       {/* Channel avatar (logo) — only for moderators/owner */}
       <Show when={isMod()}>

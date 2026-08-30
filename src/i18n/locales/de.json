@@ -162,6 +162,7 @@
   "channel_pin": "Anheften",
   "channel_unpin": "Lösen",
   "channel_invite": "Einladen",
+  "channel_invite_sent": "Einladung gesendet",
   "channel_reply": "Antworten",
   "channel_reply_preview": "Antwort auf",
   "governance_title": "Governance",

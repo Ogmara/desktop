@@ -162,6 +162,7 @@
   "channel_pin": "置顶",
   "channel_unpin": "取消置顶",
   "channel_invite": "邀请",
+  "channel_invite_sent": "邀请已发送",
   "channel_reply": "回复",
   "channel_reply_preview": "回复",
   "governance_title": "治理",

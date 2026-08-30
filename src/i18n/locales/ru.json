@@ -170,6 +170,7 @@
   "channel_pin": "Закрепить",
   "channel_unpin": "Открепить",
   "channel_invite": "Пригласить",
+  "channel_invite_sent": "Приглашение отправлено",
   "channel_reply": "Ответить",
   "channel_reply_preview": "Ответ на",
   "anchor_verified": "Подтверждён",
