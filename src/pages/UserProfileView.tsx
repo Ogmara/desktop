@@ -92,15 +92,21 @@ export const UserProfileView: Component<UserProfileProps> = (props) => {
     },
   );
 
+  // `postsTotal` is the server-computed real count (independent of the
+  // `limit` below, which only bounds how many posts are actually fetched) —
+  // NOT posts()?.length, which would silently cap the displayed count at 50.
+  const [postsTotal, setPostsTotal] = createSignal(0);
   const [posts] = createResource(
     () => props.address,
     async (address) => {
-      if (!address) return [];
+      if (!address) { setPostsTotal(0); return []; }
       try {
         const client = getClient();
         const resp = await client.getUserPosts(address, { page: 1, limit: 50 });
+        setPostsTotal(resp.total ?? resp.posts.length);
         return resp.posts;
       } catch {
+        setPostsTotal(0);
         return [];
       }
     },
@@ -265,7 +271,7 @@ export const UserProfileView: Component<UserProfileProps> = (props) => {
 
       <div class="profile-stats">
         <div class="stat">
-          <span class="stat-value">{posts()?.length ?? 0}</span>
+          <span class="stat-value">{postsTotal()}</span>
           <span class="stat-label">{t('profile_posts')}</span>
         </div>
         <div class="stat" onClick={() => navigate(`/user/${props.address}/followers`)} style="cursor:pointer">
