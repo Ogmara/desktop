@@ -23,6 +23,31 @@ const HIDDEN_DMS_KEY = 'hiddenDms';
 /** Followed news hashtags + user-named subgroups — same LWW-by-`updatedAt` pattern. */
 const TOPIC_GROUPS_KEY = 'topicGroups';
 
+/** Highest `updatedAt` across the object-valued synced settings — the blob's
+ *  cleartext "content last-edited at". Sent as `SettingsSyncData.updated_at` so
+ *  the node can last-writer-wins across devices + the profile-topic gossip relay
+ *  (l2-node 0.125.0+), and used here to decide whether this device's copy is
+ *  newer than a node's and should be re-uploaded to seed it. hiddenDms has no
+ *  single `updatedAt` (hiding is monotonic per peer) — take the max entry. */
+function syncedContentTimestamp(): number {
+  const org = getChannelOrg();
+  const tg = getTopicGroups();
+  const hidden = getHiddenDms();
+  const hiddenMax = Object.values(hidden).reduce((m, v) => (typeof v === 'number' && v > m ? v : m), 0);
+  return Math.max(org?.updatedAt ?? 0, tg?.updatedAt ?? 0, hiddenMax);
+}
+
+/** The highest `updatedAt` present in a decrypted remote blob. */
+function remoteContentTimestamp(settings: Record<string, unknown>): number {
+  const org = settings?.[CHANNEL_ORG_KEY] as { updatedAt?: number } | undefined;
+  const tg = settings?.[TOPIC_GROUPS_KEY] as { updatedAt?: number } | undefined;
+  const hidden = settings?.[HIDDEN_DMS_KEY] as Record<string, number> | undefined;
+  const hiddenMax = hidden
+    ? Object.values(hidden).reduce((m, v) => (typeof v === 'number' && v > m ? v : m), 0)
+    : 0;
+  return Math.max(org?.updatedAt ?? 0, tg?.updatedAt ?? 0, hiddenMax);
+}
+
 /** Theme-style keys stored as raw strings in localStorage (read/write via lib/theme.ts).
  *  Kept on a separate path to avoid JSON-encoding breakage when the value is a
  *  bare string like "dark" or "modern". Default-landing-view is a JSON-encoded
@@ -66,7 +91,7 @@ function fromHex(hex: string): Uint8Array {
 }
 
 /** Collect current settings and encrypt them. */
-export async function encryptSettings(hexKey: string): Promise<{ encrypted_settings: Uint8Array; nonce: Uint8Array; key_epoch: number }> {
+export async function encryptSettings(hexKey: string): Promise<{ encrypted_settings: Uint8Array; nonce: Uint8Array; key_epoch: number; updated_at: number }> {
   const settings: Record<string, unknown> = {};
   for (const key of SYNC_KEYS) {
     settings[key] = getSetting(key);
@@ -92,6 +117,10 @@ export async function encryptSettings(hexKey: string): Promise<{ encrypted_setti
     encrypted_settings: new Uint8Array(ciphertext),
     nonce,
     key_epoch: 0,
+    // Cleartext LWW key for the node — the content's own edit time, NOT "now",
+    // so re-uploading an unchanged copy to seed a fresh node can't jump ahead of
+    // a newer copy on another node.
+    updated_at: syncedContentTimestamp(),
   };
 }
 
@@ -150,6 +179,11 @@ export async function decryptAndApplySettings(
       applyRemoteTopicGroups(v);
     }
   }
+  // This device's object settings are newer than the node's → seed it (and, via
+  // its re-gossip, the mesh). See downloadChannelOrg for the rationale.
+  if (syncedContentTimestamp() > remoteContentTimestamp(settings)) {
+    void uploadSettings(hexKey);
+  }
 }
 
 /** Whether a synced raw-string value is in the current accepted set for `key`. */
@@ -190,7 +224,14 @@ export async function downloadSettings(hexKey: string): Promise<boolean> {
 export async function downloadChannelOrg(hexKey: string): Promise<boolean> {
   try {
     const resp = await getClient().getSettings();
-    if (!resp) return false;
+    if (!resp) {
+      // Fresh node with nothing for this wallet. If THIS device holds real
+      // synced state, seed the node once — it then gossips it to the mesh so
+      // every node converges. Safe: the upload carries the content's own
+      // `updated_at`, so a node that already has a newer copy will LWW-drop it.
+      if (syncedContentTimestamp() > 0) void uploadSettings(hexKey);
+      return false;
+    }
     const key = await deriveKey(hexKey);
     const plaintext = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: new Uint8Array(resp.nonce) },
@@ -214,6 +255,11 @@ export async function downloadChannelOrg(hexKey: string): Promise<boolean> {
     if (topics && typeof topics === 'object') {
       applyRemoteTopicGroups(topics);
       applied = true;
+    }
+    // This device's copy is strictly newer than the node's → push it up once so
+    // this node — and, via its re-gossip, every other node — converges to it.
+    if (syncedContentTimestamp() > remoteContentTimestamp(settings)) {
+      void uploadSettings(hexKey);
     }
     return applied;
   } catch {
