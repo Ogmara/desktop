@@ -10,6 +10,7 @@ import { DESIGN_STYLES, COLOR_SCHEMES, type DesignStyle, type ColorScheme } from
 import { getChannelOrg, applyRemoteOrg } from './channel-org';
 import { addJoinedChannels } from './joined-channels';
 import { getHiddenDms, applyRemoteHiddenDms } from './dm-hide';
+import { getTopicGroups, applyRemoteTopicGroups } from './topic-groups';
 
 /** JSON-encoded settings keys synced across devices (read/write via getSetting/setSetting). */
 const SYNC_KEYS = ['lang', 'notificationSound', 'compactLayout', 'fontSize'] as const;
@@ -19,6 +20,8 @@ const SYNC_KEYS = ['lang', 'notificationSound', 'compactLayout', 'fontSize'] as 
 const CHANNEL_ORG_KEY = 'channelOrg';
 /** Hidden DM conversations (per-peer hide timestamp) — same object-valued pattern. */
 const HIDDEN_DMS_KEY = 'hiddenDms';
+/** Followed news hashtags + user-named subgroups — same LWW-by-`updatedAt` pattern. */
+const TOPIC_GROUPS_KEY = 'topicGroups';
 
 /** Theme-style keys stored as raw strings in localStorage (read/write via lib/theme.ts).
  *  Kept on a separate path to avoid JSON-encoding breakage when the value is a
@@ -79,6 +82,8 @@ export async function encryptSettings(hexKey: string): Promise<{ encrypted_setti
   settings[CHANNEL_ORG_KEY] = getChannelOrg();
   // Hidden DM conversations — per-peer hide timestamps, merged by max() on receipt.
   settings[HIDDEN_DMS_KEY] = getHiddenDms();
+  // Followed news topics — hashtags + subgroups, LWW by `updatedAt` on receipt.
+  settings[TOPIC_GROUPS_KEY] = getTopicGroups();
   const plaintext = new TextEncoder().encode(JSON.stringify(settings));
   const key = await deriveKey(hexKey);
   const nonce = crypto.getRandomValues(new Uint8Array(12));
@@ -140,6 +145,10 @@ export async function decryptAndApplySettings(
     if (k === HIDDEN_DMS_KEY && v && typeof v === 'object') {
       applyRemoteHiddenDms(v);
     }
+    // Followed news topics: LWW by `updatedAt` (see topic-groups.ts).
+    if (k === TOPIC_GROUPS_KEY && v && typeof v === 'object') {
+      applyRemoteTopicGroups(v);
+    }
   }
 }
 
@@ -199,6 +208,11 @@ export async function downloadChannelOrg(hexKey: string): Promise<boolean> {
     const hidden = settings?.[HIDDEN_DMS_KEY];
     if (hidden && typeof hidden === 'object') {
       applyRemoteHiddenDms(hidden);
+      applied = true;
+    }
+    const topics = settings?.[TOPIC_GROUPS_KEY];
+    if (topics && typeof topics === 'object') {
+      applyRemoteTopicGroups(topics);
       applied = true;
     }
     return applied;

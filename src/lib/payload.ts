@@ -174,6 +174,17 @@ export function getPayloadTitle(payload: number[] | Uint8Array | string): string
 }
 
 /**
+ * Extract the tag list from a news post payload (raw, as the author sent
+ * them — normalize with `normalizeHashtag` before comparing).
+ */
+export function getPayloadTags(payload: number[] | Uint8Array | string): string[] {
+  if (typeof payload === 'string') {
+    return tryDecodeBase64Payload(payload)?.tags ?? [];
+  }
+  return decodePayload(payload).tags ?? [];
+}
+
+/**
  * Extract attachments from a payload, if present.
  */
 export function getPayloadAttachments(payload: number[] | Uint8Array | string): PayloadAttachment[] {

@@ -5,6 +5,23 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.56.0] - 2026-09-01
+
+### Added
+
+- **Follow news topics by hashtag, with subgroups**, and a **Hot Topics
+  ("Trending")** list — parity with web 0.72.0. In the News Feed sidebar,
+  below Global / Following: a Followed Topics entry (union of every followed
+  hashtag), user-named groups (create / rename / delete, add hashtags), a
+  manage panel to follow/unfollow, then a separator and the network's
+  most-used news hashtags over a rolling 24h window with usage counts.
+  Selecting an entry filters the feed to those tags; the header shows a
+  `Filtered by #tag ✕` chip; in-post tag chips filter in place. The
+  `topicGroups` object syncs across devices via the encrypted settings blob
+  and re-pulls on the `settings_changed` WebSocket nudge (needs l2-node
+  0.124.0+ for the server-side tag filter).
+- 19 new i18n keys across all 7 locales.
+
 ## [1.55.1] - 2026-09-01
 
 ### Fixed

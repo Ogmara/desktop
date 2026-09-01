@@ -87,6 +87,7 @@ import {
   type ResolvedGroup,
 } from '../lib/channel-org';
 import { downloadChannelOrg } from '../lib/settings-sync';
+import { NewsFeedTopics } from './NewsFeedTopics';
 import { confirmDialog, promptDialog } from './Dialogs';
 import { hideConversation, isConversationHidden } from '../lib/dm-hide';
 import { keepMenuInViewport } from '../lib/menu-position';
@@ -572,14 +573,30 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     );
   };
 
-  // Auto-pull the synced organization once when the wallet becomes ready, so a
-  // fresh device shows the user's groups + ordering. Best-effort, LWW-guarded.
+  // Auto-pull the synced objects (channel org, hidden DMs, followed topics)
+  // once when the wallet becomes ready, and again on the `settings_changed`
+  // WS nudge (l2-node 0.124.0+). Best-effort, LWW-guarded.
   let orgPulled = false;
+  const pullSyncedObjects = () => {
+    vaultExportKey()
+      .then((key) => { if (key) downloadChannelOrg(key).catch(() => {}); })
+      .catch(() => {});
+  };
   createEffect(() => {
     if (authStatus() === 'ready' && !orgPulled) {
       orgPulled = true;
-      vaultExportKey().then((key) => { if (key) downloadChannelOrg(key).catch(() => {}); }).catch(() => {});
+      pullSyncedObjects();
     }
+  });
+  let settingsChangedTimer: ReturnType<typeof setTimeout> | null = null;
+  const settingsChangedCleanup = onWsEvent((event) => {
+    if (event.type !== 'settings_changed') return;
+    if (settingsChangedTimer) clearTimeout(settingsChangedTimer);
+    settingsChangedTimer = setTimeout(pullSyncedObjects, 1000);
+  });
+  onCleanup(() => {
+    if (settingsChangedTimer) clearTimeout(settingsChangedTimer);
+    settingsChangedCleanup();
   });
 
   // --- Group editing UI state ---
@@ -1152,6 +1169,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
               </>
             );
           })()}
+          <NewsFeedTopics />
         </Show>
 
         <Show when={activeTab() === 'dms'}>
@@ -1451,6 +1469,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
             <span style="margin-left:6px; font-size:11px">🔒</span>
           </Show>
         </button>
+        <NewsFeedTopics />
       </div>
 
       {/* Channels (collapsible) */}
