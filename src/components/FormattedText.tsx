@@ -16,6 +16,7 @@ import { MediaImage } from './MediaImage';
 import { EncryptedMedia } from './EncryptedMedia';
 import { openLightbox } from './ImageLightbox';
 import { safeAttachmentName } from '../lib/payload';
+import { openExternal } from '../lib/open-external';
 
 interface Props {
   content: string;
@@ -133,9 +134,13 @@ export const FormattedText: Component<Props> = (props) => {
               ) : (
                 <a
                   href={seg.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
                   class="msg-link"
+                  onClick={(e) => {
+                    // `target="_blank"` and the shell plugin are both inert on
+                    // Linux/webkit2gtk — route through the xdg-open command.
+                    e.preventDefault();
+                    openExternal(seg.url);
+                  }}
                 >
                   {seg.display}
                 </a>

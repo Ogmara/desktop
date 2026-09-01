@@ -310,9 +310,17 @@ async fn send_notification(
 /// Uses platform-specific commands: xdg-open (Linux), open (macOS), cmd (Windows).
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
-    // Only allow https:// URLs
-    if !url.starts_with("https://") {
-        return Err("only https:// URLs are allowed".into());
+    // Allow only http(s):// links. External URLs embedded in news posts /
+    // messages may be plain `http://`, so the previous `https://`-only rule
+    // silently dropped them; every other scheme (file:, javascript:, custom
+    // handlers) stays rejected.
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("only http(s):// URLs are allowed".into());
+    }
+    // Defensive bound + reject embedded whitespace/control chars so the URL
+    // can't smuggle extra argv into the spawned opener.
+    if url.len() > 8192 || url.chars().any(|c| c.is_control() || c == ' ') {
+        return Err("invalid URL".into());
     }
 
     #[cfg(target_os = "linux")]

@@ -23,6 +23,7 @@ import { confirmDialog, promptDialog } from '../components/Dialogs';
 import { EmojiPicker } from '../components/EmojiPicker';
 import { sendTip, kleverAvailable } from '../lib/klever';
 import { ex } from '../lib/klever-explorer-links';
+import { openExternal } from '../lib/open-external';
 import { TxConfirmationCancelled } from '../lib/txConfirm';
 import { resolveProfile, type CachedProfile } from '../lib/profile';
 import { ensureHexMsgId, formatLocalTime, truncateAddress } from '../lib/news-utils';
@@ -648,9 +649,8 @@ export const NewsDetailView: Component = () => {
                     Tip sent!{' '}
                     <a
                       href={ex.tx(tipTxHash())}
-                      target="_blank"
-                      rel="noopener noreferrer"
                       class="tip-tx-link"
+                      onClick={(e) => { e.preventDefault(); openExternal(ex.tx(tipTxHash())); }}
                     >
                       {tipTxHash().slice(0, 12)}...
                     </a>

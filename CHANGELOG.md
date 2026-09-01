@@ -5,6 +5,47 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.55.0] - 2026-09-01
+
+### Added
+
+- **News Feed history + resume position.** The feed is now an accumulator, not
+  a fixed 20-post page. Scrolling to the oldest loaded post autoloads the
+  next-older page; scrolling back to the top autoloads posts that arrived since,
+  with the viewport anchored so nothing jumps. Reopening the feed within 24h
+  restores the post you were last looking at as the scroll anchor (a page is
+  fetched each side of it) so you scroll **up** for what's new; idle over 24h —
+  or a first visit — opens at the newest post. Applies to both the global and
+  Following feeds. Tray-restore re-evaluates the 24h window (first consumer of
+  the `ogmara:app-restored` event). Needs l2-node 0.123.0+.
+- "Show new posts" pill when a live post arrives while you're scrolled away from
+  the top.
+
+### Fixed
+
+- **The feed jumped to the newest post whenever any reaction, comment, edit or
+  delete arrived over the WebSocket — including the echo of your own reaction.**
+  Every news WS frame triggered a full refetch that rebuilt every card and reset
+  scroll. Live news envelopes are now applied in place to the one affected card,
+  the echo of the user's own action is skipped, and a genuinely new post
+  prepends (when at the top) or increments the pill instead of reloading.
+- **External `http(s)://` links in a news post / comment body did nothing when
+  clicked.** They rendered as `<a target="_blank">`, which is inert on
+  Linux/webkit2gtk. They now route through the `open_url` command (xdg-open /
+  open / explorer), as do the "Tip sent" explorer links. `open_url` was also
+  widened to accept plain `http://` (it was `https://`-only), with a length +
+  control-char guard on the spawned argument.
+- `src-tauri/Cargo.toml` version was stale at 1.45.3 while `package.json` /
+  `tauri.conf.json` were 1.54.1 — all three are now in sync at 1.55.0, so
+  `get_version` / the About dialog report the real build.
+
+### Security
+
+- `cargo update -p h2` (0.4.13 → 0.4.19) clears **RUSTSEC-2026-0258** (h2, a
+  transitive dep via `tauri-plugin-http` → `reqwest` → `hyper`). `cargo audit`
+  is back to 0 vulnerabilities; the remaining entries are `warning`-level
+  unmaintained GTK3 bindings inherent to Tauri v2 on Linux.
+
 ## [1.54.1] - 2026-08-30
 
 ### Fixed

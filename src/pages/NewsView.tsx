@@ -2,7 +2,8 @@
  * NewsView — news feed with reactions, bookmarks, reposts (auth-gated).
  */
 
-import { Component, createResource, createSignal, createEffect, createMemo, onCleanup, For, Show } from 'solid-js';
+import { Component, createSignal, createEffect, createMemo, onCleanup, onMount, on, For, Show } from 'solid-js';
+import { createStore } from 'solid-js/store';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { avatarUrl } from '../lib/ownAvatar';
@@ -16,6 +17,7 @@ import { openLightbox } from '../components/ImageLightbox';
 import { getPayloadContent, getPayloadTitle, getPayloadAttachments, decodePayload, safeAttachmentName } from '../lib/payload';
 import { sendTip, kleverAvailable } from '../lib/klever';
 import { ex } from '../lib/klever-explorer-links';
+import { openExternal } from '../lib/open-external';
 import { TxConfirmationCancelled } from '../lib/txConfirm';
 import { resolveProfile } from '../lib/profile';
 import { ensureHexMsgId, formatLocalTime, truncateAddress } from '../lib/news-utils';
@@ -42,8 +44,8 @@ function resolveFeedMode(): FeedMode {
 export const NewsView: Component = () => {
   const [loadError, setLoadError] = createSignal('');
   // Reactive feed-mode signal — reads from URL/settings on every change.
-  // The `createResource` below keys off it, so a sidebar click that
-  // updates `?feed=` immediately retriggers the fetch.
+  // The accumulator effect below keys off it, so a sidebar click that
+  // updates `?feed=` re-runs `initFeed()` for the new mode.
   const feedMode = createMemo<FeedMode>(() => resolveFeedMode());
 
   // Auto-save the resolved mode as the user's new default ON CHANGE.
@@ -62,51 +64,367 @@ export const NewsView: Component = () => {
   const showFollowingAnonPrompt = () =>
     feedMode() === 'following' && authStatus() !== 'ready';
 
-  const [news, { refetch: refetchNews }] = createResource(
-    () => ({ mode: feedMode(), authed: authStatus() === 'ready' }),
-    async ({ mode, authed }) => {
-      try {
-        setLoadError('');
-        const client = getClient();
-        if (mode === 'following') {
-          if (!authed) return [];
-          const resp = await client.getFeed({ page: 1, limit: 20 });
-          return resp.posts;
-        }
-        const resp = await client.listNews(1, 20);
-        return resp.posts;
-      } catch (e: any) {
-        const msg = e?.message || String(e);
-        console.error('[NewsView] Failed to load news:', msg);
-        // A node that's selected but unreachable/misconfigured returns an HTML
-        // error page → the SDK's JSON.parse throws "Unexpected token '<' …".
-        // Don't show that raw noise; map it to a clear, actionable message.
-        const isHtmlOrParse = /<!DOCTYPE|Unexpected token|not valid JSON|Failed to fetch|NetworkError/i.test(msg);
-        setLoadError(isHtmlOrParse
-          ? (t('news_load_node_unreachable') || 'Couldn’t reach the node. It may be offline — try another node from the status bar.')
-          : msg);
-        return [];
-      }
-    },
-  );
+  // --- Feed accumulator -----------------------------------------------------
+  // The feed is no longer a fixed page fetched once: it's a growing list the
+  // user can scroll through in BOTH directions. Reaching the oldest loaded
+  // post autoloads the next-older page (`?before=`); reaching the top autoloads
+  // posts that arrived since (`?after=`), keeping the viewport anchored. A
+  // `createStore` (not a plain signal) so a live reaction/comment/edit can be
+  // patched into one item without rebuilding every card — the cause of the
+  // "feed jumps to the top when I react" bug.
+  const PAGE = 20;
+  const SCROLL_THRESHOLD_PX = 240;
+  const MAX_POSTS = 500;
+  const RESUME_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-  // Live feed updates. l2-node 0.119.0+ broadcasts news envelopes over the WS;
-  // before that the node pushed nothing for news at all, so the feed only
-  // refreshed when something forced a REST refetch — in practice, navigating
-  // away from the feed and back.
-  //
-  // Refetch rather than splicing the envelope into the list: the WS frame is a
-  // raw envelope (msgpack payload) while this list holds node-decoded posts, so
-  // they are not the same shape. Refetching also picks up edits, deletes,
-  // reactions and reposts with one code path, and news volume is far too low
-  // for the extra request to matter.
+  const [feed, setFeed] = createStore<{ items: any[] }>({ items: [] });
+  const [loading, setLoading] = createSignal(true);
+  const [loadingOlder, setLoadingOlder] = createSignal(false);
+  const [loadingNewer, setLoadingNewer] = createSignal(false);
+  const [hasMoreOlder, setHasMoreOlder] = createSignal(false);
+  const [hasMoreNewer, setHasMoreNewer] = createSignal(false);
+  const [atNewest, setAtNewest] = createSignal(true);
+  const [newPosts, setNewPosts] = createSignal(0);
+
+  let scrollEl: HTMLDivElement | undefined;
+  let loadToken = 0;
+  let scrollSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const hexId = (p: any): string => ensureHexMsgId(p?.msg_id);
+  const lastReadKey = (): 'newsLastReadGlobal' | 'newsLastReadFollowing' =>
+    feedMode() === 'following' ? 'newsLastReadFollowing' : 'newsLastReadGlobal';
+
+  const dedupeById = (arr: any[]): any[] => {
+    const seen = new Set<string>();
+    const out: any[] = [];
+    for (const p of arr) {
+      const id = hexId(p);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      out.push(p);
+    }
+    return out;
+  };
+
+  // Map an unreachable/misconfigured node's HTML error page (the SDK's
+  // JSON.parse throws "Unexpected token '<' …") to a clear message rather than
+  // the raw noise. Shared by every fetch path below.
+  const reportLoadError = (e: any) => {
+    const msg = e?.message || String(e);
+    console.error('[NewsView] Failed to load news:', msg);
+    const isHtmlOrParse = /<!DOCTYPE|Unexpected token|not valid JSON|Failed to fetch|NetworkError/i.test(msg);
+    setLoadError(
+      isHtmlOrParse
+        ? t('news_load_node_unreachable') ||
+            'Couldn’t reach the node. It may be offline — try another node from the status bar.'
+        : msg,
+    );
+  };
+
+  // One page of the ACTIVE feed mode. `has_more` comes from l2-node 0.123.0+;
+  // older nodes omit it, so fall back to "a full page came back".
+  const fetchPage = async (
+    opts: { before?: string; after?: string },
+  ): Promise<{ posts: any[]; hasMore: boolean }> => {
+    const client = getClient();
+    const resp =
+      feedMode() === 'following'
+        ? await client.getFeed({ limit: PAGE, ...opts })
+        : await client.listNews({ limit: PAGE, ...opts });
+    const posts = resp.posts ?? [];
+    return { posts, hasMore: resp.has_more ?? posts.length >= PAGE };
+  };
+
+  const topmostVisibleId = (): string => {
+    if (!scrollEl) return feed.items[0] ? hexId(feed.items[0]) : '';
+    const top = scrollEl.getBoundingClientRect().top;
+    const nodes = scrollEl.querySelectorAll<HTMLElement>('[data-msg-id]');
+    for (const n of nodes) {
+      if (n.getBoundingClientRect().bottom > top + 8) return n.dataset.msgId ?? '';
+    }
+    return feed.items[0] ? hexId(feed.items[0]) : '';
+  };
+
+  const persistPosition = () => {
+    if (feed.items.length === 0) return;
+    const id = topmostVisibleId();
+    if (id) setSetting(lastReadKey(), id);
+    setSetting('newsLastViewedAt', Date.now());
+  };
+
+  const scrollToId = (id: string | null) => {
+    if (!scrollEl || !id) return;
+    const sel = (window as any).CSS?.escape ? CSS.escape(id) : id;
+    const el = scrollEl.querySelector<HTMLElement>(`[data-msg-id="${sel}"]`);
+    if (!el) return;
+    const delta = el.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top;
+    scrollEl.scrollTop = Math.max(0, scrollEl.scrollTop + delta - 8);
+  };
+
+  const initFeed = async () => {
+    const myToken = ++loadToken;
+    setLoading(true);
+    setLoadError('');
+    setNewPosts(0);
+    setFeed('items', []);
+    try {
+      if (feedMode() === 'following' && authStatus() !== 'ready') {
+        setHasMoreOlder(false);
+        setHasMoreNewer(false);
+        setAtNewest(true);
+        return;
+      }
+
+      const savedId = getSetting(lastReadKey());
+      const viewedAt = getSetting('newsLastViewedAt');
+      const stale = !savedId || Date.now() - viewedAt > RESUME_WINDOW_MS;
+
+      if (stale) {
+        const { posts, hasMore } = await fetchPage({});
+        if (myToken !== loadToken) return;
+        setFeed('items', dedupeById(posts));
+        setHasMoreOlder(hasMore);
+        setHasMoreNewer(false);
+        setAtNewest(true);
+        queueMicrotask(() => {
+          if (myToken === loadToken && scrollEl) scrollEl.scrollTop = 0;
+        });
+        return;
+      }
+
+      const [older, newer, anchor] = await Promise.all([
+        fetchPage({ before: savedId }),
+        fetchPage({ after: savedId }),
+        getClient()
+          .getNewsPost(savedId)
+          .then((r) => r.post)
+          .catch(() => null),
+      ]);
+      if (myToken !== loadToken) return;
+      const merged = dedupeById([
+        ...newer.posts,
+        ...(anchor ? [anchor] : []),
+        ...older.posts,
+      ]);
+      setFeed('items', merged);
+      setHasMoreNewer(newer.hasMore);
+      setHasMoreOlder(older.hasMore);
+      setAtNewest(!newer.hasMore && newer.posts.length === 0);
+      queueMicrotask(() => {
+        if (myToken !== loadToken) return;
+        const anchorId = anchor
+          ? ensureHexMsgId(anchor.msg_id)
+          : older.posts[0]
+          ? ensureHexMsgId(older.posts[0].msg_id)
+          : newer.posts.length
+          ? ensureHexMsgId(newer.posts[newer.posts.length - 1].msg_id)
+          : null;
+        scrollToId(anchorId);
+      });
+    } catch (e: any) {
+      if (myToken !== loadToken) return;
+      reportLoadError(e);
+      setFeed('items', []);
+      setHasMoreOlder(false);
+      setHasMoreNewer(false);
+      setAtNewest(true);
+    } finally {
+      if (myToken === loadToken) setLoading(false);
+    }
+  };
+
+  const loadOlder = async () => {
+    if (loadingOlder() || !hasMoreOlder() || feed.items.length === 0) return;
+    setLoadingOlder(true);
+    try {
+      const oldest = feed.items[feed.items.length - 1];
+      const { posts, hasMore } = await fetchPage({ before: hexId(oldest) });
+      const known = new Set(feed.items.map(hexId));
+      const fresh = posts.filter((p) => !known.has(hexId(p)));
+      if (fresh.length > 0) setFeed('items', (items) => [...items, ...fresh]);
+      setHasMoreOlder(hasMore && fresh.length > 0);
+      if (feed.items.length > MAX_POSTS) {
+        // Trimming off the TOP of a top-anchored scroller shifts everything up —
+        // compensate so the viewport stays on the same post.
+        const prevH = scrollEl?.scrollHeight ?? 0;
+        const prevTop = scrollEl?.scrollTop ?? 0;
+        setFeed('items', (items) => items.slice(items.length - MAX_POSTS));
+        setHasMoreNewer(true);
+        setAtNewest(false);
+        requestAnimationFrame(() => {
+          if (scrollEl) scrollEl.scrollTop = Math.max(0, prevTop - (prevH - scrollEl.scrollHeight));
+        });
+      }
+    } catch {
+      /* leave state; scrolling again retries */
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+
+  const loadNewer = async () => {
+    if (loadingNewer() || !hasMoreNewer() || feed.items.length === 0 || !scrollEl) return;
+    setLoadingNewer(true);
+    const prevH = scrollEl.scrollHeight;
+    const prevTop = scrollEl.scrollTop;
+    try {
+      const newest = feed.items[0];
+      const { posts, hasMore } = await fetchPage({ after: hexId(newest) });
+      const known = new Set(feed.items.map(hexId));
+      const fresh = posts.filter((p) => !known.has(hexId(p)));
+      if (fresh.length > 0) {
+        setFeed('items', (items) => [...fresh, ...items]);
+        requestAnimationFrame(() => {
+          if (scrollEl) scrollEl.scrollTop = prevTop + (scrollEl.scrollHeight - prevH);
+        });
+      }
+      const more = hasMore && fresh.length > 0;
+      setHasMoreNewer(more);
+      if (!more) setAtNewest(true);
+    } catch {
+      /* noop */
+    } finally {
+      setLoadingNewer(false);
+    }
+  };
+
+  const prependLatest = async () => {
+    try {
+      const newest = feed.items[0];
+      const { posts } = newest ? await fetchPage({ after: hexId(newest) }) : await fetchPage({});
+      const known = new Set(feed.items.map(hexId));
+      const fresh = posts.filter((p) => !known.has(hexId(p)));
+      if (fresh.length === 0) return;
+      const atTop = scrollEl ? scrollEl.scrollTop < 4 : true;
+      const prevH = scrollEl?.scrollHeight ?? 0;
+      const prevTop = scrollEl?.scrollTop ?? 0;
+      setFeed('items', (items) => dedupeById([...fresh, ...items]));
+      if (scrollEl && !atTop) {
+        requestAnimationFrame(() => {
+          if (scrollEl) scrollEl.scrollTop = prevTop + (scrollEl.scrollHeight - prevH);
+        });
+      }
+    } catch {
+      /* noop */
+    }
+  };
+
+  const jumpToNewest = async () => {
+    setNewPosts(0);
+    try {
+      const { posts, hasMore } = await fetchPage({});
+      setFeed('items', dedupeById(posts));
+      setHasMoreOlder(hasMore);
+      setHasMoreNewer(false);
+      setAtNewest(true);
+      queueMicrotask(() => {
+        if (scrollEl) scrollEl.scrollTop = 0;
+      });
+    } catch (e: any) {
+      reportLoadError(e);
+    }
+  };
+
+  const applyOwnReaction = (msgId: string, emoji: string) => {
+    const idx = feed.items.findIndex((p) => hexId(p) === msgId);
+    if (idx < 0) return;
+    setFeed('items', idx, 'reaction_counts', (rc: Record<string, number> = {}) => ({
+      ...(rc || {}),
+      [emoji]: (rc?.[emoji] ?? 0) + 1,
+    }));
+  };
+
+  // Apply a live news envelope IN PLACE — never a full refetch. This is what
+  // stops the feed jumping to the newest post every time any reaction, comment
+  // or edit (including the echo of the user's own) comes over the WS.
+  const applyNewsEnvelope = (env: any) => {
+    const type = env?.msg_type;
+    const mine = !!env?.author && env.author === walletAddress();
+
+    if (type === 'NewsPost' || type === 'NewsRepost') {
+      if (mine) return;
+      if (atNewest()) void prependLatest();
+      else setNewPosts((n) => n + 1);
+      return;
+    }
+
+    const targetHex: string | undefined = env?.target_msg_id;
+    if (!targetHex) return;
+    const idx = feed.items.findIndex((p) => hexId(p) === targetHex);
+    if (idx < 0) return;
+
+    if (type === 'NewsReaction') {
+      if (mine) return;
+      const emoji: string | undefined = env?.emoji;
+      if (!emoji) return;
+      setFeed('items', idx, 'reaction_counts', (rc: Record<string, number> = {}) => {
+        const copy = { ...(rc || {}) };
+        const next = (copy[emoji] ?? 0) + (env.remove ? -1 : 1);
+        if (next <= 0) delete copy[emoji];
+        else copy[emoji] = next;
+        return copy;
+      });
+    } else if (type === 'NewsComment') {
+      setFeed('items', idx, 'comment_count', (c: number = 0) => (c ?? 0) + 1);
+    } else if (type === 'NewsEdit') {
+      setFeed('items', idx, 'edited', true);
+      getClient()
+        .getNewsPost(targetHex)
+        .then((r) => {
+          const i = feed.items.findIndex((p) => hexId(p) === targetHex);
+          if (i >= 0 && r?.post) setFeed('items', i, r.post);
+        })
+        .catch(() => {});
+    } else if (type === 'NewsDelete') {
+      setFeed('items', idx, 'deleted', true);
+    }
+  };
+
   onCleanup(
     onWsEvent((event) => {
       if (event.type !== 'message') return;
-      if (!isNewsEnvelope((event as { envelope?: unknown }).envelope)) return;
-      void refetchNews();
+      const env = (event as { envelope?: unknown }).envelope;
+      if (!isNewsEnvelope(env)) return;
+      applyNewsEnvelope(env as any);
     }),
   );
+
+  createEffect(
+    on(
+      () => [feedMode(), authStatus() === 'ready'] as const,
+      () => {
+        void initFeed();
+      },
+      { defer: true },
+    ),
+  );
+
+  const onScroll = () => {
+    if (!scrollEl) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollEl;
+    if (scrollHeight - scrollTop - clientHeight < SCROLL_THRESHOLD_PX) void loadOlder();
+    if (scrollTop < SCROLL_THRESHOLD_PX) void loadNewer();
+    clearTimeout(scrollSaveTimer);
+    scrollSaveTimer = setTimeout(persistPosition, 400);
+  };
+
+  onMount(() => {
+    void initFeed();
+    const onVis = () => {
+      if (document.hidden) persistPosition();
+    };
+    const onRestored = () => {
+      void initFeed(); // tray-restore: re-evaluate the 24h window
+    };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('ogmara:app-restored', onRestored);
+    onCleanup(() => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('ogmara:app-restored', onRestored);
+      clearTimeout(scrollSaveTimer);
+      persistPosition();
+    });
+  });
 
   const handleNewPost = () => {
     if (authStatus() !== 'ready') {
@@ -120,13 +438,18 @@ export const NewsView: Component = () => {
     feedMode() === 'following' ? t('news_feed_following') : t('news_title');
 
   return (
-    <div class="news-view">
+    <div class="news-view" ref={scrollEl} onScroll={onScroll}>
       <div class="news-header">
         <h2>{headerTitle()}</h2>
         <button class="new-post-btn" onClick={handleNewPost}>{t('news_new_post')}</button>
       </div>
       <Show when={loadError()}>
         <div class="news-error">{loadError()}</div>
+      </Show>
+      <Show when={newPosts() > 0}>
+        <button class="news-new-pill" onClick={() => void jumpToNewest()}>
+          ↑ {t('news_show_new_posts')}
+        </button>
       </Show>
       {/* Anon clicking 'Following' — value-prop card instead of the empty list.
           Conversion funnel: bullet points sell the wallet, single CTA to connect.
@@ -149,20 +472,26 @@ export const NewsView: Component = () => {
       </Show>
       <Show when={!showFollowingAnonPrompt()}>
         <div class="news-feed">
-          <Show when={news.loading}>
+          <Show when={loadingNewer()}>
+            <div class="news-loading-row">{t('loading')}</div>
+          </Show>
+          <Show when={loading() && feed.items.length === 0}>
             <div class="news-empty">{t('loading')}</div>
           </Show>
-          <Show
-            when={!news.loading && news() && news()!.length > 0}
-            fallback={!news.loading ? (
-              <div class="news-empty">
-                {feedMode() === 'following' ? t('news_following_empty') : t('news_no_posts')}
+          <Show when={!loading() && feed.items.length === 0 && !loadError()}>
+            <div class="news-empty">
+              {feedMode() === 'following' ? t('news_following_empty') : t('news_no_posts')}
+            </div>
+          </Show>
+          <For each={feed.items}>
+            {(post) => (
+              <div class="news-item" data-msg-id={hexId(post)}>
+                <NewsCard post={post} onReact={applyOwnReaction} />
               </div>
-            ) : null}
-          >
-            <For each={news()}>
-              {(post) => <NewsCard post={post} />}
-            </For>
+            )}
+          </For>
+          <Show when={loadingOlder()}>
+            <div class="news-loading-row">{t('loading')}</div>
           </Show>
         </div>
       </Show>
@@ -179,6 +508,29 @@ export const NewsView: Component = () => {
           font-weight: 600;
         }
         .news-feed { display: flex; flex-direction: column; gap: var(--spacing-md); }
+        .news-item { min-width: 0; }
+        .news-loading-row {
+          text-align: center;
+          color: var(--color-text-secondary);
+          font-size: var(--font-size-sm);
+          padding: var(--spacing-md);
+        }
+        .news-new-pill {
+          position: sticky;
+          top: 0;
+          align-self: center;
+          z-index: 2;
+          margin: 0 auto var(--spacing-md);
+          padding: var(--spacing-xs) var(--spacing-lg);
+          background: var(--color-accent-primary);
+          color: var(--color-text-inverse);
+          border-radius: var(--radius-full);
+          font-size: var(--font-size-sm);
+          font-weight: 600;
+          cursor: pointer;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        }
+        .news-new-pill:hover { opacity: 0.92; }
         .news-comment-context {
           padding: var(--spacing-xs) var(--spacing-md);
           font-size: var(--font-size-xs);
@@ -491,10 +843,15 @@ export const NewsView: Component = () => {
 
 
 /** Individual news card with reactions, repost, bookmark, tip. */
-const NewsCard: Component<{ post: any }> = (props) => {
-  const [reactionCounts, setReactionCounts] = createSignal<Record<string, number>>(
-    props.post.reaction_counts ?? {},
-  );
+const NewsCard: Component<{
+  post: any;
+  /** Parent hook: called after this card's OWN reaction succeeds, so the
+   *  parent can keep the shared store item in sync (and safely skip the WS
+   *  echo). Reaction counts render straight off `props.post` so a live
+   *  reaction from another user patched into the store shows with no refetch. */
+  onReact?: (msgId: string, emoji: string) => void;
+}> = (props) => {
+  const reactionCounts = (): Record<string, number> => props.post.reaction_counts ?? {};
   const [bookmarked, setBookmarked] = createSignal(false);
   const [reposted, setReposted] = createSignal(false);
   const [actionError, setActionError] = createSignal('');
@@ -526,9 +883,8 @@ const NewsCard: Component<{ post: any }> = (props) => {
     setActionError('');
     try {
       const client = getClient();
-      const current = reactionCounts()[emoji] ?? 0;
       await client.reactToNews(ensureHexMsgId(props.post.msg_id), emoji);
-      setReactionCounts((prev) => ({ ...prev, [emoji]: current + 1 }));
+      props.onReact?.(ensureHexMsgId(props.post.msg_id), emoji);
     } catch (e: any) {
       setActionError(e?.message || 'Reaction failed');
     }
@@ -870,9 +1226,8 @@ const NewsCard: Component<{ post: any }> = (props) => {
                 Tip sent!{' '}
                 <a
                   href={ex.tx(tipTxHash())}
-                  target="_blank"
-                  rel="noopener noreferrer"
                   class="tip-tx-link"
+                  onClick={(e) => { e.preventDefault(); openExternal(ex.tx(tipTxHash())); }}
                 >
                   {tipTxHash().slice(0, 12)}...
                 </a>
