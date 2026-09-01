@@ -5,6 +5,21 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.55.1] - 2026-09-01
+
+### Fixed
+
+- **Sidebar right-click menus no longer run off the window.** With enough
+  channels or DM conversations to fill the sidebar, right-clicking one near the
+  bottom opened the context menu partly (or entirely) outside the app window,
+  where the OS clipped it and its lower items were unreachable. Every sidebar
+  floating menu (channel, DM, member, and channel-group) is now measured after
+  it opens and pulled back inside the window — flipped above / left of the
+  pointer when there is no room below / right, and clamped to an 8px margin
+  from each edge. A menu taller than the window (many "move to group" targets)
+  pins to the top and scrolls. Right-clicking a different row while a menu is
+  open re-runs the repositioning.
+
 ## [1.55.0] - 2026-09-01
 
 ### Added

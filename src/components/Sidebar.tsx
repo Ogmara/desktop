@@ -89,6 +89,7 @@ import {
 import { downloadChannelOrg } from '../lib/settings-sync';
 import { confirmDialog, promptDialog } from './Dialogs';
 import { hideConversation, isConversationHidden } from '../lib/dm-hide';
+import { keepMenuInViewport } from '../lib/menu-position';
 import { vaultExportKey } from '../lib/vault';
 
 // Re-exported for existing importers (ChannelJoinView, ChannelCreateView) that
@@ -725,13 +726,13 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
 
   /** The floating group context menu (rename / delete / move up-down). */
   const groupMenuEl = () => (
-    <Show when={groupMenu()}>
+    <Show when={groupMenu()} keyed>
       {(menu) => (
-        <div class="sidebar-context-menu" style={`left:${menu().x}px; top:${menu().y}px`} onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => { setRenamingGroup(menu().groupId); setGroupMenu(null); }}>{t('sidebar_rename_group')}</button>
-          <button onClick={() => moveGroup(menu().groupId, -1)}>{t('sidebar_move_up')}</button>
-          <button onClick={() => moveGroup(menu().groupId, 1)}>{t('sidebar_move_down')}</button>
-          <button class="danger" onClick={() => handleDeleteGroup(menu().groupId)}>{t('sidebar_delete_group')}</button>
+        <div ref={keepMenuInViewport} class="sidebar-context-menu" style={`left:${menu.x}px; top:${menu.y}px`} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => { setRenamingGroup(menu.groupId); setGroupMenu(null); }}>{t('sidebar_rename_group')}</button>
+          <button onClick={() => moveGroup(menu.groupId, -1)}>{t('sidebar_move_up')}</button>
+          <button onClick={() => moveGroup(menu.groupId, 1)}>{t('sidebar_move_down')}</button>
+          <button class="danger" onClick={() => handleDeleteGroup(menu.groupId)}>{t('sidebar_delete_group')}</button>
         </div>
       )}
     </Show>
@@ -1249,6 +1250,11 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
           z-index: 100;
           padding: 4px;
           min-width: 160px;
+          /* A menu taller than the window (e.g. many "move to group" targets)
+             is pinned to the top by keepMenuInViewport — let it scroll rather
+             than run off the bottom edge. */
+          max-height: calc(100vh - 16px);
+          overflow-y: auto;
         }
         .context-menu-item {
           display: block;
@@ -1267,8 +1273,9 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         .ctx-divider { height: 1px; background: var(--color-border); margin: 4px 0; }
       `}</style>
       {/* Channel context menu */}
-      <Show when={contextMenu()}>
+      <Show when={contextMenu()} keyed>
         <div
+          ref={keepMenuInViewport}
           class="channel-context-menu"
           style={{ left: `${contextMenu()!.x}px`, top: `${contextMenu()!.y}px` }}
         >
@@ -1344,8 +1351,9 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       </Show>
 
       {/* DM right-click menu — mark as read / delete conversation */}
-      <Show when={dmContextMenu()}>
+      <Show when={dmContextMenu()} keyed>
         <div
+          ref={keepMenuInViewport}
           class="channel-context-menu"
           style={{ left: `${dmContextMenu()!.x}px`, top: `${dmContextMenu()!.y}px` }}
         >
@@ -1359,8 +1367,9 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       </Show>
 
       {/* Member context menu (right-click on member in sidebar) */}
-      <Show when={memberMenu()}>
+      <Show when={memberMenu()} keyed>
         <div
+          ref={keepMenuInViewport}
           class="channel-context-menu"
           style={{ left: `${memberMenu()!.x}px`, top: `${memberMenu()!.y}px` }}
         >
@@ -1743,6 +1752,11 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
           z-index: 100;
           padding: 4px;
           min-width: 160px;
+          /* A menu taller than the window (e.g. many "move to group" targets)
+             is pinned to the top by keepMenuInViewport — let it scroll rather
+             than run off the bottom edge. */
+          max-height: calc(100vh - 16px);
+          overflow-y: auto;
         }
         .context-menu-item {
           display: block;

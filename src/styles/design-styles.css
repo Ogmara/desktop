@@ -1769,6 +1769,10 @@
   z-index: 100;
   padding: 4px;
   min-width: 160px;
+  /* Pinned to the top margin by keepMenuInViewport when it is taller than the
+     window — scroll instead of overflowing the bottom edge. */
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
 }
 .sidebar-context-menu button {
   display: block;
