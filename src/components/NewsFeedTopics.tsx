@@ -8,11 +8,17 @@
  * inside the encrypted settings blob). Selecting an entry navigates to
  * `/news?topics=all` or `/news?group=<id>`, which NewsView resolves into a
  * `listNews({ tags })` filter.
+ *
+ * Group create / rename / add-topic use inline `<input>` editing and a styled
+ * floating menu (the same `.org-group-rename` + `.sidebar-context-menu` pattern
+ * the channel-group sidebar uses) — never `window.prompt`, which renders as an
+ * unstyled OS dialog and is unreliable inside the Tauri webview.
  */
 
-import { Component, For, Show, createMemo, createSignal } from 'solid-js';
+import { Component, For, Show, createMemo, createSignal, onCleanup } from 'solid-js';
 import { t } from '../i18n/init';
 import { navigate, queryParam } from '../lib/router';
+import { keepMenuInViewport } from '../lib/menu-position';
 import {
   topicGroups,
   topicCaps,
@@ -29,6 +35,10 @@ export const NewsFeedTopics: Component = () => {
   const tg = topicGroups;
   const [managing, setManaging] = createSignal(false);
   const [addValue, setAddValue] = createSignal('');
+  // Inline-edit state, mirroring Sidebar's channel-group pattern.
+  const [renamingGroup, setRenamingGroup] = createSignal<string | null>(null);
+  const [addingTagTo, setAddingTagTo] = createSignal<string | null>(null);
+  const [menu, setMenu] = createSignal<{ x: number; y: number; groupId: string } | null>(null);
 
   // Active-state: which entry the URL currently points at.
   const activeTopicsAll = createMemo(() => queryParam('topics') === 'all');
@@ -36,25 +46,41 @@ export const NewsFeedTopics: Component = () => {
 
   const caps = () => topicCaps();
 
+  // Close the floating menu on any click outside it or its trigger.
+  if (typeof document !== 'undefined') {
+    const closeMenu = (e: MouseEvent) => {
+      const tgt = e.target as HTMLElement;
+      if (tgt.closest('.nft-group-menu') || tgt.closest('.sidebar-context-menu')) return;
+      setMenu(null);
+    };
+    document.addEventListener('click', closeMenu);
+    onCleanup(() => document.removeEventListener('click', closeMenu));
+  }
+
   const rowStyle = (active: boolean) =>
     `display:flex; align-items:center; gap:8px; width:100%; text-align:left; cursor:pointer; padding:8px 12px; background:${
       active ? 'var(--color-chat-active-bg)' : 'transparent'
     }; font-size:var(--font-size-sm); color:${active ? 'var(--color-accent-primary)' : 'var(--color-text-primary)'}`;
 
-  const onNewGroup = () => {
-    const name = window.prompt(t('news_topic_group_new_prompt'))?.trim();
-    if (name) createGroup(name);
+  // New group: create with a default name, then drop straight into inline rename
+  // (identical to Sidebar.handleNewGroup — no prompt).
+  const handleNewGroup = () => {
+    const id = createGroup(t('news_topic_group_new'));
+    if (id) setRenamingGroup(id);
   };
-  const onRenameGroup = (id: string, current: string) => {
-    const name = window.prompt(t('news_topic_group_rename'), current)?.trim();
-    if (name) renameGroup(id, name);
+  const commitRename = (id: string, value: string) => {
+    const v = value.trim();
+    if (v) renameGroup(id, v);
+    setRenamingGroup(null);
   };
-  const onDeleteGroup = (id: string) => {
+  const handleDeleteGroup = (id: string) => {
+    setMenu(null);
     if (window.confirm(t('news_topic_group_delete_confirm'))) deleteGroup(id);
   };
-  const onAddTagToGroup = (id: string) => {
-    const raw = window.prompt(t('news_topic_add'))?.trim();
-    if (raw) addTagToGroup(id, raw);
+  const commitAddTag = (id: string, value: string) => {
+    const v = value.trim();
+    if (v) addTagToGroup(id, v);
+    setAddingTagTo(null);
   };
   const submitAdd = (e: Event) => {
     e.preventDefault();
@@ -87,45 +113,111 @@ export const NewsFeedTopics: Component = () => {
       {/* One row per user group. */}
       <For each={tg().groups}>
         {(g) => (
-          <div style="display:flex; align-items:center">
+          <>
+            <div style="display:flex; align-items:center; gap:2px; padding-right:6px">
+              <Show
+                when={renamingGroup() === g.id}
+                fallback={
+                  <button
+                    style={rowStyle(activeGroup() === g.id)}
+                    onClick={() => navigate(`/news?group=${encodeURIComponent(g.id)}`)}
+                    title={g.name}
+                  >
+                    <span aria-hidden="true">📁</span>
+                    <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">
+                      {g.name}
+                    </span>
+                    <span style="color:var(--color-text-secondary); font-size:var(--font-size-xs)">
+                      {g.tags.length}
+                    </span>
+                  </button>
+                }
+              >
+                {/* Inline rename — a sibling of the row button, never nested. */}
+                <input
+                  class="org-group-rename"
+                  style="margin:4px 0 4px 12px"
+                  value={g.name}
+                  ref={(el) => setTimeout(() => el.focus(), 0)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitRename(g.id, e.currentTarget.value);
+                    else if (e.key === 'Escape') setRenamingGroup(null);
+                  }}
+                  onBlur={(e) => commitRename(g.id, e.currentTarget.value)}
+                />
+              </Show>
+              <Show when={renamingGroup() !== g.id}>
+                <button
+                  class="nft-group-menu"
+                  style="flex-shrink:0; padding:6px; cursor:pointer; background:transparent; color:var(--color-text-secondary)"
+                  title={t('news_topics_manage')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenu({ x: e.clientX, y: e.clientY, groupId: g.id });
+                  }}
+                >
+                  ⋯
+                </button>
+              </Show>
+            </div>
+
+            {/* Inline "add topic to this group" input. */}
+            <Show when={addingTagTo() === g.id}>
+              <input
+                class="org-group-rename"
+                style="margin:0 12px 6px; width:calc(100% - 24px)"
+                placeholder={t('news_topic_add')}
+                ref={(el) => setTimeout(() => el.focus(), 0)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitAddTag(g.id, e.currentTarget.value);
+                  else if (e.key === 'Escape') setAddingTagTo(null);
+                }}
+                onBlur={() => setAddingTagTo(null)}
+              />
+            </Show>
+          </>
+        )}
+      </For>
+
+      {/* Floating group context menu (reuses Sidebar's styled menu). */}
+      <Show when={menu()} keyed>
+        {(m) => (
+          <div
+            ref={keepMenuInViewport}
+            class="sidebar-context-menu"
+            style={`left:${m.x}px; top:${m.y}px`}
+            onClick={(e) => e.stopPropagation()}
+          >
             <button
-              style={rowStyle(activeGroup() === g.id)}
-              onClick={() => navigate(`/news?group=${encodeURIComponent(g.id)}`)}
-              title={g.name}
-            >
-              <span aria-hidden="true">📁</span>
-              <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">
-                {g.name}
-              </span>
-              <span style="color:var(--color-text-secondary); font-size:var(--font-size-xs)">
-                {g.tags.length}
-              </span>
-            </button>
-            <button
-              class="nft-group-menu"
-              style="flex-shrink:0; padding:6px; cursor:pointer; background:transparent; color:var(--color-text-secondary)"
-              title={t('news_topics_manage')}
               onClick={() => {
-                const pick = window.prompt(
-                  `1 = ${t('news_topic_add')}\n2 = ${t('news_topic_group_rename')}\n3 = ${t('news_topic_group_delete')}`,
-                  '1',
-                );
-                if (pick === '1') onAddTagToGroup(g.id);
-                else if (pick === '2') onRenameGroup(g.id, g.name);
-                else if (pick === '3') onDeleteGroup(g.id);
+                setMenu(null);
+                setRenamingGroup(null);
+                setAddingTagTo(m.groupId);
               }}
             >
-              ⋯
+              {t('news_topic_add')}
+            </button>
+            <button
+              onClick={() => {
+                setMenu(null);
+                setAddingTagTo(null);
+                setRenamingGroup(m.groupId);
+              }}
+            >
+              {t('news_topic_group_rename')}
+            </button>
+            <button class="danger" onClick={() => handleDeleteGroup(m.groupId)}>
+              {t('news_topic_group_delete')}
             </button>
           </div>
         )}
-      </For>
+      </Show>
 
       {/* Actions row. */}
       <div style="display:flex; gap:4px; padding:4px 12px 8px">
         <button
           style="font-size:var(--font-size-xs); color:var(--color-accent-primary); background:transparent; cursor:pointer; padding:4px 6px"
-          onClick={onNewGroup}
+          onClick={handleNewGroup}
           disabled={caps().groups.full}
           title={caps().groups.full ? t('news_topics_cap_reached') : t('news_topic_group_new')}
         >

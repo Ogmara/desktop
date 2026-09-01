@@ -2643,7 +2643,7 @@ dependencies = [
 
 [[package]]
 name = "ogmara-desktop"
-version = "1.55.1"
+version = "1.56.1"
 dependencies = [
  "dirs",
  "serde",
