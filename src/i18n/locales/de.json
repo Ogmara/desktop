@@ -104,7 +104,7 @@
   "wallet_k5_connect": "Über K5 Wallet verbinden",
   "wallet_k5_description": "K5 Wallet öffnen, um Signaturrechte zu delegieren",
   "wallet_register": "In Blockchain registrieren",
-  "wallet_register_description": "Öffentlichen Schlüssel im Ogmara Smart Contract registrieren (~4,4 KLV)",
+  "wallet_register_description": "Registriere deinen öffentlichen Schlüssel im Ogmara-Smart-Contract. Kostet die Netzwerkgebühr zuzüglich der On-Chain-Verifizierungsgebühr, sofern eine festgelegt ist.",
   "wallet_registered": "In Blockchain registriert",
   "wallet_not_registered": "Nicht registriert",
   "wallet_tip_send": "Trinkgeld senden",
@@ -529,5 +529,13 @@
   "media_encrypted_attachment": "Verschlüsselter Anhang",
   "dm_recipient_no_encryption": "Diese Person hat die Verschlüsselung noch nicht aktiviert und kann daher keine verschlüsselten Nachrichten empfangen.",
   "dm_encrypted_preview": "Verschlüsselte Nachricht",
-  "channel_federate_failed": "Kanal konnte nicht föderiert werden — bitte erneut versuchen."
+  "channel_federate_failed": "Kanal konnte nicht föderiert werden — bitte erneut versuchen.",
+  "verification_fee_label": "Verifizierungsgebühr",
+  "verification_fee_free": "Kostenlos",
+  "verification_fee_node_share": "Geht an den Betreiber dieser Node",
+  "verification_fee_network": "Netzwerkgebühr (geschätzt)",
+  "verification_fee_loading": "Kosten der Verifizierung werden geprüft…",
+  "verification_fee_unknown": "Diese Node kann die aktuelle Gebühr nicht melden. Deine Wallet zeigt den genauen Betrag vor der Bestätigung.",
+  "verification_fee_unlocks": "Die Verifizierung schaltet das Bearbeiten deiner Beiträge und Nachrichten, das Erstellen und Verwalten von Kanälen sowie Moderation frei.",
+  "tx_confirm_register_fee": "Wallet on-chain verifizieren — {{amount}} KLV zahlen"
 }

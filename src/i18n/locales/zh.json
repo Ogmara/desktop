@@ -104,7 +104,7 @@
   "wallet_k5_connect": "通过K5 Wallet连接",
   "wallet_k5_description": "打开K5 Wallet委托签名权限",
   "wallet_register": "注册到区块链",
-  "wallet_register_description": "在Ogmara智能合约中注册公钥（约4.4 KLV）",
+  "wallet_register_description": "在 Ogmara 智能合约上注册你的公钥。需支付网络费用，以及已设置的链上验证费用（如有）。",
   "wallet_registered": "已注册到区块链",
   "wallet_not_registered": "未注册",
   "wallet_tip_send": "发送打赏",
@@ -529,5 +529,13 @@
   "media_encrypted_attachment": "加密附件",
   "dm_recipient_no_encryption": "对方尚未启用加密，因此无法接收加密消息。",
   "dm_encrypted_preview": "加密消息",
-  "channel_federate_failed": "无法联邦此频道 — 请重试。"
+  "channel_federate_failed": "无法联邦此频道 — 请重试。",
+  "verification_fee_label": "验证费用",
+  "verification_fee_free": "免费",
+  "verification_fee_node_share": "支付给该节点的运营者",
+  "verification_fee_network": "网络费用（估算）",
+  "verification_fee_loading": "正在查询验证费用…",
+  "verification_fee_unknown": "该节点无法提供当前费用。确认前，你的钱包会显示准确金额。",
+  "verification_fee_unlocks": "完成验证后即可编辑你的帖子和消息、创建和管理频道，以及进行管理操作。",
+  "tx_confirm_register_fee": "链上验证钱包 — 支付 {{amount}} KLV"
 }

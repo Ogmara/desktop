@@ -5,6 +5,81 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.58.0] - 2026-09-02
+
+Verification now pays the on-chain registration fee and credits the node the
+user verified through (smart-contract 0.10.0, l2-node 0.126.0+).
+
+### Fixed
+
+- **`callValue` was sent as a STRING, which the Klever node rejects outright**
+  ("cannot unmarshal string into Go struct field
+  SmartContractRequest.callValue of type int64"). Every payable contract call
+  from this client was therefore broken. It went unnoticed because no payable
+  call had ever shipped — `sendTip` builds a type-0 transfer, not a contract
+  invoke, so `value` was never set. Verified against live testnet on both the
+  extension and direct-RPC signing paths: the number form is accepted, the
+  string form is not. **This fix is a prerequisite for verifying at all once a
+  fee is set.**
+
+### Added
+
+- `registerUser` accepts the live fee and the node operator to credit. The fee
+  is read from `GET /api/v1/registration/info` at CONFIRM time, never
+  hard-coded — it is set by node governance and changes with no client
+  release. `via_node` is an `OptionalValue` tail argument encoded by presence,
+  so omitting it routes the whole fee to the protocol treasury.
+- Cost disclosure before the user commits: the fee, the operator's share, the
+  network fee, and what verification unlocks. Rendered as a themed panel using existing CSS tokens.
+- New `verification_fee_*` strings in all 7 locales.
+
+### Changed
+
+- Stale cost text corrected. "~4.4 KLV" is the NETWORK fee only; the protocol
+  verification fee is separate, governance-set, and read live.
+
+
+### Security
+
+- **CRITICAL — the smart contract address was taken on the connected node's
+  word.** `setContractAddress` accepted whatever `GET /api/v1/network/stats`
+  reported, overwriting any configured value. Harmless while `register` was a
+  zero-value call; the moment it carries a 100 KLV payment, a hostile node
+  operator — anyone may run one — could name their own contract and receive
+  the fee outright, with no refund and no recourse. The canonical addresses
+  are now PINNED in the client per network, the node's value is advisory only
+  and a mismatch is refused, and `invokeContract` additionally refuses to
+  attach any value to an unpinned address.
+- **Malformed operator addresses reached calldata.** `operator_address` came
+  straight from the node into the `via_node` argument. The bech32 decoder
+  verified only the charset — not the checksum or the 32-byte length — so a
+  corrupt value produced a wrong-length argument that reverted the invoke,
+  burning the network fee on every attempt with nothing pointing at the cause.
+  The address is now validated centrally in `loadRegistrationCost` (checksum
+  and payload length) and dropped to `null` when malformed, which the contract
+  already handles by routing the whole fee to the treasury. The decoder itself
+  was also hardened, and verified to produce byte-identical output to the
+  SDK's across 2000 generated addresses.
+- **A node could display one amount and charge another.** The displayed fee
+  came from the node's own `registration_fee_klv` string while the signed
+  amount came from a separate field, so the two could disagree. The display is
+  now derived from the amount actually signed, and the panel's value is the
+  one submitted rather than a second, later fetch.
+- Fees above the contract's own 10,000 KLV ceiling are rejected as UNKNOWN
+  rather than signed. Negative and non-decimal values are rejected too.
+- The PIN confirmation now states the KLV amount. It previously read only
+  "Smart contract call: register" — with no figure — on the first
+  value-bearing contract call the app has ever shipped.
+
+### Notes
+
+- A failed fee lookup NEVER blocks verification. It degrades to "amount
+  unknown — your wallet will show the exact cost", because the wallet's own
+  confirmation still reveals it. Refusing to let someone verify because a
+  lookup failed would be the worse failure.
+- `contract_configured: false` and a null fee both mean UNKNOWN, not free.
+  Treating either as 0 would build a zero-value transaction the chain rejects.
+
 ## [1.57.0] - 2026-09-01
 
 ### Fixed

@@ -205,7 +205,7 @@
   "wallet_k5_connect": "Подключить через K5 Wallet",
   "wallet_k5_description": "Откройте K5 Wallet для делегирования подписи",
   "wallet_register": "Зарегистрироваться в блокчейне",
-  "wallet_register_description": "Зарегистрируйте публичный ключ в смарт-контракте Ogmara (~4.4 KLV)",
+  "wallet_register_description": "Зарегистрируйте свой публичный ключ в смарт-контракте Ogmara. Стоит комиссию сети плюс ончейн-плату за верификацию, если она установлена.",
   "wallet_registered": "Зарегистрирован в блокчейне",
   "wallet_not_registered": "Не зарегистрирован",
   "wallet_tip_send": "Отправить чаевые",
@@ -529,5 +529,13 @@
   "media_encrypted_attachment": "Зашифрованное вложение",
   "dm_recipient_no_encryption": "Этот пользователь ещё не включил шифрование, поэтому не может получать зашифрованные сообщения.",
   "dm_encrypted_preview": "Зашифрованное сообщение",
-  "channel_federate_failed": "Не удалось федерировать канал — попробуйте снова."
+  "channel_federate_failed": "Не удалось федерировать канал — попробуйте снова.",
+  "verification_fee_label": "Плата за верификацию",
+  "verification_fee_free": "Бесплатно",
+  "verification_fee_node_share": "Получает оператор этого узла",
+  "verification_fee_network": "Комиссия сети (примерно)",
+  "verification_fee_loading": "Проверяем стоимость верификации…",
+  "verification_fee_unknown": "Этот узел не может сообщить текущую плату. Кошелёк покажет точную сумму перед подтверждением.",
+  "verification_fee_unlocks": "Верификация открывает редактирование ваших публикаций и сообщений, создание и управление каналами, а также модерацию.",
+  "tx_confirm_register_fee": "Верификация кошелька в сети — оплата {{amount}} KLV"
 }

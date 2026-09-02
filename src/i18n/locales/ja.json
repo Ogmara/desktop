@@ -104,7 +104,7 @@
   "wallet_k5_connect": "K5 Walletで接続",
   "wallet_k5_description": "K5 Walletを開いて署名権限を委任",
   "wallet_register": "ブロックチェーンに登録",
-  "wallet_register_description": "Ogmaraスマートコントラクトに公開鍵を登録（約4.4 KLV）",
+  "wallet_register_description": "Ogmara スマートコントラクトに公開鍵を登録します。ネットワーク手数料に加え、設定されている場合はオンチェーン認証手数料がかかります。",
   "wallet_registered": "ブロックチェーンに登録済み",
   "wallet_not_registered": "未登録",
   "wallet_tip_send": "チップを送る",
@@ -529,5 +529,13 @@
   "media_encrypted_attachment": "暗号化された添付ファイル",
   "dm_recipient_no_encryption": "この相手はまだ暗号化を有効にしていないため、暗号化されたメッセージを受信できません。",
   "dm_encrypted_preview": "暗号化されたメッセージ",
-  "channel_federate_failed": "チャンネルをフェデレーションできませんでした — もう一度お試しください。"
+  "channel_federate_failed": "チャンネルをフェデレーションできませんでした — もう一度お試しください。",
+  "verification_fee_label": "認証手数料",
+  "verification_fee_free": "無料",
+  "verification_fee_node_share": "このノードの運営者に支払われます",
+  "verification_fee_network": "ネットワーク手数料（概算）",
+  "verification_fee_loading": "認証にかかる費用を確認しています…",
+  "verification_fee_unknown": "このノードは現在の手数料を取得できません。確認前にウォレットが正確な金額を表示します。",
+  "verification_fee_unlocks": "認証すると、投稿やメッセージの編集、チャンネルの作成と管理、モデレーションが利用できます。",
+  "tx_confirm_register_fee": "ウォレットをオンチェーンで認証 — {{amount}} KLV を支払う"
 }

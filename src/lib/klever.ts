@@ -52,8 +52,25 @@ let kleverProvider = currentNetwork === 'testnet'
   ? { api: 'https://api.testnet.klever.org', node: 'https://node.testnet.klever.org' }
   : { api: 'https://api.mainnet.klever.org', node: 'https://node.mainnet.klever.org' };
 
-/** Ogmara KApp smart contract address. */
-let scAddress = '';
+/**
+ * The canonical Ogmara KApp address per network, PINNED in the client.
+ *
+ * Never taken on the connected node's word. The node is user-chosen and anyone
+ * may run one, so trusting it to name the contract lets a hostile operator
+ * point `register` at a contract they control — and that call now carries a
+ * real KLV payment, so the fee would go to them with no refund. Before the fee
+ * existed the worst case was a failed zero-value call, which is why the node's
+ * value was accepted unconditionally until now.
+ */
+const PINNED_CONTRACTS: Record<string, string> = {
+  testnet: 'klv1qqqqqqqqqqqqqpgq0ja2j7xwz843ryfsk9vlz6xzsaak590h6pgq7nwr02',
+  mainnet: 'klv1qqqqqqqqqqqqqpgq8c9yag9vuc2pe64fwvqsq9e8ul8w5zuglf5qfgh7z3',
+};
+
+/** Ogmara KApp smart contract address (client-pinned per network). */
+let scAddress = PINNED_CONTRACTS[currentNetwork] || '';
+/** True when `scAddress` is client-pinned rather than node-supplied. */
+let scAddressPinned = Boolean(scAddress);
 
 
 /** Set the Klever network provider URLs (called after fetching node stats). */
@@ -73,12 +90,43 @@ export function setKleverNetwork(network: string): void {
       node: 'https://node.mainnet.klever.org',
     };
   }
+  // Re-pin for the new network. Startup sets the address BEFORE the network,
+  // so without this the client would hold the wrong network's pin.
+  repinContractForNetwork();
 }
 
-/** Set the smart contract address (called after fetching node stats). */
+/**
+ * Record the contract address the connected node reports.
+ *
+ * ADVISORY ONLY when a pin exists: a mismatch is refused and the pin kept,
+ * because the node does not get to choose where the user's money goes. The
+ * node's value is adopted only on an unknown network with no pin, and payable
+ * calls are then blocked outright — see `invokeContract`.
+ */
 export function setContractAddress(address: string): void {
-  if (address && address.startsWith('klv1') && address.length >= 40) {
-    scAddress = address;
+  if (!address || !address.startsWith('klv1') || address.length < 40) return;
+  const pin = PINNED_CONTRACTS[currentNetwork];
+  if (pin) {
+    if (address !== pin) {
+      console.warn(
+        '[Klever SC] node reported a different contract address than the pinned one; ignoring it.',
+        { reported: address, pinned: pin },
+      );
+    }
+    scAddress = pin;
+    scAddressPinned = true;
+    return;
+  }
+  scAddress = address;
+  scAddressPinned = false;
+}
+
+/** Re-resolve the pin after the network changes. */
+function repinContractForNetwork(): void {
+  const pin = PINNED_CONTRACTS[currentNetwork];
+  if (pin) {
+    scAddress = pin;
+    scAddressPinned = true;
   }
 }
 
@@ -150,31 +198,52 @@ function hexToBytes(hex: string): Uint8Array {
 
 /** Decode a klv1... bech32 address to its 32-byte public key as hex. */
 export function addressToPubkeyHex(address: string): string {
-  if (!address.startsWith('klv1') || address.length < 40) {
-    throw new Error('Invalid Klever address: must start with klv1');
-  }
+  // Verifies the bech32 CHECKSUM and the 32-byte length, not just the charset.
+  // This decodes a node-supplied `operator_address` straight into calldata, so
+  // a malformed value would otherwise be appended as a wrong-length argument
+  // and revert the invoke on-chain — burning the user's network fee on every
+  // attempt with nothing pointing at the node as the cause.
   const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
-  const hrpEnd = address.lastIndexOf('1');
-  const dataPart = address.slice(hrpEnd + 1, -6); // exclude 6-char checksum
+  const GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+  const lower = address.toLowerCase();
+  const sep = lower.lastIndexOf('1');
+  if (sep < 1) throw new Error('Invalid address: no separator');
+  const hrp = lower.slice(0, sep);
+  const dataPart = lower.slice(sep + 1);
   const values: number[] = [];
-  for (const c of dataPart) {
-    const v = CHARSET.indexOf(c);
-    if (v === -1) throw new Error('Invalid bech32 character');
+  for (const ch of dataPart) {
+    const v = CHARSET.indexOf(ch);
+    if (v === -1) throw new Error('Invalid address: bad character');
     values.push(v);
   }
-  // Convert 5-bit values to 8-bit bytes
+  // polymod over hrp-expansion + data (checksum included)
+  const expanded: number[] = [];
+  for (const c of hrp) expanded.push(c.charCodeAt(0) >> 5);
+  expanded.push(0);
+  for (const c of hrp) expanded.push(c.charCodeAt(0) & 31);
+  let chk = 1;
+  for (const v of expanded.concat(values)) {
+    const top = chk >>> 25;
+    chk = ((chk & 0x1ffffff) << 5) ^ v;
+    for (let i = 0; i < 5; i++) if ((top >> i) & 1) chk ^= GEN[i];
+  }
+  if (chk !== 1) throw new Error('Invalid address: bad checksum');
+
+  // Drop the 6-symbol checksum, then regroup 5-bit values into bytes.
+  const payload = values.slice(0, -6);
+  let acc = 0;
   let bits = 0;
-  let value = 0;
-  const bytes: number[] = [];
-  for (const v of values) {
-    value = (value << 5) | v;
+  const out: number[] = [];
+  for (const v of payload) {
+    acc = (acc << 5) | v;
     bits += 5;
-    if (bits >= 8) {
+    while (bits >= 8) {
       bits -= 8;
-      bytes.push((value >> bits) & 0xff);
+      out.push((acc >> bits) & 0xff);
     }
   }
-  return bytes.map((b) => b.toString(16).padStart(2, '0')).join('');
+  if (out.length !== 32) throw new Error('Invalid address: expected 32 bytes');
+  return out.map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 function sleep(ms: number): Promise<void> {
@@ -462,6 +531,15 @@ async function invokeContract(params: ScInvokeParams): Promise<string> {
   if (!scAddress) {
     throw new Error('Smart contract address not configured');
   }
+  // Never send money to a contract address the client did not pin. Reaching
+  // here unpinned means the node named the contract, and a hostile node would
+  // simply name its own.
+  if (params.value && !scAddressPinned) {
+    throw new Error(
+      'Refusing to send a payment to a contract address supplied by the node. ' +
+        'No pinned Ogmara contract is configured for this network.',
+    );
+  }
 
   // Encode function call: "functionName@hexArg1@hexArg2..." then base64
   const callData = [params.functionName, ...params.args].join('@');
@@ -469,7 +547,13 @@ async function invokeContract(params: ScInvokeParams): Promise<string> {
   const payload: Record<string, unknown> = {
     scType: 0, // InvokeContract
     address: scAddress,
-    callValue: params.value ? { KLV: params.value.toString() } : {},
+    // MUST be a JSON number. The Klever node refuses a string at JSON decode
+    // ("cannot unmarshal string into Go struct field
+    // SmartContractRequest.callValue of type int64") — verified against live
+    // testnet on BOTH the extension and direct-RPC signing paths. An empty
+    // `{}` is correct when no value is attached, which is why this went
+    // unnoticed: no payable SC call had ever shipped.
+    callValue: params.value ? { KLV: params.value } : {},
   };
 
   // Strip bidi/control chars from any caller-supplied summary in case
@@ -489,15 +573,52 @@ async function invokeContract(params: ScInvokeParams): Promise<string> {
 
 // --- On-Chain Operations ---
 
+/** Options for {@link registerUser}. */
+export interface RegisterOptions {
+  /**
+   * The on-chain registration fee in atomic units, read live from
+   * `GET /api/v1/registration/info`. Omit or pass 0 when registration is free.
+   * Never hard-code it: the fee is node-governance controlled and changes with
+   * no client release.
+   */
+  feeAtomic?: number;
+  /**
+   * The node operator's wallet (`operator_address` from the same response),
+   * credited a share of the fee for onboarding this user. Omit when the node
+   * reports `null`; the contract then routes the whole fee to the treasury.
+   */
+  viaNode?: string;
+}
+
 /**
- * Register user on the Ogmara smart contract.
- * Cost: ~4.4 KLV (registration fee ~2 KLV + bandwidth).
+ * Register ("verify") a wallet on the Ogmara smart contract.
+ *
+ * Costs the Klever network fee (~4.4 KLV kAppFee + bandwidth) PLUS the
+ * on-chain registration fee, if governance has set one.
+ *
  * @param publicKeyHex - 64-char hex Ed25519 public key
  */
-export async function registerUser(publicKeyHex: string): Promise<string> {
+export async function registerUser(
+  publicKeyHex: string,
+  opts: RegisterOptions = {},
+): Promise<string> {
+  const args = [stringToHex(publicKeyHex)];
+  // `via_node` is an OptionalValue tail argument, encoded by PRESENCE.
+  if (opts.viaNode) args.push(addressToPubkeyHex(opts.viaNode));
   return invokeContract({
     functionName: 'register',
-    args: [stringToHex(publicKeyHex)],
+    args,
+    value: opts.feeAtomic || undefined,
+    // The PIN modal is where the user authorises spending, so it must state
+    // the AMOUNT. Without this the summary read "Smart contract call:
+    // register" with no figure — and this is the first value-bearing contract
+    // invoke the app has ever shipped.
+    summary: opts.feeAtomic
+      ? t('tx_confirm_register_fee').replace(
+          '{{amount}}',
+          atomicToDisplay(opts.feeAtomic, 6),
+        )
+      : undefined,
   });
 }
 

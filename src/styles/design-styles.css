@@ -1799,3 +1799,31 @@
   font-weight: 700;
   color: var(--color-text-secondary);
 }
+
+/* Registration cost disclosure (verification fee panel).
+   Colours come from the shared tokens only, so it follows the light/dark
+   theme automatically — no hard-coded values. */
+.reg-cost {
+  margin: 8px 0 12px;
+}
+.reg-cost-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.reg-cost-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+  font-size: 0.9em;
+}
+.reg-cost-list li.muted,
+.reg-cost .muted {
+  color: var(--color-text-secondary);
+}
+.reg-cost-list li strong {
+  font-weight: 600;
+}

@@ -104,7 +104,7 @@
   "wallet_k5_connect": "Conectar vía K5 Wallet",
   "wallet_k5_description": "Abrir K5 Wallet para delegar firma",
   "wallet_register": "Registrarse en blockchain",
-  "wallet_register_description": "Registrar clave pública en el contrato Ogmara (~4.4 KLV)",
+  "wallet_register_description": "Registra tu clave pública en el contrato inteligente de Ogmara. Cuesta la tarifa de red más la tarifa de verificación en cadena, si hay alguna establecida.",
   "wallet_registered": "Registrado en blockchain",
   "wallet_not_registered": "No registrado",
   "wallet_tip_send": "Enviar propina",
@@ -529,5 +529,13 @@
   "media_encrypted_attachment": "Adjunto cifrado",
   "dm_recipient_no_encryption": "Esta persona aún no ha activado el cifrado, por lo que no puede recibir mensajes cifrados.",
   "dm_encrypted_preview": "Mensaje cifrado",
-  "channel_federate_failed": "No se pudo federar este canal — inténtalo de nuevo."
+  "channel_federate_failed": "No se pudo federar este canal — inténtalo de nuevo.",
+  "verification_fee_label": "Tarifa de verificación",
+  "verification_fee_free": "Gratis",
+  "verification_fee_node_share": "Va al operador de este nodo",
+  "verification_fee_network": "Tarifa de red (estimada)",
+  "verification_fee_loading": "Comprobando el coste de la verificación…",
+  "verification_fee_unknown": "Este nodo no puede informar de la tarifa actual. Tu monedero mostrará el importe exacto antes de confirmar.",
+  "verification_fee_unlocks": "Verificar desbloquea la edición de tus publicaciones y mensajes, la creación y gestión de canales, y la moderación.",
+  "tx_confirm_register_fee": "Verificar monedero en cadena: pagar {{amount}} KLV"
 }

@@ -9,6 +9,8 @@ import { getClient } from '../lib/api';
 import { avatarUrl } from '../lib/ownAvatar';
 import { authStatus, walletAddress, l2Address, getSigner } from '../lib/auth';
 import { kleverAvailable, registerUser, addressToPubkeyHex } from '../lib/klever';
+import { loadRegistrationCost } from '../lib/registration';
+import { RegistrationCostPanel } from '../components/RegistrationCostPanel';
 import { navigate, goBack } from '../lib/router';
 import { FormattedText } from '../components/FormattedText';
 import { getPayloadContent } from '../lib/payload';
@@ -227,7 +229,12 @@ export const UserProfileView: Component<UserProfileProps> = (props) => {
     try {
       // Use the on-chain wallet address (extension), not the device key
       const pubkeyHex = addressToPubkeyHex(walletAddress()!);
-      const txHash = await registerUser(pubkeyHex);
+      // Fee read at confirm time — see WalletView.handleRegister.
+      const cost = await loadRegistrationCost();
+      const txHash = await registerUser(pubkeyHex, {
+        feeAtomic: cost.known ? cost.feeAtomic : undefined,
+        viaNode: cost.operatorAddress ?? undefined,
+      });
       setEditSuccess(`Registered on-chain! TX: ${txHash.slice(0, 16)}...`);
       // Refetch to get the public_key set by chain scanner
       setTimeout(() => refetchProfile(), 5000);
@@ -323,6 +330,10 @@ export const UserProfileView: Component<UserProfileProps> = (props) => {
               <span class="profile-verified-status">✓ On-chain verified</span>
             </Show>
           </div>
+          {/* Mirrors the verify button's own guard above. */}
+          <Show when={!isVerified() && kleverAvailable()}>
+            <RegistrationCostPanel />
+          </Show>
           <Show when={editError()}>
             <div class="edit-error">{editError()}</div>
           </Show>

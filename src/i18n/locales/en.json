@@ -96,7 +96,7 @@
   "wallet_k5_connect": "Connect via K5 Wallet",
   "wallet_k5_description": "Open K5 Wallet to delegate signing authority",
   "wallet_register": "Register on Blockchain",
-  "wallet_register_description": "Register your public key on the Ogmara smart contract (~4.4 KLV)",
+  "wallet_register_description": "Register your public key on the Ogmara smart contract. Costs the network fee plus the on-chain verification fee, if one is set.",
   "wallet_registered": "Registered on blockchain",
   "wallet_not_registered": "Not registered",
   "wallet_tip_send": "Send Tip",
@@ -532,5 +532,13 @@
   "media_encrypted_attachment": "Encrypted attachment",
   "dm_recipient_no_encryption": "This person hasn't enabled encryption yet, so they can't receive encrypted messages.",
   "dm_encrypted_preview": "Encrypted message",
-  "channel_federate_failed": "Couldn't federate this channel — please try again."
+  "channel_federate_failed": "Couldn't federate this channel — please try again.",
+  "verification_fee_label": "Verification fee",
+  "verification_fee_free": "Free",
+  "verification_fee_node_share": "Goes to this node's operator",
+  "verification_fee_network": "Network fee (estimated)",
+  "verification_fee_loading": "Checking what verification costs…",
+  "verification_fee_unknown": "This node can't report the current fee. Your wallet will show the exact amount before you confirm.",
+  "verification_fee_unlocks": "Verifying unlocks editing your posts and messages, creating and managing channels, and moderation.",
+  "tx_confirm_register_fee": "Verify wallet on-chain — pay {{amount}} KLV"
 }

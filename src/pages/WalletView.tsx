@@ -7,6 +7,8 @@
 
 import { Component, createSignal, createResource, Show, onCleanup } from 'solid-js';
 import { t } from '../i18n/init';
+import { RegistrationCostPanel } from '../components/RegistrationCostPanel';
+import { loadRegistrationCost } from '../lib/registration';
 import {
   authStatus,
   walletAddress,
@@ -106,7 +108,15 @@ export const WalletView: Component = () => {
     try {
       const signer = getSigner();
       if (!signer) throw new Error('No signer available');
-      const txHash = await registerUser(signer.publicKeyHex);
+      // Read the fee at CONFIRM time: it is governance-set and may have
+      // changed while this page sat open. A failed lookup sends no value,
+      // matching pre-fee behaviour — the chain then reports the shortfall
+      // rather than us blocking the attempt.
+      const cost = await loadRegistrationCost();
+      const txHash = await registerUser(signer.publicKeyHex, {
+        feeAtomic: cost.known ? cost.feeAtomic : undefined,
+        viaNode: cost.operatorAddress ?? undefined,
+      });
       setTxResult(txHash);
       setRegistrationStatus(true);
     } catch (e: any) {
@@ -346,6 +356,7 @@ export const WalletView: Component = () => {
             }
           >
             <p class="wallet-desc">{t('wallet_register_description')}</p>
+            <RegistrationCostPanel />
             <button
               class="wallet-btn primary"
               onClick={handleRegister}
