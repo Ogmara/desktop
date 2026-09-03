@@ -21,7 +21,8 @@ import {
 } from '@ogmara/sdk';
 import { getItemAsync, setItemAsync, deleteItemAsync } from './secureStore';
 import { getSetting, setSetting } from './settings';
-import { vaultGetAddress } from './vault';
+import { SS, isValidAddress } from './vaultAccounts';
+import { vaultActiveAddress, vaultGetAddress } from './vault';
 import { signMessage } from './klever';
 import { getClient } from './api';
 import { e2elog, withRetry } from './e2eDebug';
@@ -57,16 +58,80 @@ export function getOrCreateDeviceId(): string {
   return id;
 }
 
-/** Load or create the device X25519 encryption keypair, persisting the secret. */
+/**
+ * This account's X25519 encryption secret slot.
+ *
+ * PER ACCOUNT, not per install. `enc_pub` is published to the node's directory
+ * in the clear, so one secret shared across accounts publishes the SAME
+ * `enc_pub` for all of them — proving to the node, and to anyone who reads the
+ * directory, that they are the same person. It also means a ciphertext wrapped
+ * to account A is decryptable by account B on this device, so "one account
+ * cannot read another's keys" holds by construction rather than by argument.
+ * See protocol spec §2.4.
+ *
+ * Falls back to the legacy device-global slot only when no account is active.
+ */
+function encPrivKeyFor(): string {
+  const addr = vaultActiveAddress();
+  return addr && isValidAddress(addr) ? SS.encPrivFor(addr) : ENC_PRIV_KEY;
+}
+
+/**
+ * Load or create THIS ACCOUNT's X25519 encryption keypair.
+ *
+ * Reading the legacy device-global slot is fine — it is the pre-v2 key, and
+ * `claimDeviceIdentityOnce` copies it to the first account that needs it.
+ * CREATING into it is not: with no account scoped there is no account to own
+ * the key, and minting one there would hand a shared identity to whichever
+ * account is activated next. Refuse instead; the caller retries once an
+ * account is active.
+ */
 export async function getOrCreateEncKeypair(): Promise<{ privateKey: Uint8Array; publicKeyHex: string }> {
-  const stored = await getItemAsync(ENC_PRIV_KEY);
+  const slot = encPrivKeyFor();
+  const stored = await getItemAsync(slot);
   if (stored) {
     const privateKey = hexToBytes(stored);
     return { privateKey, publicKeyHex: encPublicKeyHex(privateKey) };
   }
+  if (slot === ENC_PRIV_KEY) {
+    throw new Error('No account is active — refusing to create a device encryption key');
+  }
   const kp = generateDeviceEncKeypair();
-  await setItemAsync(ENC_PRIV_KEY, bytesToHex(kp.privateKey));
+  await setItemAsync(slot, bytesToHex(kp.privateKey));
   return kp;
+}
+
+/**
+ * Give `addr` the pre-v2 device identity, exactly once.
+ *
+ * COPIES, never moves. Without this, `ensureDeviceEncBinding` finds the new
+ * per-account slot empty, mints a fresh keypair, publishes a new binding, and
+ * `revokeStaleEncKeys` retires the old `enc_pub` — making every channel-key
+ * envelope already wrapped to it permanently undecryptable.
+ *
+ * Gated on its OWN marker, deliberately separate from the preference-scope
+ * migration: a device that already ran that one has its marker set, so folding
+ * these together would skip this entirely.
+ */
+export async function claimDeviceIdentityOnce(addr: string): Promise<void> {
+  if (!isValidAddress(addr)) return;
+  const MARKER = 'ogmara.vault.enc_identity_claimed';
+  try {
+    if (await getItemAsync(MARKER)) return;
+    const legacy = await getItemAsync(ENC_PRIV_KEY);
+    if (legacy) {
+      const target = SS.encPrivFor(addr);
+      // Never overwrite a key this account already has.
+      if (!(await getItemAsync(target))) {
+        await setItemAsync(target, legacy);
+      }
+    }
+    // The legacy slot is NOT deleted: it stays readable for an older build,
+    // and a half-finished claim can be retried.
+    await setItemAsync(MARKER, '1');
+  } catch {
+    // Leave the marker unset so a later launch retries.
+  }
 }
 
 /**
@@ -170,7 +235,11 @@ export async function ensureDeviceEncBinding(): Promise<void> {
 
 /** Wipe the device encryption key + binding markers (on wallet disconnect). */
 export async function wipeDeviceEncKey(): Promise<void> {
-  await deleteItemAsync(ENC_PRIV_KEY);
+  // THIS account's slot only. Deleting the shared legacy slot would break E2E
+  // for every other account on the device when one is removed, and `deviceId`
+  // / `encKeyBound` are per-account settings that resolve through the active
+  // wallet scope.
+  await deleteItemAsync(encPrivKeyFor());
   setSetting('encKeyBound', '');
   setSetting('deviceId', '');
 }

@@ -5,6 +5,65 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.66.0] - 2026-09-03
+
+Multi-account Phase 3d of 6 — the vault is wired up. **This is the first
+release that changes on-disk state**: `VAULT_VERSION` is now 2 and the
+migration runs on launch. There is still no account-switching UI (Phase 5), so
+the app behaves as before; the storage underneath it does not.
+
+### Changed
+
+- The vault now reads and writes per-account slots, keeps an account index, and
+  exposes `vaultActivate` / `vaultListAccounts` / `vaultAddAccount` /
+  `vaultRemoveAccount` / `vaultExportKeyFor`. The v1 anchors are RETAINED, so
+  an older build still finds its wallet and the recovery backstop stays intact.
+- `vaultInit` prefers the recorded active account and falls back to the first
+  indexed one, so a lost `active` pointer no longer looks like a lost wallet.
+  It never falls back to a DIFFERENT account's key.
+- `vaultExportKey` has no cross-account fallback once an account is active. A
+  transient failure returning another account's key would have `settings-sync`
+  encrypt one account's settings under another's — permanently undecryptable
+  on every device — and upload the wrong account's key vault.
+- `vaultLock` clears the session PIN key and DEK, not just the signer.
+  Otherwise a locked app could still decrypt every account's slot.
+- `vaultWipe` enumerates the union PLUS the recorded active account, uncapped,
+  and deletes in ONE batch so the native last-key guard evaluates once and
+  raises at most one dialog rather than one per account.
+- `vaultHasWallet` counts per-account slots, not just the legacy anchors —
+  otherwise a migrated vault would report "no wallet" and offer to create one
+  over a device that already holds several.
+- The device E2E identity is per account (`ogmara.vault.enc_private_key.<addr>`,
+  protocol §2.4). `claimDeviceIdentityOnce` hands the pre-v2 identity to the
+  migrating account by COPY. Without it, `ensureDeviceEncBinding` would find
+  the new slot empty, mint a fresh keypair, publish it, and revoke the old
+  `enc_pub` — permanently orphaning every channel-key envelope wrapped to it.
+  `wipeDeviceEncKey` is scoped to the active account, so removing one account
+  no longer breaks E2E for the others.
+
+### Fixed
+
+- **Setting a PIN would have left every per-account slot in plaintext.**
+  `vaultEncryptWithPin` only ever touched the legacy anchor; under v2 that
+  means the UI would report a PIN-protected vault while the actual key slots
+  sat unencrypted. `vaultEncryptAllWithPin` reads every account first and
+  aborts before writing anything if any one cannot be read — encrypting a
+  subset is the mobile 0.47.0 finding — then persists a verified DEK, seals
+  each slot, verifies by decrypting, and only then destroys plaintext.
+  `vaultDecryptAllToRaw` is its mirror with the opposite commit point.
+- **The PIN record was committed before the vault was encrypted.**
+  `setupPin` is split into `derivePinForSetup` (stores nothing) and
+  `commitPinSetup` (the commit point), and `PinSetup` now encrypts first. The
+  PIN record is what makes the app demand a PIN, so it must be written last.
+- **A pre-versioning install migrated one launch late.** The version-0 branch
+  tagged existing data as v1 and returned instead of falling through to the
+  migration loop; for a PIN'd vault it did not even record the deferred marker
+  until the second start.
+- Migrations are memoized (`vaultMigrationsReady`) and awaited by both `App.tsx`
+  and `initAuth`, which start independently. Running the migration twice
+  concurrently against the same key material is not something to leave to
+  timing.
+
 ## [1.65.0] - 2026-09-03
 
 Multi-account Phase 3c of 6 — the account index and the v1 → v2 migration.

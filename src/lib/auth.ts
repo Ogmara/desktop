@@ -24,6 +24,7 @@ import {
   runWalletScopeMigrationOnce,
   runWalletSwitchResets,
 } from './walletScope';
+import { vaultMigrationsReady } from './vaultMigration';
 
 export type AuthStatus = 'none' | 'loading' | 'locked' | 'ready';
 export type WalletSource = 'builtin' | null;
@@ -58,6 +59,8 @@ export async function initAuth(): Promise<void> {
     // different account active, would irreversibly adopt the previous
     // account's channels, topic groups and hidden DMs into the new namespace.
     runWalletScopeMigrationOnce();
+    // Shares the memoized run with `App.tsx`, which starts independently.
+    await vaultMigrationsReady();
     const address = await vaultInit();
     if (address) {
       const signer = vaultGetSigner();

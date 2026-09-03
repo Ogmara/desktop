@@ -13,18 +13,37 @@
  * 5. Every format version must have a migration path to the next
  *
  * Storage format history:
- *   v1 (0.1.0–current): raw hex in 'ogmara.vault.private_key' or
+ *   v1 (0.1.0–1.64.0): raw hex in 'ogmara.vault.private_key' or
  *       AES-256-GCM encrypted in 'ogmara.vault.encrypted_key'
  *       PBKDF2 iterations: 600,000. IV: 12 bytes. Format: "ivHex:ctHex"
+ *   v2 (1.65.0+): per-account slots '<anchor>.<address>', an account index,
+ *       and — in PIN mode — a DEK wrapping every slot. The v1 anchors are
+ *       RETAINED, not replaced: they remain the recovery backstop and keep an
+ *       older build working. See `vaultMigrateV2.ts`.
  *
  * Desktop version: uses Tauri keyring commands instead of expo-secure-store.
  * Per spec 05-clients.md section 5.5.2 (Update Safety & Vault Migration).
  */
 
 import * as SecureStore from './secureStore';
+import { WalletSigner } from '@ogmara/sdk';
+import { migrateV1toV2, readVersion, type MigrationEnv } from './vaultMigrateV2';
+import { browserLocal } from './vaultIndex';
+import type { StoreLike } from './vaultDek';
+
+const secureStoreAdapter: StoreLike = SecureStore;
+
+function migrationEnv(): MigrationEnv {
+  return {
+    store: secureStoreAdapter,
+    local: browserLocal,
+    listKeystore: () => SecureStore.listVaultAccounts(),
+    deriveAddress: async (hex: string) => (await WalletSigner.fromHex(hex)).address,
+  };
+}
 
 /** Current vault storage format version. */
-export const VAULT_VERSION = 1;
+export const VAULT_VERSION = 2;
 
 const VERSION_KEY = 'ogmara.vault.version';
 
@@ -63,23 +82,55 @@ export const VAULT_PARAMS = {
 export async function runVaultMigrations(): Promise<number> {
   const storedVersion = await getStoredVersion();
 
+  let entryVersion = storedVersion;
   if (storedVersion === 0) {
     // First launch or pre-versioning install
-    const hasV1Data = await hasV1VaultData();
-    if (hasV1Data) {
-      // Tag existing data as v1
+    if (await hasV1VaultData()) {
+      // Tag existing data as v1, then FALL THROUGH to the loop below. Returning
+      // here would leave a pre-versioning install one launch behind — and for a
+      // PIN'd vault it would not even record the deferred marker until the
+      // second start.
       await SecureStore.setItemAsync(VERSION_KEY, '1');
-      return 1;
+      entryVersion = 1;
+    } else {
+      // No existing data — tag current so a wallet created from here starts
+      // clean with no migration ever pending.
+      await SecureStore.setItemAsync(VERSION_KEY, VAULT_VERSION.toString());
+      return VAULT_VERSION;
     }
-    // No existing data — set current version for future reference
-    await SecureStore.setItemAsync(VERSION_KEY, VAULT_VERSION.toString());
-    return VAULT_VERSION;
   }
 
-  // Future: add migration steps here
-  // if (storedVersion === 1) { await migrateV1toV2(); }
+  // A LOOP, not a chain of ifs: a device several versions behind must walk
+  // every step, and each step is responsible for its own commit point.
+  let version = entryVersion;
+  for (let guard = 0; guard < 8 && version < VAULT_VERSION; guard++) {
+    const before = version;
+    if (version === 1) {
+      const out = await migrateV1toV2(migrationEnv());
+      if (out.result === 'deferred') {
+        // PIN'd: the address is not derivable before unlock. Stays at v1 on
+        // purpose; `vaultUnlockWithPin` completes it.
+        return 1;
+      }
+    }
+    version = await readVersion(secureStoreAdapter);
+    if (version === before) break; // no progress — do not spin
+  }
+  return version;
+}
 
-  return storedVersion;
+/**
+ * Resolve once per session, shared by every caller.
+ *
+ * `App.tsx` and `initAuth` both need migrations finished before they touch the
+ * vault, and they start independently. Without memoizing, the migration could
+ * run twice concurrently against the same key material.
+ */
+let migrationsPromise: Promise<number> | null = null;
+
+export function vaultMigrationsReady(): Promise<number> {
+  if (!migrationsPromise) migrationsPromise = runVaultMigrations();
+  return migrationsPromise;
 }
 
 /** Get the stored vault version (0 = not set / first install). */

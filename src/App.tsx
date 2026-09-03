@@ -15,7 +15,7 @@ import { Component, createSignal, createEffect, Show, Switch, Match, onMount, on
 import { t } from './i18n/init';
 import { LockScreen } from './LockScreen';
 import { PinSetup } from './PinSetup';
-import { runVaultMigrations, verifyVaultIntegrity } from './lib/vaultMigration';
+import { vaultMigrationsReady, verifyVaultIntegrity } from './lib/vaultMigration';
 import {
   vaultHasWallet,
   vaultIsEncrypted,
@@ -103,8 +103,15 @@ export const App: Component = () => {
 
   async function initializeVault() {
     try {
-      // Run migrations first (safe on every launch)
-      await runVaultMigrations();
+      // The per-account scope must be pointed BEFORE any per-account read,
+      // and the adoption migration must run exactly once while no account is
+      // active — see `walletScope.runWalletScopeMigrationOnce`. `initAuth`
+      // does both; this only has to not race it.
+      //
+      // Memoized: `initAuth` awaits the same promise, and the two start
+      // independently. Running the vault migration twice concurrently against
+      // the same key material is not something to leave to timing.
+      await vaultMigrationsReady();
 
       // Verify integrity
       const integrity = await verifyVaultIntegrity();

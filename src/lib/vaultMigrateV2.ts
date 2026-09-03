@@ -178,6 +178,19 @@ async function adoptAccount(
   const entry: AccountEntry = { a: address, label: null, source: 'builtin', added: Date.now() };
   await persistIndexAdding(entry, store, local, listKeystore);
   await writeActive(store, address);
+
+  // Hand the pre-v2 device E2E identity to this account. Without it,
+  // `ensureDeviceEncBinding` finds the new per-account slot empty, mints a
+  // fresh keypair, publishes it, and revokes the old `enc_pub` — permanently
+  // orphaning every channel-key envelope already wrapped to it. Best-effort:
+  // a failure here must not fail the key migration, and it retries on the next
+  // launch because its marker stays unset.
+  try {
+    const { claimDeviceIdentityOnce } = await import('./deviceEnc.ts');
+    await claimDeviceIdentityOnce(address);
+  } catch {
+    /* retried next launch */
+  }
 }
 
 /**

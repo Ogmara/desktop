@@ -62,20 +62,46 @@ export async function hasPinSetup(): Promise<boolean> {
  * Returns the derived CryptoKey for encrypting the private key.
  */
 export async function setupPin(pin: string): Promise<CryptoKey> {
-  if (!/^\d{6,}$/.test(pin)) throw new Error('PIN must be at least 6 digits');
+  const prepared = await derivePinForSetup(pin);
+  await commitPinSetup(prepared);
+  return prepared.key;
+}
 
+/** A derived-but-uncommitted PIN. Nothing is stored until {@link commitPinSetup}. */
+export interface PreparedPin {
+  key: CryptoKey;
+  saltHex: string;
+  verifyToken: string;
+}
+
+/**
+ * Derive the PIN key and its verification token WITHOUT storing anything.
+ *
+ * Split from the commit so the caller can encrypt the vault first. The
+ * combined `setupPin` committed the PIN record and only then encrypted, which
+ * inverts the safe order: the PIN record is what makes the app demand a PIN,
+ * so it must be the LAST thing written, once the key material it unlocks is
+ * actually encrypted.
+ */
+export async function derivePinForSetup(pin: string): Promise<PreparedPin> {
+  if (!/^\d{6,}$/.test(pin)) throw new Error('PIN must be at least 6 digits');
   const salt = generateSalt();
   const key = await deriveKeyFromPin(pin, salt);
-
   // Encrypt a known token to verify PIN on unlock
   const verifyToken = await encryptWithKey(key, 'ogmara-pin-ok');
+  return { key, saltHex: bytesToHex(salt), verifyToken };
+}
 
-  await SecureStore.setItemAsync(SALT_KEY, bytesToHex(salt));
-  await SecureStore.setItemAsync(PIN_VERIFY_KEY, verifyToken);
+/**
+ * Commit a prepared PIN. THE COMMIT POINT for enabling the lock.
+ *
+ * Call only after the vault is encrypted and verified.
+ */
+export async function commitPinSetup(prepared: PreparedPin): Promise<void> {
+  await SecureStore.setItemAsync(SALT_KEY, prepared.saltHex);
+  await SecureStore.setItemAsync(PIN_VERIFY_KEY, prepared.verifyToken);
   await SecureStore.setItemAsync(LOCK_ENABLED_KEY, 'true');
   await SecureStore.setItemAsync(FAILED_ATTEMPTS_KEY, '0');
-
-  return key;
 }
 
 /**

@@ -5,8 +5,8 @@
 
 import { Component, createSignal, Show, onCleanup, onMount } from 'solid-js';
 import { t } from './i18n/init';
-import { setupPin } from './lib/appLock';
-import { vaultEncryptWithPin } from './lib/vault';
+import { derivePinForSetup, commitPinSetup } from './lib/appLock';
+import { vaultEncryptAllWithPin } from './lib/vault';
 
 interface PinSetupProps {
   onComplete: () => void;
@@ -55,8 +55,12 @@ export const PinSetup: Component<PinSetupProps> = (props) => {
     setError('');
 
     try {
-      const key = await setupPin(pin());
-      await vaultEncryptWithPin(key);
+      // Encrypt FIRST, commit the PIN record second. The old order committed
+      // the PIN and then encrypted, so a failure in between left the app
+      // demanding a PIN for a vault that was never encrypted.
+      const prepared = await derivePinForSetup(pin());
+      await vaultEncryptAllWithPin(prepared.key);
+      await commitPinSetup(prepared);
       setPin('');
       setConfirmPin('');
       props.onComplete();
