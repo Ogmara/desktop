@@ -145,7 +145,13 @@ export const App: Component = () => {
       const lockOn = await isLockEnabled();
       setLockEnabled(lockOn);
 
-      if (encrypted && lockOn) {
+      // `||`, not `&&`. Either flag alone means key material may be sealed:
+      // `enablePinLock()` is a separate write after the encryption returns, so
+      // a failure between them leaves an encrypted vault with the lock
+      // unarmed — which under `&&` booted straight past the lock screen. The
+      // lock screen is recoverable (a wrong PIN just fails); walking past an
+      // encrypted vault is not obviously so.
+      if (encrypted || lockOn) {
         // Vault is encrypted — show lock screen
         setAppState('locked');
         return;

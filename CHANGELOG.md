@@ -5,6 +5,92 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.71.0] - 2026-09-03
+
+Second audit pass, run against the tree 1.70.0 fixed. **Three of those fixes
+introduced new blocking bugs and two did not close what they claimed** — which
+is the entire reason the re-run is a standing rule.
+
+### Fixed — regressions introduced by 1.70.0
+
+- **Disconnect deleted the SHARED device encryption key.** Moving
+  `wipeDeviceEncKey()` after `vaultRemoveAccount` — correct in itself, since the
+  removal can be refused — meant it ran once `activeAddress` had been nulled, so
+  it resolved the legacy device-global slot and deleted that: the pre-v2 device
+  identity for every OTHER account on the machine, which its own doc comment
+  forbids. The call is gone entirely; `keyArtefactsFor` already covers the
+  departing account's slot, so it was redundant as well as harmful.
+- **Removing an account disarmed the lock screen for the accounts that
+  remained.** The new anchor deletion also removed `ogmara.vault.mode`, which is
+  VAULT-level — so `vaultIsEncrypted()` went false while the lock stayed
+  enabled, and the next launch walked straight past the lock screen. One fix in
+  1.70.0 set that flag unconditionally to close exactly this hole; another
+  deleted it.
+- **PIN removal's safe refusal produced the unsafe state.** The mode flag was
+  flipped to `raw` before the "is anything still sealed?" check, so the refusal
+  path left `lock_enabled` true over a vault reporting itself unencrypted.
+- web: **the enc-key guard turned key sharing into key destruction.** It checked
+  that a scope existed, not that it was unchanged, while `encVaultStore`
+  re-resolved the slot after the IndexedDB round-trip — so a wallet switch
+  mid-call overwrote the OTHER wallet's live X25519 secret. The slot is now
+  captured once and written explicitly, and a store into a non-empty slot is
+  refused.
+
+### Fixed — first-pass fixes that did not close the hole
+
+- **The native last-key guard was still bypassable.** Guarding only overwrites
+  left slot CREATION open, so an address-shaped decoy could still be minted and
+  counted. The value rule now applies on creation too. The limit is documented
+  rather than papered over: this is a shape check, webview code can produce a
+  conforming address, and it already has read access to every key — so the
+  guard reliably protects against an accidental last-key deletion by the app,
+  not against a hostile webview.
+- **`ogmara.vault.dek` was completely unguarded on the write path.** It is not a
+  "wallet key slot", so the new overwrite rule missed it by one constant — two
+  lines of webview code could brick every account with no prompt. The DEK, its
+  mirror, and the per-account X25519 secrets are now covered.
+- `list_vault_accounts` used a looser slot rule than `is_wallet_key_slot`, so a
+  suffix could surface as a ghost account while not counting for the guard.
+
+### Fixed — other
+
+- The lock-screen gate is `encrypted || lockOn`, not `&&`. Arming the lock is a
+  separate write after encryption returns, so a failure between them left an
+  encrypted vault that booted past the lock screen.
+- A PIN setup that aborted before encrypting left credentials the UI never
+  surfaces, refusing every PIN but the forgotten one with no removal path — the
+  only escape was wiping the vault. Uncommitted credentials are now discarded
+  when nothing is sealed under them, proven against the store.
+- `vaultRemoveAccount` deletes only the anchor it actually proved, not both.
+- `encryptAllWithPin` gained the keystore completeness check its mirror already
+  had, and writes the mode flag AFTER converting the legacy anchor — before, a
+  crash between them left a vault marked encrypted whose anchor was still
+  plaintext, openable with no PIN.
+- `reconcilePinJournal` no longer treats a FAILED account listing as an empty
+  one and retires a journal that may still describe outstanding work.
+- Stale `.secure-store.tmp*` files are swept at startup. With per-save unique
+  names nothing overwrote them any more, so each crash left a permanent sealed
+  copy of the whole store — and a pre-1.70 leftover is 0644.
+- The `.machine-key` sidecar is created 0600 atomically (it was write-then-chmod,
+  and on a system with no OS identifier that file IS the wrapping key), and the
+  data directory is narrowed on the load path, not only on a successful save.
+- The revealed key's `onCopy` handler is removed: `stopPropagation` does not
+  prevent a copy, so it read as a clipboard defence while being none.
+
+### Added
+
+- `src/lib/pinSetupOrder.test.ts`. The audit found that `vaultPinOps.test.ts`
+  **cannot catch the bug it was written for**: it derives the PIN key from a
+  harness constant and hands that same object to the recovery check, so the
+  invariant is supplied rather than proven — the same failure the first pass
+  found in `vaultIndex.test.ts`. Reverting `PinSetup.tsx` to the broken 1.68.0
+  order still passed all 95 tests. The new tests re-derive the key from what the
+  store actually holds, and one of them asserts the BROKEN order is observably
+  unrecoverable — a guard against the test quietly ceasing to observe anything.
+- Rust tests for the address-shaped decoy, the DEK write path, and the
+  predicate agreement, replacing a test that certified a bar the attack stepped
+  over.
+
 ## [1.70.0] - 2026-09-03
 
 Fixes from the full audit pipeline (Code Audit + Security Audit) over the whole

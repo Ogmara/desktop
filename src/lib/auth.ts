@@ -296,12 +296,16 @@ export async function disconnectWallet(): Promise<void> {
     // No active account to scope to — fall back to the total wipe.
     await vaultWipe();
   }
-  // AFTER the removal succeeded, never before. This is destructive and NOT
-  // refusable, while the removal above raises a native prompt the user may
-  // cancel. Running it first meant a cancelled "are you sure?" had already
-  // deleted the account's X25519 secret — and every channel-key and DM
-  // envelope wrapped to that `enc_pub` becomes permanently unopenable.
-  await wipeDeviceEncKey().catch(() => {});
+  // NO separate enc-key wipe here.
+  //
+  // `vaultRemoveAccount` already deletes `SS.encPrivFor(addr)` (it is in
+  // `keyArtefactsFor`) and already wipes the account's namespace, which covers
+  // the scoped `deviceId` / `encKeyBound` markers. Calling `wipeDeviceEncKey()`
+  // as well was worse than redundant: it resolves its slot from
+  // `vaultActiveAddress()`, which the removal has just set to null, so it fell
+  // back to the SHARED legacy slot `ogmara.vault.enc_private_key` and deleted
+  // that — destroying the pre-v2 device identity for every other account on
+  // the device, exactly what its own doc comment forbids.
 
   // Only now: close the socket and clear the DM/channel/media/key-vault caches
   // for the departing account. Before any handover below — an earlier version

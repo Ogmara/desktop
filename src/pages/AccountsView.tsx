@@ -156,14 +156,16 @@ export function AccountsView() {
                 when={target().key}
                 fallback={<p class="error-banner">{t('accounts_remove_no_key')}</p>}
               >
-                {/* Shown, never copied. A private key on the system
-                    clipboard is readable by every other process and is
+                {/* No copy BUTTON. A one-click copy puts the private key on
+                    the system clipboard — readable by every other process,
                     captured by clipboard-history managers, with nothing to
-                    clear it afterwards — `WalletView` copies only the address
-                    for exactly this reason. The reveal below is dropped after
-                    two minutes and on unmount. */}
+                    clear it — and `WalletView` copies only the address for
+                    that reason. The user can still select and copy manually,
+                    which is deliberate: they need to save it somewhere. What
+                    is avoided is the app putting it there on a single click.
+                    The reveal is dropped after two minutes and on unmount. */}
                 <p class="muted">{t('accounts_remove_export_hint')}</p>
-                <code class="export-key" onCopy={(e) => e.stopPropagation()}>{target().key}</code>
+                <code class="export-key">{target().key}</code>
               </Show>
               <div class="modal-actions">
                 <button class="btn-secondary" onClick={stopReveal}>

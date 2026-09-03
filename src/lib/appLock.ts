@@ -84,8 +84,18 @@ export interface PreparedPin {
  * with the correct PIN in hand. If credentials exist, the entered PIN must
  * match them and the same key comes back.
  */
-export async function derivePinForSetup(pin: string): Promise<PreparedPin> {
+export async function derivePinForSetup(
+  pin: string,
+  /**
+   * Proves nothing is encrypted under the stored credentials, so discarding
+   * them loses nothing. Injected because `appLock` must not import the vault.
+   */
+  discardable: () => Promise<boolean> = async () => false,
+): Promise<PreparedPin> {
   if (!/^\d{6,}$/.test(pin)) throw new Error('PIN must be at least 6 digits');
+
+  // The lock being ARMED means accounts really are encrypted; never discard.
+  const armed = (await SecureStore.getItemAsync(LOCK_ENABLED_KEY).catch(() => null)) === 'true';
 
   const existingSalt = await SecureStore.getItemAsync(SALT_KEY).catch(() => null);
   const existingVerify = await SecureStore.getItemAsync(PIN_VERIFY_KEY).catch(() => null);
@@ -97,6 +107,20 @@ export async function derivePinForSetup(pin: string): Promise<PreparedPin> {
       }
     } catch {
       /* falls through to the mismatch error below */
+    }
+    // Uncommitted credentials with nothing encrypted under them are safely
+    // discardable, and the caller supplies that proof. Without this a setup
+    // that aborted before encrypting left credentials the UI never surfaces —
+    // `SettingsView` drives its PIN section off `isLockEnabled()`, so it shows
+    // "Set Up PIN" with no removal option, and every PIN but the forgotten one
+    // was refused. The only escape was wiping the vault.
+    if (!armed && (await discardable())) {
+      await SecureStore.deleteItemAsync(SALT_KEY).catch(() => {});
+      await SecureStore.deleteItemAsync(PIN_VERIFY_KEY).catch(() => {});
+      const salt = generateSalt();
+      const key = await deriveKeyFromPin(pin, salt);
+      const verifyToken = await encryptWithKey(key, 'ogmara-pin-ok');
+      return { key, saltHex: bytesToHex(salt), verifyToken };
     }
     throw new Error(
       'A PIN is already partly set up on this device. Enter that PIN to finish, or remove it first.',

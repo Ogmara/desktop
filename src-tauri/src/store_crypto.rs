@@ -157,12 +157,25 @@ fn machine_secret(store_path: &Path) -> Result<(Vec<u8>, bool), String> {
     let mut fresh = [0u8; 32];
     getrandom::fill(&mut fresh).map_err(|e| format!("rng error: {e}"))?;
     let encoded = hex(&fresh);
-    std::fs::write(&side, &encoded).map_err(|e| format!("sidecar write error: {e}"))?;
+    // Created 0600 ATOMICALLY. On a system with no OS identifier this file IS
+    // the wrapping key, and `fs::write` + chmod left it world-readable for the
+    // duration of the write.
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&side, std::fs::Permissions::from_mode(0o600));
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&side)
+            .map_err(|e| format!("sidecar write error: {e}"))?;
+        f.write_all(encoded.as_bytes())
+            .map_err(|e| format!("sidecar write error: {e}"))?;
     }
+    #[cfg(not(unix))]
+    std::fs::write(&side, &encoded).map_err(|e| format!("sidecar write error: {e}"))?;
     Ok((fresh.to_vec(), false))
 }
 

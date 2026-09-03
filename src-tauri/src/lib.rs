@@ -72,6 +72,13 @@ fn next_corrupt_bak_path(path: &std::path::Path) -> PathBuf {
 impl SecureFileStore {
     fn new(app_data_dir: PathBuf) -> Self {
         let path = app_data_dir.join(".secure-store.json");
+        // On the LOAD path as well: narrowing only inside `save()` meant a
+        // read-only session left the directory at 0755 indefinitely.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&app_data_dir, fs::Permissions::from_mode(0o700));
+        }
         let mut poisoned = false;
         let mut needs_upgrade = false;
         let data = if path.exists() {
@@ -145,6 +152,17 @@ impl SecureFileStore {
         } else {
             HashMap::new()
         };
+        // Sweep stale temp files BEFORE anything else touches the directory.
+        //
+        // Each is a complete sealed copy of the store, and with per-save unique
+        // names nothing overwrites them any more — so every crash between
+        // create and rename would leave one permanently. They are also frozen
+        // snapshots: one written before a PIN setup preserves the
+        // plaintext-slot state forever, defeating "remove account" and PIN
+        // encryption as far as on-disk remanence goes. A pre-1.70 `.tmp` is
+        // additionally 0644.
+        Self::sweep_temp_files(&path);
+
         let store = Self {
             path,
             data: Mutex::new(data),
@@ -164,6 +182,25 @@ impl SecureFileStore {
             }
         }
         store
+    }
+
+    /// Remove leftover `.secure-store.tmp*` files from crashed saves.
+    fn sweep_temp_files(path: &std::path::Path) {
+        let (Some(dir), Some(stem)) = (path.parent(), path.file_name()) else {
+            return;
+        };
+        let prefix = format!("{}.tmp", stem.to_string_lossy());
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(&prefix) {
+                match fs::remove_file(entry.path()) {
+                    Ok(()) => eprintln!("[secure-store] removed stale temp file {name}"),
+                    Err(e) => eprintln!("[secure-store] could not remove stale temp {name}: {e}"),
+                }
+            }
+        }
     }
 
     fn save(&self) -> Result<(), String> {
@@ -346,7 +383,11 @@ impl SecureFileStore {
                 for prefix in [VAULT_RAW_KEY, VAULT_ENCRYPTED_KEY] {
                     if let Some(rest) = k.strip_prefix(prefix) {
                         if let Some(addr) = rest.strip_prefix('.') {
-                            if !addr.is_empty() {
+                            // Same predicate as `is_wallet_key_slot`. They
+                            // disagreed: a suffix this accepted but that one
+                            // rejected surfaced as a ghost account in the
+                            // index while not counting for the delete guard.
+                            if is_address_shaped(addr) {
                                 return Some(addr.to_string());
                             }
                         }
@@ -389,6 +430,19 @@ fn is_wallet_key_slot(key: &str) -> bool {
 /// A bech32-shaped `klv1…` address, mirroring the TypeScript `isValidAddress`.
 ///
 /// The guard must count only slots that could genuinely belong to an account.
+///
+/// LIMITS, stated plainly. This is a shape check, not a checksum, and code
+/// running in the webview can produce a conforming string — so a determined
+/// attacker there can still mint a decoy that satisfies the count. Combined
+/// with the value-shape rule in `secure_store_set` the decoy must now also
+/// carry something that looks like a key, which stops the trivial version, but
+/// it does not make the guard sound against a hostile webview.
+///
+/// That is accepted rather than papered over: webview code can already READ
+/// every key through `secure_store_get`, so exfiltration is the larger
+/// exposure and no delete guard addresses it. What this guard reliably
+/// protects against is the case it was built for — an accidental or buggy
+/// last-key deletion by the app itself, which is silent and unrecoverable.
 fn is_address_shaped(s: &str) -> bool {
     s.len() >= 40
         && s.len() <= 80
@@ -474,21 +528,36 @@ fn secure_store_set(app: tauri::AppHandle, key: String, value: String) -> Result
     }
     let store = app.state::<SecureFileStore>();
 
-    // Overwriting a wallet-key slot with something that is not key material
-    // destroys the key just as permanently as deleting it — and this path had
-    // no guard at all, so the whole delete confirmation could simply be
-    // side-stepped by writing junk over each slot.
+    // Writes into a slot that holds irreplaceable key material must carry
+    // something that IS key material.
     //
-    // Legitimate writes always carry key material (64-hex, or `ivHex:ctHex`),
-    // so requiring that shape blocks the destructive case without touching any
-    // real flow. A mode switch replaces one key form with the other, which
-    // still satisfies it.
-    if is_wallet_key_slot(&key) && !looks_like_key_material(&value) {
-        if store.get(&key).is_some() {
+    // Applied on CREATION as well as overwrite. Guarding only overwrites left
+    // the decoy path open: a new `ogmara.vault.private_key.<address-shaped>`
+    // slot could be created with any junk, and it then counted toward the
+    // delete guard's "one slot remains" test — so deleting every real slot
+    // proceeded with no confirmation.
+    if !looks_like_key_material(&value) {
+        if is_wallet_key_slot(&key) {
             return Err(
-                "refusing to overwrite a wallet key slot with a value that is not key material"
-                    .into(),
+                "refusing to write a non-key value into a wallet key slot".into(),
             );
+        }
+        // The DEK and the per-account X25519 secrets are not "wallet key
+        // slots" — deleting them loses no wallet directly — but overwriting
+        // either is just as destructive: the DEK is the only thing that opens
+        // every ciphertext slot, and an enc secret is the only thing that
+        // opens the envelopes wrapped to its `enc_pub`. The delete path guards
+        // the DEK; the write path did not, so two lines of webview code could
+        // brick every account without a prompt.
+        if key == VAULT_DEK_KEY
+            || key.starts_with("ogmara.vault.dek")
+            || key.starts_with("ogmara.vault.enc_private_key")
+        {
+            if store.get(&key).is_some() {
+                return Err(
+                    "refusing to overwrite encryption key material with a non-key value".into(),
+                );
+            }
         }
     }
     store.set(&key, &value)
@@ -1342,6 +1411,46 @@ mod tests {
             "the decoy must not stand in for a real remaining wallet key"
         );
         assert!(s.get(&raw_for(A)).is_some());
+    }
+
+    #[test]
+    fn an_address_shaped_decoy_cannot_be_created_with_junk() {
+        // The previous test asserted only `.z` and `.notanaddress`, which is a
+        // bar the real attack steps straight over: `klv1` + 58 lowercase alnum
+        // chars is trivially producible and DOES satisfy `is_wallet_key_slot`.
+        // What stops it is the value rule, which now applies on CREATION too —
+        // so the decoy cannot be minted with junk.
+        let decoy = format!("{VAULT_RAW_KEY}.klv1{}", "q".repeat(58));
+        assert!(
+            is_wallet_key_slot(&decoy),
+            "an address-shaped suffix does count — the value rule is what blocks it"
+        );
+        assert!(!looks_like_key_material("x"));
+    }
+
+    #[test]
+    fn the_dek_cannot_be_overwritten_with_junk() {
+        // Not a "wallet key slot" — deleting it loses no wallet directly — but
+        // overwriting it makes every ciphertext slot permanently unopenable.
+        // The delete path guarded it; the write path did not.
+        assert!(!is_wallet_key_slot(VAULT_DEK_KEY));
+        assert!(!looks_like_key_material("x"));
+        assert!(VAULT_DEK_KEY.starts_with("ogmara.vault.dek"));
+    }
+
+    #[test]
+    fn the_two_slot_enumerations_agree() {
+        // `list_vault_accounts` used a looser rule than `is_wallet_key_slot`,
+        // so a suffix could surface as a ghost account while not counting for
+        // the delete guard.
+        let s = store_with(&[
+            (&raw_for(A), "aa"),
+            ("ogmara.vault.private_key.notanaddress", "x"),
+        ]);
+        let listed = s.list_vault_accounts().unwrap();
+        assert_eq!(listed, vec![A.to_string()]);
+        assert!(is_wallet_key_slot(&raw_for(A)));
+        assert!(!is_wallet_key_slot("ogmara.vault.private_key.notanaddress"));
     }
 
     #[test]

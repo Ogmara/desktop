@@ -20,7 +20,7 @@ import { encryptWithKey, decryptWithKey } from './appLock';
 import { cancelAllPending as cancelPendingTxConfirms } from './txConfirm';
 import { wipeWalletScope } from './walletScope';
 import { AS, SS, MAX_ACCOUNTS, isValidAddress, type AccountEntry } from './vaultAccounts';
-import { importDek, loadDek, deleteDek, type StoreLike } from './vaultDek';
+import { importDek, loadDek, hasDek, deleteDek, type StoreLike } from './vaultDek';
 import {
   readKeyFor, writeKeyFor, keyArtefactsFor,
   type UnlockedKeys,
@@ -189,8 +189,18 @@ export async function vaultRemoveAccount(addr: string): Promise<void> {
   //
   // Only removed when the anchor actually belongs to THIS account — never on a
   // guess, since deleting another account's anchor would destroy its key.
-  if (await legacyAnchorBelongsTo(addr)) {
-    targets.push(VAULT_RAW_KEY, VAULT_ENCRYPTED_KEY, VAULT_MODE_KEY);
+  const provenAnchor = await legacyAnchorBelongsTo(addr);
+  if (provenAnchor) {
+    // The anchors only. NOT `VAULT_MODE_KEY`: that flag is VAULT-level, and
+    // `legacyAnchorBelongsTo` proves nothing about it. Deleting it made
+    // `vaultIsEncrypted()` false while the lock stayed enabled, so `App.tsx`'s
+    // `encrypted && lockOn` gate failed and the next launch walked past the
+    // lock screen for the accounts that remain — reopening the bypass that
+    // `encryptAllWithPin`'s unconditional write exists to close.
+    // Only the anchor that was actually proven. The comment claimed as much
+    // while the code deleted both; in practice a mode switch removes the other
+    // one, but "proven" must mean proven.
+    targets.push(provenAnchor);
   }
 
   await SecureStore.deleteManyAsync(targets);
@@ -214,32 +224,34 @@ export async function vaultRemoveAccount(addr: string): Promise<void> {
 }
 
 /**
- * Whether a legacy v1 anchor holds THIS account's key.
+ * Which legacy v1 anchor holds THIS account's key, if either does.
  *
  * Answers only when it can prove it: the raw anchor is derived directly, and
  * the encrypted anchor is opened with the session PIN key. An anchor that
  * cannot be opened returns `false` — leaving key material behind is
  * recoverable, deleting someone else's anchor is not.
  */
-async function legacyAnchorBelongsTo(addr: string): Promise<boolean> {
+async function legacyAnchorBelongsTo(addr: string): Promise<string | null> {
   const raw = await SecureStore.getItemAsync(VAULT_RAW_KEY).catch(() => null);
   if (raw && /^[0-9a-fA-F]{64}$/.test(raw)) {
     try {
-      return (await deriveAddress(raw)) === addr;
+      if ((await deriveAddress(raw)) === addr) return VAULT_RAW_KEY;
     } catch {
-      return false;
+      /* fails closed */
     }
   }
   const enc = await SecureStore.getItemAsync(VAULT_ENCRYPTED_KEY).catch(() => null);
   if (enc && keys.pinKey) {
     try {
       const hex = await decryptWithKey(keys.pinKey, enc);
-      return /^[0-9a-fA-F]{64}$/.test(hex) && (await deriveAddress(hex)) === addr;
+      if (/^[0-9a-fA-F]{64}$/.test(hex) && (await deriveAddress(hex)) === addr) {
+        return VAULT_ENCRYPTED_KEY;
+      }
     } catch {
-      return false;
+      /* wrong or absent PIN key — fails closed */
     }
   }
-  return false;
+  return null;
 }
 
 /** Export a SPECIFIC account's key, without activating it. */
@@ -388,6 +400,20 @@ export async function vaultStore(privateKeyHex: string): Promise<string> {
 // `vaultDecryptAllToRaw` below are the replacements; they operate on the full
 // account set and refuse to act on a subset.
 
+/**
+ * Whether stored-but-uncommitted PIN credentials can be discarded.
+ *
+ * True only when nothing is sealed under them: no DEK, and no account holds a
+ * ciphertext slot. Then a fresh salt loses nothing.
+ */
+export async function pinCredentialsDiscardable(): Promise<boolean> {
+  if (await hasDek(store)) return false;
+  for (const a of await SecureStore.listVaultAccounts().catch(() => [] as string[])) {
+    if (await SecureStore.getItemAsync(SS.encFor(a)).catch(() => null)) return false;
+  }
+  return !(await SecureStore.getItemAsync(VAULT_ENCRYPTED_KEY).catch(() => null));
+}
+
 /** Shared dependency bundle for the PIN sequences. */
 function pinOpsDeps(): PinOpsDeps {
   return {
@@ -446,7 +472,15 @@ export async function reconcilePinJournal(): Promise<void> {
     return;
   }
 
-  const addrs = await SecureStore.listVaultAccounts().catch(() => [] as string[]);
+  // A FAILED listing is not an empty one. Treating it as empty made the loop
+  // below vacuous and retired a journal that might still describe outstanding
+  // work — the silent-fallback shape.
+  let addrs: string[];
+  try {
+    addrs = await SecureStore.listVaultAccounts();
+  } catch {
+    return; // cannot tell; leave the journal for a later boot
+  }
   let settled = true;
   for (const a of addrs) {
     const key = op === 'encrypt' ? SS.rawFor(a) : SS.encFor(a);

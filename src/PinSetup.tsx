@@ -6,7 +6,7 @@
 import { Component, createSignal, Show, onCleanup, onMount } from 'solid-js';
 import { t } from './i18n/init';
 import { derivePinForSetup, persistPinCredentials, enablePinLock } from './lib/appLock';
-import { vaultEncryptAllWithPin } from './lib/vault';
+import { vaultEncryptAllWithPin, pinCredentialsDiscardable } from './lib/vault';
 
 interface PinSetupProps {
   onComplete: () => void;
@@ -64,7 +64,7 @@ export const PinSetup: Component<PinSetupProps> = (props) => {
       //   3. encrypt every account;
       //   4. arm the lock — the commit point, so the app never demands a PIN
       //      for a vault that was not encrypted.
-      const prepared = await derivePinForSetup(pin());
+      const prepared = await derivePinForSetup(pin(), pinCredentialsDiscardable);
       await persistPinCredentials(prepared);
       await vaultEncryptAllWithPin(prepared.key);
       await enablePinLock();

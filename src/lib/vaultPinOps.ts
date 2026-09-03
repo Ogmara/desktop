@@ -69,6 +69,21 @@ export async function encryptAllWithPin(pinKey: CryptoKey, d: PinOpsDeps): Promi
   }
   const legacyRaw = await store.getItemAsync(SS.legacyRaw).catch(() => null);
 
+  // The keystore is authoritative about which accounts EXIST. `listAccounts`
+  // comes from the index union, which degrades to empty when the native
+  // listing throws and localStorage was cleared — so an account could be
+  // absent from every source, be skipped here, and then sit in plaintext while
+  // the UI reports the vault as PIN-protected. `decryptAllToRaw` already
+  // defends this case; the mirror image needs it too.
+  for (const a of await d.listKeystore().catch(() => [] as string[])) {
+    if (plain.has(a)) continue;
+    if (await store.getItemAsync(SS.rawFor(a)).catch(() => null)) {
+      throw new Error(
+        `Account ${a.slice(0, 12)}… holds an unencrypted key but is missing from the account list — refusing to encrypt only some accounts`,
+      );
+    }
+  }
+
   await store.setItemAsync(SS.pinMigration, JSON.stringify({ op: 'encrypt', at: Date.now() }));
 
   // B — reaching here means every account read successfully, so nothing
@@ -89,8 +104,6 @@ export async function encryptAllWithPin(pinKey: CryptoKey, d: PinOpsDeps): Promi
   // Vault-level mode, UNCONDITIONALLY — not only when a legacy anchor exists.
   // `vaultIsEncrypted()` reads this and the lock screen is gated on it, so a
   // vault with no anchor would otherwise boot straight past the lock screen.
-  await store.setItemAsync(SS.legacyMode, 'encrypted');
-
   if (legacyRaw && HEX64.test(legacyRaw)) {
     const blob = await encryptWithKey(pinKey, legacyRaw);
     await store.setItemAsync(SS.legacyEnc, blob);
@@ -99,6 +112,11 @@ export async function encryptAllWithPin(pinKey: CryptoKey, d: PinOpsDeps): Promi
     }
     await store.deleteItemAsync(SS.legacyRaw).catch(() => {});
   }
+
+  // AFTER the anchor conversion, not before. Writing it first left a window
+  // where the vault claimed to be encrypted while the legacy anchor was still
+  // plaintext — and `readKeyFor` branch 3 opens that anchor with no PIN.
+  await store.setItemAsync(SS.legacyMode, 'encrypted');
 
   await store.deleteItemAsync(SS.pinMigration).catch(() => {});
 }
@@ -147,9 +165,11 @@ export async function decryptAllToRaw(pinKey: CryptoKey, d: PinOpsDeps): Promise
       await store.setItemAsync(SS.legacyRaw, hex);
       await store.deleteItemAsync(SS.legacyEnc).catch(() => {});
     }
-    await store.setItemAsync(SS.legacyMode, 'raw');
-
-    // Prove NO ciphertext survives before destroying the key that opens it.
+    // Prove NO ciphertext survives before destroying the key that opens it —
+    // and BEFORE flipping the vault-level mode flag. Writing `raw` first meant
+    // the refusal below left `lock_enabled` true over a vault reporting itself
+    // unencrypted, so the next launch skipped the lock screen: the safe path
+    // produced the unsafe state.
     // The loop only covers accounts the index returned; on a degraded index an
     // account can be missing from every source, and would be sealed forever
     // under a DEK whose salt the caller is about to delete.
@@ -162,6 +182,7 @@ export async function decryptAllToRaw(pinKey: CryptoKey, d: PinOpsDeps): Promise
         `Refusing to remove the PIN: ${stillSealed.length} account(s) are still encrypted and would become unrecoverable.`,
       );
     }
+    await store.setItemAsync(SS.legacyMode, 'raw');
     await deleteDek(store);
   } catch (e) {
     keys.dek = dekHeld; // restore so the session keeps working
