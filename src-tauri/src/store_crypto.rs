@@ -108,7 +108,11 @@ fn machine_id() -> Option<Vec<u8>> {
     }
     #[cfg(target_os = "windows")]
     {
-        let out = std::process::Command::new("reg")
+        // Absolute path: bare `reg` lets CreateProcess resolve the application
+        // directory before PATH, which is a hijack vector. macOS already uses
+        // an absolute `/usr/sbin/ioreg`.
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let out = std::process::Command::new(format!(r"{system_root}\System32\reg.exe"))
             .args([
                 "query",
                 r"HKLM\SOFTWARE\Microsoft\Cryptography",
@@ -164,8 +168,12 @@ fn machine_secret(store_path: &Path) -> Result<(Vec<u8>, bool), String> {
 
 /// Whether the key is bound to a stable OS identifier (`true`) or to a sidecar
 /// file that travels with the store (`false`).
-pub fn is_machine_bound(store_path: &Path) -> bool {
-    machine_secret(store_path).map(|(_, bound)| bound).unwrap_or(false)
+///
+/// Reads only. It used to go through `machine_secret`, which CREATES the
+/// sidecar when no OS identifier exists — so the health probe, called on every
+/// boot, minted key material as a side effect.
+pub fn is_machine_bound(_store_path: &Path) -> bool {
+    machine_id().is_some()
 }
 
 fn derive_key(secret: &[u8], salt: &[u8]) -> [u8; 32] {
@@ -186,13 +194,14 @@ pub fn seal(store_path: &Path, plaintext: &[u8]) -> Result<String, String> {
 
     let mut key_bytes = derive_key(&secret, &salt);
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
-    let ct = cipher
-        .encrypt(
-            Nonce::from_slice(&nonce_bytes),
-            Payload { msg: plaintext, aad: AAD },
-        )
-        .map_err(|_| "encrypt failed".to_string())?;
+    let result = cipher.encrypt(
+        Nonce::from_slice(&nonce_bytes),
+        Payload { msg: plaintext, aad: AAD },
+    );
+    // Before the `?`, not after it: the previous version returned on the error
+    // path with the derived key still in memory.
     key_bytes.zeroize();
+    let ct = result.map_err(|_| "encrypt failed".to_string())?;
 
     serde_json::to_string_pretty(&Envelope {
         v: 2,
@@ -222,16 +231,9 @@ pub fn open(store_path: &Path, contents: &str) -> Result<Vec<u8>, String> {
     let (secret, _) = machine_secret(store_path)?;
     let mut key_bytes = derive_key(&secret, &salt);
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
-    let pt = cipher
-        .decrypt(
-            Nonce::from_slice(&nonce),
-            Payload { msg: &ct, aad: AAD },
-        )
-        .map_err(|_| {
-            "decrypt failed — wrong machine, or the file was modified".to_string()
-        })?;
+    let result = cipher.decrypt(Nonce::from_slice(&nonce), Payload { msg: &ct, aad: AAD });
     key_bytes.zeroize();
-    Ok(pt)
+    Ok(result.map_err(|_| "decrypt failed — wrong machine, or the file was modified".to_string())?)
 }
 
 /// Whether `contents` is the pre-encryption plaintext format (a bare JSON map).

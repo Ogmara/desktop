@@ -36,6 +36,17 @@ struct SecureFileStore {
     /// refuses to write — overwriting would destroy recoverable (possibly
     /// encrypted-wallet) data (audit 2026-06-07 N1, CLAUDE.md Wallet Safety).
     poisoned: std::sync::atomic::AtomicBool,
+    /// Serializes the seal→write→rename sequence in `save()`.
+    ///
+    /// `save()` deliberately releases the data lock before I/O, and the async
+    /// delete commands run on the Tokio runtime while sync `set` calls run on
+    /// the main thread — so two saves could interleave. With a shared temp
+    /// path that meant one writer truncating the other's file and then
+    /// renaming a half-written buffer over the store: GCM authentication fails
+    /// on the next launch, the store poisons, and EVERY wallet on the device
+    /// is unrecoverable. The milder form is a lost update, where one writer's
+    /// snapshot silently reverts a delete.
+    write_lock: Mutex<()>,
 }
 
 /// Build a non-clobbering `.corrupt.bak` sidecar path next to `path`.
@@ -138,6 +149,7 @@ impl SecureFileStore {
             path,
             data: Mutex::new(data),
             poisoned: std::sync::atomic::AtomicBool::new(poisoned),
+            write_lock: Mutex::new(()),
         };
         if needs_upgrade {
             // Rewrite the plaintext store encrypted, immediately. `save()`
@@ -161,10 +173,23 @@ impl SecureFileStore {
                     .into(),
             );
         }
+        // Held across the whole seal→write→rename sequence.
+        let _writing = self
+            .write_lock
+            .lock()
+            .map_err(|e| format!("write lock error: {e}"))?;
+
         let data = self.data.lock().map_err(|e| format!("lock error: {e}"))?;
         // Ensure parent directory exists
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("dir error: {e}"))?;
+            // The directory holds the vault; 0755 lets any local user list and
+            // read whatever is inside it.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+            }
         }
         let json = serde_json::to_string(&*data)
             .map_err(|e| format!("serialize error: {e}"))?;
@@ -185,22 +210,48 @@ impl SecureFileStore {
         // PREVIOUS store intact rather than a truncated one — the old
         // `fs::write` truncated in place, so an interrupted save could destroy
         // a working vault.
-        let tmp = self.path.with_extension("tmp");
+        // Unique per save. A shared `.tmp` is a second way two writers collide,
+        // even under the lock above — a crashed process can leave one behind.
+        let tmp = self.path.with_extension(format!(
+            "tmp.{}.{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
         {
             use std::io::Write;
+            // Created 0600 ATOMICALLY, not chmod'ed afterwards. `File::create`
+            // uses the umask default (0644 typically), so the previous version
+            // wrote the ENTIRE store — every private key — to a
+            // world-readable temp file and only narrowed it once the write had
+            // finished. Since the wrapping key derives from the world-readable
+            // machine id, any local user who read that window's file could
+            // decrypt it.
+            #[cfg(unix)]
+            let mut f = {
+                use std::os::unix::fs::OpenOptionsExt;
+                fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(&tmp)
+                    .map_err(|e| format!("write error: {e}"))?
+            };
+            #[cfg(not(unix))]
             let mut f = fs::File::create(&tmp).map_err(|e| format!("write error: {e}"))?;
+
             f.write_all(sealed.as_bytes())
                 .map_err(|e| format!("write error: {e}"))?;
             f.sync_all().map_err(|e| format!("sync error: {e}"))?;
         }
-        // Permissions BEFORE the rename, so the file is never briefly readable
-        // at the final path with default permissions.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
-        }
-        fs::rename(&tmp, &self.path).map_err(|e| format!("replace error: {e}"))?;
+        fs::rename(&tmp, &self.path).map_err(|e| {
+            // Never leave the temp copy — it holds every private key.
+            let _ = fs::remove_file(&tmp);
+            format!("replace error: {e}")
+        })?;
         Ok(())
     }
 
@@ -320,14 +371,41 @@ fn is_wallet_key_slot(key: &str) -> bool {
             return true;
         }
         if let Some(rest) = key.strip_prefix(prefix) {
-            // Only a `.`-suffixed per-account slot, so a future
-            // `ogmara.vault.private_key_backup` is not silently treated as one.
-            if rest.starts_with('.') && rest.len() > 1 {
-                return true;
+            // Only a `.`-suffixed per-account slot whose suffix is
+            // ADDRESS-SHAPED. Accepting any non-empty suffix let webview code
+            // mint a decoy (`ogmara.vault.private_key.z`) that satisfies the
+            // guard's "one slot remains" test while being invisible in the UI
+            // — so deleting every REAL slot proceeded with no confirmation.
+            if let Some(addr) = rest.strip_prefix('.') {
+                if is_address_shaped(addr) {
+                    return true;
+                }
             }
         }
     }
     false
+}
+
+/// A bech32-shaped `klv1…` address, mirroring the TypeScript `isValidAddress`.
+///
+/// The guard must count only slots that could genuinely belong to an account.
+fn is_address_shaped(s: &str) -> bool {
+    s.len() >= 40
+        && s.len() <= 80
+        && s.starts_with("klv1")
+        && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+}
+
+/// Whether `value` could plausibly BE wallet key material: 64-hex (a raw key)
+/// or `ivHex:ctHex` (this app's AES-GCM format).
+fn looks_like_key_material(value: &str) -> bool {
+    let hex64 = value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit());
+    let ciphertext = matches!(value.split_once(':'), Some((iv, ct))
+        if iv.len() == 24
+            && !ct.is_empty()
+            && iv.bytes().all(|b| b.is_ascii_hexdigit())
+            && ct.bytes().all(|b| b.is_ascii_hexdigit()));
+    hex64 || ciphertext
 }
 
 /// Outcome of [`SecureFileStore::delete_guarded`].
@@ -395,6 +473,24 @@ fn secure_store_set(app: tauri::AppHandle, key: String, value: String) -> Result
         return Err("value too large (max 64KB)".into());
     }
     let store = app.state::<SecureFileStore>();
+
+    // Overwriting a wallet-key slot with something that is not key material
+    // destroys the key just as permanently as deleting it — and this path had
+    // no guard at all, so the whole delete confirmation could simply be
+    // side-stepped by writing junk over each slot.
+    //
+    // Legitimate writes always carry key material (64-hex, or `ivHex:ctHex`),
+    // so requiring that shape blocks the destructive case without touching any
+    // real flow. A mode switch replaces one key form with the other, which
+    // still satisfies it.
+    if is_wallet_key_slot(&key) && !looks_like_key_material(&value) {
+        if store.get(&key).is_some() {
+            return Err(
+                "refusing to overwrite a wallet key slot with a value that is not key material"
+                    .into(),
+            );
+        }
+    }
     store.set(&key, &value)
 }
 
@@ -1030,6 +1126,7 @@ mod tests {
             path: dir.join(".secure-store.json"),
             data: Mutex::new(data),
             poisoned: std::sync::atomic::AtomicBool::new(false),
+            write_lock: Mutex::new(()),
         }
     }
 
@@ -1227,6 +1324,34 @@ mod tests {
             .unwrap();
         assert!(!is_needs_confirmation(&out));
         assert!(s.get(&raw_for(A)).is_some());
+    }
+
+    #[test]
+    fn a_decoy_slot_cannot_satisfy_the_last_key_guard() {
+        // `ogmara.vault.private_key.z` passes validate_key, is invisible in the
+        // UI (isValidAddress rejects it), and used to count as a remaining
+        // wallet slot — so deleting every REAL slot proceeded with no dialog.
+        assert!(!is_wallet_key_slot("ogmara.vault.private_key.z"));
+        assert!(!is_wallet_key_slot("ogmara.vault.private_key.notanaddress"));
+        assert!(is_wallet_key_slot(&raw_for(A)), "a real slot must still count");
+
+        let s = store_with(&[(&raw_for(A), "aa"), ("ogmara.vault.private_key.z", "decoy")]);
+        let out = s.delete_guarded_many(&[raw_for(A)]).unwrap();
+        assert!(
+            is_needs_confirmation(&out),
+            "the decoy must not stand in for a real remaining wallet key"
+        );
+        assert!(s.get(&raw_for(A)).is_some());
+    }
+
+    #[test]
+    fn key_material_shapes_are_recognised() {
+        assert!(looks_like_key_material(&"a".repeat(64)));
+        assert!(looks_like_key_material(&format!("{}:{}", "b".repeat(24), "cc")));
+        assert!(!looks_like_key_material("junk"));
+        assert!(!looks_like_key_material(""));
+        assert!(!looks_like_key_material(&"z".repeat(64)));
+        assert!(!looks_like_key_material(&format!("{}:{}", "b".repeat(8), "cc")));
     }
 
     #[test]

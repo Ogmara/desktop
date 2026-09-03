@@ -80,8 +80,15 @@ export async function readKeyFor(
   if (!isValidAddress(addr)) return { status: 'absent' };
 
   // 1. plaintext per-account slot
+  //
+  // Address-checked like every other branch. The doc above states the
+  // guarantee unconditionally, and the write paths enforce it — but the store
+  // is writable by anything running in the webview, so a slot whose contents
+  // derive elsewhere must not be handed back as this account's key.
   const raw = await store.getItemAsync(SS.rawFor(addr)).catch(() => null);
-  if (raw && HEX64.test(raw)) return { status: 'ok', hex: raw };
+  if (raw && HEX64.test(raw) && (await matches(raw, addr, deriveAddress))) {
+    return { status: 'ok', hex: raw };
+  }
 
   // 2. ciphertext per-account slot, sealed under the DEK
   //
@@ -149,6 +156,18 @@ export async function writeKeyFor(
   if (!HEX64.test(hex)) throw new Error('invalid private key format');
   if (!(await matches(hex, addr, deriveAddress))) {
     throw new Error('refusing to write a key that does not derive to this address');
+  }
+
+  // A PIN is in force but no DEK is loaded — the state `vaultUnlockWithPin`
+  // deliberately tolerates so the legacy-anchor backstop can still open the
+  // vault. Falling through to the raw branch here would write a NEW private
+  // key in plaintext while the UI still reports the vault as PIN-protected,
+  // and the next launch would open that account without ever asking for the
+  // PIN. That is the 0.47.0 lesson in CLAUDE.md, in a different file.
+  if (keys.pinKey && !keys.dek) {
+    throw new Error(
+      'The vault is PIN-protected but its encryption key is not loaded — refusing to store a key unprotected',
+    );
   }
 
   if (keys.dek) {

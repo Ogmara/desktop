@@ -75,16 +75,34 @@ export interface PreparedPin {
 }
 
 /**
- * Derive the PIN key and its verification token WITHOUT storing anything.
+ * Derive the PIN key for setup, REUSING existing credentials when present.
  *
- * Split from the commit so the caller can encrypt the vault first. The
- * combined `setupPin` committed the PIN record and only then encrypted, which
- * inverts the safe order: the PIN record is what makes the app demand a PIN,
- * so it must be the LAST thing written, once the key material it unlocks is
- * actually encrypted.
+ * Reuse is the important part. A PIN setup that failed part-way has already
+ * encrypted some accounts under a DEK wrapped with the key derived from the
+ * stored salt. Minting a fresh salt on retry would derive a different key, so
+ * that DEK could never be unwrapped again and those accounts would be lost
+ * with the correct PIN in hand. If credentials exist, the entered PIN must
+ * match them and the same key comes back.
  */
 export async function derivePinForSetup(pin: string): Promise<PreparedPin> {
   if (!/^\d{6,}$/.test(pin)) throw new Error('PIN must be at least 6 digits');
+
+  const existingSalt = await SecureStore.getItemAsync(SALT_KEY).catch(() => null);
+  const existingVerify = await SecureStore.getItemAsync(PIN_VERIFY_KEY).catch(() => null);
+  if (existingSalt && existingVerify) {
+    const key = await deriveKeyFromPin(pin, hexToBytes(existingSalt));
+    try {
+      if ((await decryptWithKey(key, existingVerify)) === 'ogmara-pin-ok') {
+        return { key, saltHex: existingSalt, verifyToken: existingVerify };
+      }
+    } catch {
+      /* falls through to the mismatch error below */
+    }
+    throw new Error(
+      'A PIN is already partly set up on this device. Enter that PIN to finish, or remove it first.',
+    );
+  }
+
   const salt = generateSalt();
   const key = await deriveKeyFromPin(pin, salt);
   // Encrypt a known token to verify PIN on unlock
@@ -93,15 +111,35 @@ export async function derivePinForSetup(pin: string): Promise<PreparedPin> {
 }
 
 /**
- * Commit a prepared PIN. THE COMMIT POINT for enabling the lock.
+ * Persist the salt and verification token. NOT the commit point.
  *
- * Call only after the vault is encrypted and verified.
+ * Must run BEFORE the vault is encrypted. The salt is not a secret — it is
+ * what lets the PIN key be re-derived — and `vaultEncryptAllWithPin` deletes
+ * each account's plaintext as it seals it. Writing the salt afterwards meant a
+ * failure mid-loop left accounts encrypted under a key whose salt was never
+ * stored: unrecoverable even with the correct PIN. Storing it first costs
+ * nothing, because the lock is not armed until {@link enablePinLock}.
  */
-export async function commitPinSetup(prepared: PreparedPin): Promise<void> {
+export async function persistPinCredentials(prepared: PreparedPin): Promise<void> {
   await SecureStore.setItemAsync(SALT_KEY, prepared.saltHex);
   await SecureStore.setItemAsync(PIN_VERIFY_KEY, prepared.verifyToken);
-  await SecureStore.setItemAsync(LOCK_ENABLED_KEY, 'true');
+}
+
+/**
+ * Arm the lock. THE COMMIT POINT.
+ *
+ * `LOCK_ENABLED_KEY` is what makes the app demand a PIN at startup, so it is
+ * written last — only once every account is actually encrypted.
+ */
+export async function enablePinLock(): Promise<void> {
   await SecureStore.setItemAsync(FAILED_ATTEMPTS_KEY, '0');
+  await SecureStore.setItemAsync(LOCK_ENABLED_KEY, 'true');
+}
+
+/** Back-compat wrapper: persist credentials and arm the lock in one step. */
+export async function commitPinSetup(prepared: PreparedPin): Promise<void> {
+  await persistPinCredentials(prepared);
+  await enablePinLock();
 }
 
 /**

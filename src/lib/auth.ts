@@ -204,7 +204,31 @@ export async function tearDownAccountSession(): Promise<void> {
  *     leave the session gutted with no signer; if the key will not load, this
  *     throws having changed nothing.
  */
+/**
+ * Serializes account switches.
+ *
+ * Every step after `vaultActivate` re-reads mutable module state, so two
+ * overlapping switches interleave into a mismatched session: call #1 resumes
+ * after call #2 activated a different account, reads `vaultGetSigner()` — now
+ * the OTHER account's signer — and pairs it with its own address and scope.
+ * The client then signs as one account while storage is scoped to another, and
+ * every `walletAddress()`-based guard compares a value against itself and
+ * passes.
+ */
+let switchInFlight: Promise<void> | null = null;
+
 export async function switchAccount(addr: string): Promise<void> {
+  // Chain rather than reject: callers (AddAccountView, the disconnect
+  // handover) treat a switch as a plain await, and failing them on
+  // concurrency would be a worse experience than making them wait.
+  const run = (switchInFlight ?? Promise.resolve())
+    .catch(() => {})
+    .then(() => switchAccountInner(addr));
+  switchInFlight = run.catch(() => {});
+  return run;
+}
+
+async function switchAccountInner(addr: string): Promise<void> {
   if (addr === walletAddress()) return;
 
   runWalletSwitchResets();
@@ -266,13 +290,18 @@ export async function disconnectWallet(): Promise<void> {
   // webview cannot dismiss, and the user may cancel it. Tearing the session
   // down first would leave the app with a closed socket and cleared caches
   // while the account is still there — signed in to nothing.
-  await wipeDeviceEncKey().catch(() => {});
   if (leaving) {
     await vaultRemoveAccount(leaving);
   } else {
     // No active account to scope to — fall back to the total wipe.
     await vaultWipe();
   }
+  // AFTER the removal succeeded, never before. This is destructive and NOT
+  // refusable, while the removal above raises a native prompt the user may
+  // cancel. Running it first meant a cancelled "are you sure?" had already
+  // deleted the account's X25519 secret — and every channel-key and DM
+  // envelope wrapped to that `enc_pub` becomes permanently unopenable.
+  await wipeDeviceEncKey().catch(() => {});
 
   // Only now: close the socket and clear the DM/channel/media/key-vault caches
   // for the departing account. Before any handover below — an earlier version

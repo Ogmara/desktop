@@ -131,6 +131,11 @@ export async function decryptAndApplySettings(
   encryptedSettings: Uint8Array,
   nonce: Uint8Array,
 ): Promise<void> {
+  // Two awaits below precede every write, and the writes go through the SCOPED
+  // setters plus `applyRemote*`, then trigger a re-upload. A switch inside that
+  // window would file one account's settings under another's namespace and
+  // push them to the node.
+  const forWallet = walletAddress();
   const key = await deriveKey(hexKey);
   const plaintext = await crypto.subtle.decrypt(
     // audit 2026-06-07 B4.1: ArrayBuffer-backed view — TS5.9 rejects Uint8Array<ArrayBufferLike>
@@ -138,6 +143,7 @@ export async function decryptAndApplySettings(
     key,
     encryptedSettings.buffer.slice(encryptedSettings.byteOffset, encryptedSettings.byteOffset + encryptedSettings.byteLength) as ArrayBuffer,
   );
+  if (walletAddress() !== forWallet) return;
   let settings: Record<string, unknown>;
   try {
     settings = JSON.parse(new TextDecoder().decode(plaintext));
@@ -218,6 +224,11 @@ export async function downloadSettings(hexKey: string): Promise<boolean> {
   const forWallet = walletAddress();
   const resp = await client.getSettings();
   if (!resp || walletAddress() !== forWallet) return false;
+  // The sibling `downloadChannelOrg` re-checks after the decrypt too:
+  // `decryptAndApplySettings` awaits `deriveKey` and `crypto.subtle.decrypt`
+  // before writing pinned/muted channels and news positions through the SCOPED
+  // setters — and then re-uploads. A switch inside that window writes one
+  // account's settings into another's namespace and pushes them to the node.
   await decryptAndApplySettings(
     hexKey,
     new Uint8Array(resp.encrypted_settings),

@@ -562,5 +562,6 @@
   "channel_not_found": "Canal não encontrado",
   "channel_not_found_desc": "Este canal não existe ou já não está disponível.",
   "channel_private_invite_link": "Link de convite privado",
-  "store_poisoned_warning": "O armazenamento está só de leitura: o ficheiro do cofre não pôde ser lido no arranque e não está a ser substituído, para proteger a sua carteira. As alterações NÃO estão a ser guardadas. Reinicie a app; se persistir, restaure ou mova .secure-store.json."
+  "store_poisoned_warning": "O armazenamento está só de leitura: o ficheiro do cofre não pôde ser lido no arranque e não está a ser substituído, para proteger a sua carteira. As alterações NÃO estão a ser guardadas. Reinicie a app; se persistir, restaure ou mova .secure-store.json.",
+  "lock_unlocked_no_account": "PIN aceite, mas não foi possível abrir nenhuma conta. As chaves podem estar danificadas — veja Definições → Contas ou restaure a partir de uma cópia."
 }

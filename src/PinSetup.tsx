@@ -5,7 +5,7 @@
 
 import { Component, createSignal, Show, onCleanup, onMount } from 'solid-js';
 import { t } from './i18n/init';
-import { derivePinForSetup, commitPinSetup } from './lib/appLock';
+import { derivePinForSetup, persistPinCredentials, enablePinLock } from './lib/appLock';
 import { vaultEncryptAllWithPin } from './lib/vault';
 
 interface PinSetupProps {
@@ -55,12 +55,19 @@ export const PinSetup: Component<PinSetupProps> = (props) => {
     setError('');
 
     try {
-      // Encrypt FIRST, commit the PIN record second. The old order committed
-      // the PIN and then encrypted, so a failure in between left the app
-      // demanding a PIN for a vault that was never encrypted.
+      // Three steps, in this order, because each failure window has to be
+      // survivable:
+      //   1. derive (reusing credentials from a previous partial attempt);
+      //   2. persist the salt + verify token — NOT the commit point, and
+      //      required before any plaintext is destroyed so the PIN key can
+      //      always be re-derived;
+      //   3. encrypt every account;
+      //   4. arm the lock — the commit point, so the app never demands a PIN
+      //      for a vault that was not encrypted.
       const prepared = await derivePinForSetup(pin());
+      await persistPinCredentials(prepared);
       await vaultEncryptAllWithPin(prepared.key);
-      await commitPinSetup(prepared);
+      await enablePinLock();
       setPin('');
       setConfirmPin('');
       props.onComplete();

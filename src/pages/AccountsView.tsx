@@ -156,14 +156,14 @@ export function AccountsView() {
                 when={target().key}
                 fallback={<p class="error-banner">{t('accounts_remove_no_key')}</p>}
               >
+                {/* Shown, never copied. A private key on the system
+                    clipboard is readable by every other process and is
+                    captured by clipboard-history managers, with nothing to
+                    clear it afterwards — `WalletView` copies only the address
+                    for exactly this reason. The reveal below is dropped after
+                    two minutes and on unmount. */}
                 <p class="muted">{t('accounts_remove_export_hint')}</p>
-                <code class="export-key">{target().key}</code>
-                <button
-                  class="btn-secondary"
-                  onClick={() => navigator.clipboard.writeText(target().key ?? '')}
-                >
-                  {t('wallet_copy')}
-                </button>
+                <code class="export-key" onCopy={(e) => e.stopPropagation()}>{target().key}</code>
               </Show>
               <div class="modal-actions">
                 <button class="btn-secondary" onClick={stopReveal}>

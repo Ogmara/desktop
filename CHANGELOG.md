@@ -5,6 +5,113 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.70.0] - 2026-09-03
+
+Fixes from the full audit pipeline (Code Audit + Security Audit) over the whole
+multi-account body of work. Nine of these lose or expose key material.
+
+### Fixed — key loss
+
+- **A failed PIN setup destroyed every account it had already encrypted.**
+  1.68.0 moved the PIN record after the encryption to stop the app demanding a
+  PIN for an unencrypted vault — but it moved the SALT too. The salt is not a
+  secret and is not the commit point; it is what lets the PIN key be
+  re-derived, and the encryption loop deletes each account's plaintext as it
+  goes. A failure part-way therefore left accounts sealed under a key whose
+  salt was never stored: unrecoverable with the correct PIN in hand. The salt
+  and verify token are now persisted BEFORE encryption, and only
+  `lock_enabled` — what actually makes the app demand a PIN — is written last.
+  A retry now reuses the stored credentials instead of minting a new salt,
+  which would have derived a different key and orphaned the DEK.
+- **PIN setup could latch off permanently.** After the above, `hasDek()` alone
+  skipped minting and the following `loadDek` threw, so every retry failed
+  identically — including after a cancelled PIN-removal dialog. A stale DEK is
+  now discarded once the read step has proven no account depends on it.
+- **PIN removal destroyed the DEK without checking every slot was decrypted.**
+  An account missing from a degraded index (poisoned store, cleared
+  localStorage) was skipped silently and then sealed forever under a key whose
+  salt was about to be deleted. Removal now verifies against the authoritative
+  keystore listing and refuses rather than proceeding.
+- **Two concurrent store writes could destroy every wallet.** `save()`
+  deliberately releases the data lock before I/O and used a fixed temp path,
+  while async delete commands run on the Tokio runtime and sync writes on the
+  main thread. One writer truncating the other's file and then renaming a
+  half-written buffer means GCM authentication fails on the next launch, the
+  store poisons, and nothing is recoverable. Now serialized by a dedicated
+  write lock with a unique temp filename.
+- **Removing an account did not remove its key, and the account came back.**
+  The v1 anchors are retained by the migration as a recovery backstop, and
+  nothing reconciled that with removal: the key stayed on disk, `readKeyFor`
+  re-opened it, and the recovery scan re-listed the address — so the account
+  returned, fully usable, after a confirmation that said its data was gone.
+  Removal now also deletes the anchors when they provably belong to that
+  account, wipes its namespace, and clears a stale `active` pointer. Ghost
+  entries had also accumulated toward `MAX_ACCOUNTS`, eventually making "Add
+  account" fail permanently.
+- **`vaultStore` would delete the encrypted anchor while a PIN was set** —
+  which, for a user whose deferred migration has not completed, is their only
+  key copy. It now refuses under a PIN. Not reachable from the current UI; the
+  function simply had no guard of its own.
+
+### Fixed — key exposure and cross-account leaks
+
+- **The native last-key guard was bypassable two ways.** A decoy slot
+  (`ogmara.vault.private_key.z`) satisfied "one slot remains" while being
+  invisible in the UI, so deleting every real slot proceeded with no dialog;
+  and `secure_store_set` had no guard at all, so overwriting a slot with junk
+  destroyed the key silently. Slots must now be address-shaped to count, and
+  overwriting one with a value that is not key material is refused.
+- **Every save wrote the whole store to a world-readable temp file.**
+  `File::create` uses the umask default; permissions were narrowed only after
+  the write completed. Since the wrapping key derives from the world-readable
+  machine id, any local user reading that window could decrypt it. The file is
+  now created 0600 atomically and the directory is 0700.
+- **A PIN-protected vault could write new private keys in plaintext.**
+  `writeKeyFor` chose raw vs encrypted on the DEK alone, and unlock
+  deliberately tolerates a missing DEK, so "Add account" in that state wrote a
+  plaintext slot while the UI reported the vault protected — and the next
+  launch opened that account with no PIN prompt.
+- **A PIN'd vault with no legacy anchor booted straight past the lock screen.**
+  The vault-level mode flag was set only when a legacy anchor existed, and the
+  lock screen is gated on it.
+- The private key is no longer copied to the system clipboard on removal —
+  it is shown, and cleared after two minutes and on unmount. `WalletView`
+  copies only the address for the same reason.
+- `switchAccount` is serialized. Two overlapping switches paired one account's
+  address and scope with another's signer, and every `walletAddress()` guard
+  then compared a value against itself and passed.
+- `decryptAndApplySettings` re-checks the account after its decrypt, matching
+  its sibling; the enc-key wipe on disconnect no longer runs before the
+  refusable removal step; the plaintext read branch is address-checked like
+  every other branch.
+- web: `getOrCreateEncKeypair` refuses to mint into the shared device-global
+  slot, which the next wallet's adoption path would have claimed as its own
+  identity; the E2E cache teardown on disconnect is awaited rather than
+  fire-and-forget.
+
+### Fixed — other
+
+- `vaultWipe` now clears the PIN record and the operation journal. A wipe
+  followed by a fresh wallet left `isLockEnabled()` true over a plaintext
+  vault, so the app armed auto-lock and demanded the OLD PIN.
+- The `pin_migration` journal has a reader: it marked the vault permanently
+  unhealthy after one failed attempt with no way to clear it.
+- The lock screen no longer reports "wrong PIN" when the PIN was correct but no
+  account could be opened — users retried a correct PIN into a lockout.
+- `is_machine_bound` no longer CREATES the machine-key sidecar as a side
+  effect of a health probe; keys are zeroized on the error paths; Windows uses
+  an absolute path for `reg.exe`.
+
+### Added
+
+- `src/lib/vaultPinOps.ts` — the PIN setup and removal sequences, extracted so
+  they can be crash-tested, with `vault.ts` delegating to them so the tested
+  code IS the shipped code. 28 crash-injection points assert the same property
+  after every interruption: every account is still recoverable with the correct
+  PIN. The audit found the key-loss bug above in exactly this gap — `vault.ts`
+  had no tests, and every existing crash test targeted the migration.
+- Rust tests for both guard bypasses.
+
 ## [1.69.0] - 2026-09-03
 
 Multi-account Phase 6 of 6 — diagnostics, and the audit pass over the whole

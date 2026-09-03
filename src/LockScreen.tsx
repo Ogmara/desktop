@@ -79,7 +79,11 @@ export const LockScreen: Component<LockScreenProps> = (props) => {
       if (address) {
         props.onUnlock();
       } else {
-        setError(t('lock_wrong_pin'));
+        // `verifyPin` already SUCCEEDED above, so the PIN was correct — this
+        // branch means no account could be loaded. Saying "wrong PIN" sent the
+        // user round the retry loop into a lockout cooldown over a PIN that
+        // was right all along.
+        setError(t('lock_unlocked_no_account'));
         setPin('');
       }
     } catch {

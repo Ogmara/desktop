@@ -100,6 +100,16 @@ export async function runVaultMigrations(): Promise<number> {
     }
   }
 
+  // Retire a PIN-operation journal whose work is already finished, before the
+  // integrity check reads it. Without a reader it marked the vault unhealthy
+  // forever after a single failed attempt.
+  try {
+    const { reconcilePinJournal } = await import('./vault');
+    await reconcilePinJournal();
+  } catch {
+    /* never block startup on a diagnostic */
+  }
+
   // A LOOP, not a chain of ifs: a device several versions behind must walk
   // every step, and each step is responsible for its own commit point.
   let version = entryVersion;
