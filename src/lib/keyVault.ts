@@ -35,6 +35,7 @@ import {
   importChannelKeysFromVault,
 } from './channelCrypto';
 import { e2elog } from './e2eDebug';
+import { vaultActiveAddress } from './vault';
 
 let bk: Uint8Array | null = null;
 let bkWallet: string | null = null;
@@ -149,8 +150,14 @@ export function tryRestoreKeyVault(): void {
   if (restoreState !== 'idle') return;
   restoreState = 'inflight';
   void (async () => {
+    // Which account this restore belongs to. `importConvKeysFromVault` and
+    // `importChannelKeysFromVault` write the SHARED DM/channel key caches, so
+    // applying after a switch would load one account's conversation keys into
+    // the other account's session.
+    const forWallet = vaultActiveAddress();
     try {
       const key = await ensureBackupKey();
+      if (vaultActiveAddress() !== forWallet) { restoreState = 'idle'; return; }
       if (!key) {
         restoreState = 'idle'; // no wallet / declined popup — allow a later retry
         return;
@@ -163,9 +170,12 @@ export function tryRestoreKeyVault(): void {
         e2elog('keyvault: restore fetch failed (will retry)', { err: (e as Error)?.message });
         return;
       }
+      if (vaultActiveAddress() !== forWallet) { restoreState = 'idle'; return; }
       if (resp) {
         try {
           const keyring = openKeyVault(key, resp);
+          // Re-checked immediately before the writes themselves.
+          if (vaultActiveAddress() !== forWallet) { restoreState = 'idle'; return; }
           const conv = importConvKeysFromVault(keyring.conv);
           const chan = importChannelKeysFromVault(keyring.chan);
           e2elog('keyvault: restored', { conv, chan });

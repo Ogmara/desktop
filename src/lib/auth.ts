@@ -14,6 +14,10 @@ import {
   vaultWipe,
   vaultGetSigner,
   vaultGetAddress,
+  vaultActivate,
+  vaultListAccounts,
+  vaultRemoveAccount,
+  vaultAddAccount,
 } from './vault';
 import { getClient } from './api';
 import { getSetting, setSetting } from './settings';
@@ -154,6 +158,87 @@ export async function generateWallet(): Promise<string> {
   return address;
 }
 
+/**
+ * Tear down everything bound to the CURRENT account, before another takes over.
+ *
+ * Ordering is load-bearing, in this order:
+ *
+ *   1. The WebSocket closes FIRST. A switch re-renders the tree, and a socket
+ *      left open delivers the previous account's frames into the new account's
+ *      mounted views.
+ *   2. Pending tx-confirm prompts are cancelled — one armed under account A
+ *      that resolves after the switch would sign with B's key.
+ *   3. The E2E and media caches are cleared and AWAITED, not fired and
+ *      forgotten. A cache that clears after the new account's session starts
+ *      is the same bug with a shorter window.
+ */
+export async function tearDownAccountSession(): Promise<void> {
+  const { closeWs } = await import('./ws');
+  closeWs();
+
+  const { cancelAllPending } = await import('./txConfirm');
+  cancelAllPending();
+
+  await Promise.all([
+    import('./dmCrypto').then(({ clearDmKeyCache }) => clearDmKeyCache()),
+    import('./channelCrypto').then(({ clearChannelKeyCache }) => clearChannelKeyCache()),
+    import('./keyVault').then(({ clearKeyVaultSession }) => clearKeyVaultSession()),
+    import('./mediaCrypto').then(({ clearMediaObjectUrls }) => clearMediaObjectUrls()),
+    import('./ownAvatar').then(({ clearOwnAvatar }) => clearOwnAvatar()),
+  ]).catch(() => {
+    /* a cache that refuses to clear must not strand the user mid-switch */
+  });
+}
+
+/**
+ * Switch to another account held on this device.
+ *
+ * The order below is the fix for the worst class of bug here:
+ *
+ *   - `runWalletSwitchResets()` runs BEFORE `vaultActivate`. Activation moves
+ *     the vault's notion of the active account, and a debounced upload timer
+ *     firing between that and the scope flip resolves `vaultExportKey()` — the
+ *     NEW account's key — while still holding the OLD account's data, writing
+ *     a blob nothing can open.
+ *   - `vaultActivate` runs BEFORE the teardown. A failed activation must not
+ *     leave the session gutted with no signer; if the key will not load, this
+ *     throws having changed nothing.
+ */
+export async function switchAccount(addr: string): Promise<void> {
+  if (addr === walletAddress()) return;
+
+  runWalletSwitchResets();
+
+  const loaded = await vaultActivate(addr);
+  if (!loaded) throw new Error('That account could not be unlocked on this device');
+
+  await tearDownAccountSession();
+
+  const signer = vaultGetSigner();
+  if (!signer) throw new Error('No signer after activation');
+
+  // Scope, client and state together, so nothing observes a half-switched app.
+  setWalletScope(loaded);
+  getClient().withSigner(signer);
+  setWalletAddress(loaded);
+  setL2Address(loaded);
+  setWalletSource('builtin');
+  setAuthStatus('ready');
+  setIsRegistered(false);
+
+  // These are global, and identify WHICH account is active.
+  setSetting('walletSource', 'builtin');
+  setSetting('walletAddress', loaded);
+
+  const { initWs } = await import('./ws');
+  initWs(signer);
+
+  void ensureDeviceEncBinding().catch((e) =>
+    console.warn('[deviceEnc] binding failed after switch:', e),
+  );
+  void checkRegistrationStatus();
+}
+
 /** Disconnect wallet and wipe vault. */
 export async function disconnectWallet(): Promise<void> {
   // Capture before anything clears it — the wipe needs to know which namespace
@@ -164,8 +249,31 @@ export async function disconnectWallet(): Promise<void> {
   // account's data under whatever key is current by then, or upload it after
   // the vault is gone.
   runWalletSwitchResets();
-  await vaultWipe();
-  await wipeDeviceEncKey();
+
+  // Removes THIS account only, and hands over to another held wallet.
+  //
+  // It used to call the total `vaultWipe()`. Under multi-account that is a
+  // two-click path — whose confirmation still says "your wallet", singular —
+  // that would erase every wallet on the device with no per-account export
+  // gate. A total wipe is a separate, differently-worded action.
+  const others = (await vaultListAccounts().catch(() => [])).filter((e) => e.a !== leaving);
+
+  // `wipeDeviceEncKey` WRITES empty markers, so it must precede the scope wipe
+  // or it recreates the very breadcrumbs that wipe just removed — and the
+  // recovery scan would resurrect the removed address.
+  // Close the socket and clear the DM/channel/media/key-vault caches for the
+  // departing account. This must happen BEFORE any handover below: the old
+  // code cleared them fire-and-forget at the end, which under a handover would
+  // have wiped the INCOMING account's freshly-populated caches instead.
+  await tearDownAccountSession();
+
+  await wipeDeviceEncKey().catch(() => {});
+  if (leaving) {
+    await vaultRemoveAccount(leaving);
+  } else {
+    // No active account to scope to — fall back to the total wipe.
+    await vaultWipe();
+  }
   setSetting('walletSource', '');
   setSetting('walletAddress', '');
   setSetting('deviceRegistered', '');
@@ -183,18 +291,16 @@ export async function disconnectWallet(): Promise<void> {
   // the (now empty) namespace, so the UI drops the previous account's lists in
   // the same tick rather than at the next launch.
   setWalletScope(null);
-  // Drop the cached own avatar so a different account doesn't inherit it.
-  import('./ownAvatar').then(({ clearOwnAvatar }) => clearOwnAvatar()).catch(() => {});
-  // Clear E2E session state so a different account can't read this one's keys:
-  // the in-memory DM/channel content-key caches and the cached vault backup key.
-  Promise.all([
-    import('./dmCrypto').then(({ clearDmKeyCache }) => clearDmKeyCache()),
-    import('./channelCrypto').then(({ clearChannelKeyCache }) => clearChannelKeyCache()),
-    import('./keyVault').then(({ clearKeyVaultSession }) => clearKeyVaultSession()),
-    // Revoke decrypted-media object URLs (P5) so a different account can't read
-    // this one's decrypted attachments out of the blob: URL cache.
-    import('./mediaCrypto').then(({ clearMediaObjectUrls }) => clearMediaObjectUrls()),
-  ]).catch(() => {});
+
+  // Another wallet is still held — activate it rather than leaving the app
+  // signed out, which would misrepresent what just happened.
+  if (others.length > 0) {
+    try {
+      await switchAccount(others[0].a);
+    } catch {
+      /* leave signed out rather than half-switched */
+    }
+  }
 }
 
 /** Update on-chain registration status and invalidate profile cache. */
@@ -217,6 +323,10 @@ export async function checkRegistrationStatus(): Promise<void> {
   if (!addr) return;
   try {
     const resp = await getClient().getUserProfile(addr);
+    // The account can change across that await; applying afterwards would show
+    // one account's verified state for another, and cache one account's avatar
+    // under the other's (now namespaced) key.
+    if (walletAddress() !== addr) return;
     setIsRegistered(resp.user.registered_at > 0);
     // Cache the user's OWN avatar image locally while we're (presumably) on a
     // node that has it, so it keeps rendering after switching to a node

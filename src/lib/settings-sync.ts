@@ -197,7 +197,14 @@ function isValidRawSyncValue(key: string, value: string): boolean {
 
 /** Upload current settings to L2 node. */
 export async function uploadSettings(hexKey: string): Promise<void> {
+  // `hexKey` arrives from a debounced timer, so the account may already have
+  // changed by the time this runs — and `encryptSettings` reads the CURRENT
+  // account's settings. Sealing this account's data under that account's key
+  // and uploading it under that account's auth is how two accounts' data get
+  // merged on the server.
+  const forWallet = walletAddress();
   const data = await encryptSettings(hexKey);
+  if (walletAddress() !== forWallet) return;
   const client = getClient();
   await client.syncSettings(data);
 }

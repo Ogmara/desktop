@@ -5,6 +5,61 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.67.0] - 2026-09-03
+
+Multi-account Phase 4 of 6 — session teardown, the switch path, and the async
+guards. Still no switching UI (Phase 5), so nothing new is reachable yet.
+
+### Added
+
+- `tearDownAccountSession()` — everything bound to the current account, in an
+  order that is load-bearing. The WebSocket closes FIRST, because a switch
+  re-renders the tree and a socket left open delivers the previous account's
+  frames into the new account's mounted views. Pending tx-confirm prompts are
+  cancelled next: one armed under account A that resolves after the switch
+  would sign with B's key. The E2E and media caches are then cleared and
+  AWAITED — a cache that clears after the new session starts is the same bug
+  with a shorter window.
+
+- `switchAccount(addr)`, whose ordering is the fix for the worst bug class
+  here: the store resets run BEFORE `vaultActivate`, because activation moves
+  the vault's active account and a debounced upload firing in between resolves
+  `vaultExportKey()` — the NEW account's key — while still holding the OLD
+  account's data, writing a blob nothing can open. `vaultActivate` runs before
+  the teardown, so a failed activation throws having changed nothing rather
+  than leaving the session gutted with no signer.
+
+### Changed
+
+- **`disconnectWallet` removes only the ACTIVE account and hands over to
+  another held wallet.** It called the total `vaultWipe()`; under
+  multi-account that is a two-click path — whose confirmation still says "your
+  wallet", singular — that would erase every wallet on the device with no
+  per-account export gate. A total wipe becomes a separate, differently-worded
+  action in Phase 5.
+
+### Fixed
+
+- Four more async paths could cross accounts. Each captures the account up
+  front and re-checks after every await, before any write:
+  - `tryRestoreKeyVault` writes the SHARED DM/channel key caches, so applying
+    after a switch loads one account's conversation keys into another's
+    session.
+  - `uploadSettings` receives its key from a debounced timer while
+    `encryptSettings` reads the CURRENT account's settings — sealing one
+    account's data under another's key and uploading it under that account's
+    auth is how two accounts' data get merged server-side.
+  - `checkRegistrationStatus` would show one account's verified state for
+    another and cache one account's avatar under the other's key.
+  - `ensureOwnAvatarCached` has two awaits before it writes the now
+    per-account cache.
+
+- **The disconnect cleanup ran after the handover.** The trailing
+  fire-and-forget block that cleared the DM/channel/media caches sat at the end
+  of `disconnectWallet`, so once a handover was added it would have wiped the
+  INCOMING account's freshly-populated caches. Replaced by
+  `tearDownAccountSession()` before the handover.
+
 ## [1.66.0] - 2026-09-03
 
 Multi-account Phase 3d of 6 — the vault is wired up. **This is the first

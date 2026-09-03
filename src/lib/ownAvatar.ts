@@ -15,7 +15,7 @@
 
 import { createSignal } from 'solid-js';
 import { getClient } from './api';
-import { scopedGet, scopedSet, scopedRemove, registerWalletSwitchReset } from './walletScope';
+import { scopedGet, scopedSet, scopedRemove, registerWalletSwitchReset, getWalletScope } from './walletScope';
 
 const STORAGE_KEY = 'ogmara.ownAvatar';
 /** Don't cache images larger than this (localStorage is ~5 MB). Avatars are
@@ -91,12 +91,18 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 export async function ensureOwnAvatarCached(cid: string | undefined | null): Promise<void> {
   if (!cid) return;
   if (ownAvatar()?.cid === cid) return; // already have this one
+  // The cache is per account now, and there are two awaits below. Writing
+  // after a switch would show the previous account's picture as the new
+  // account's own avatar.
+  const forWallet = getWalletScope();
   try {
     const resp = await fetch(getClient().getMediaUrl(cid));
     if (!resp.ok) return;
     const blob = await resp.blob();
     if (blob.size > MAX_CACHE_BYTES) return;
-    setOwnAvatar(cid, await blobToDataUrl(blob));
+    const dataUrl = await blobToDataUrl(blob);
+    if (getWalletScope() !== forWallet) return;
+    setOwnAvatar(cid, dataUrl);
   } catch {
     /* node may not have it — keep whatever we already cached */
   }
