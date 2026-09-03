@@ -5,6 +5,48 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.63.0] - 2026-09-03
+
+Multi-account Phase 3a of 6 — the PIN-at-rest key layer. **No behaviour
+change**: nothing calls this yet, and the vault still stores a single account.
+
+### Added
+
+- `src/lib/vaultDek.ts` — a data-encryption key for PIN mode. Account slots are
+  encrypted under a random 32-byte DEK, and the DEK is encrypted under the
+  PIN-derived key. This is the design decision that makes multi-account PIN
+  handling tractable: changing the PIN rewrites ONE blob and touches no account
+  slot at all, an account can be added while a PIN is set with no re-prompt and
+  without a plaintext slot ever existing, and PBKDF2 runs once per unlock
+  rather than once per account. Encrypting each slot directly under the PIN key
+  would make a PIN change an N-slot re-encryption needing staging slots, a
+  staging fallback in the read path, and a resume for a crash mid-way.
+
+  The cost is stated in the module: the DEK is a single point of failure for
+  every account. Hence it is written to two keys, each verified by a real
+  unwrap rather than a string compare; the load path tries both; and the legacy
+  anchor stays encrypted directly under the PIN key — never under the DEK — as
+  the backstop for the pre-migration account.
+
+- `src/lib/aesGcm.ts` — the AES-GCM and PBKDF2 primitives, extracted verbatim
+  from `appLock.ts`, which now re-exports them so no caller changes. The point
+  is that there remains exactly ONE implementation of the `ivHex:ctHex` format:
+  a second copy that drifted would make stored keys unreadable. It also has no
+  imports, which is what makes it and `vaultDek` testable under `node --test`.
+
+- 13 DEK tests, covering the ways every account could be bricked at once: a
+  write that silently vanishes on a poisoned store is caught rather than
+  assumed to have worked; the load path recovers when either copy is destroyed
+  or corrupt; "no PIN set" and "wrong PIN" are distinguished rather than both
+  reported as absent; and a PIN change leaves existing slots openable.
+
+### Changed
+
+- `allowImportingTsExtensions` is enabled so modules that must run under
+  `node --test` can use explicit `.ts` specifiers. Node's ESM resolver cannot
+  resolve the extensionless imports the app uses; esbuild and Vite resolve
+  both. Before this, only dependency-free modules were testable at all.
+
 ## [1.62.0] - 2026-09-03
 
 ### Security

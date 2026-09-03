@@ -3,6 +3,10 @@
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    // Lets modules that must run under `node --test` use explicit `.ts`
+    // specifiers; Node's ESM resolver cannot resolve extensionless imports,
+    // and esbuild/Vite resolve them fine.
+    "allowImportingTsExtensions": true,
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "jsx": "preserve",
     "jsxImportSource": "solid-js",
