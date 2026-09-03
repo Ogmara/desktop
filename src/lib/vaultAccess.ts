@@ -84,13 +84,22 @@ export async function readKeyFor(
   if (raw && HEX64.test(raw)) return { status: 'ok', hex: raw };
 
   // 2. ciphertext per-account slot, sealed under the DEK
+  //
+  // A failure here FALLS THROUGH to the legacy branches rather than returning.
+  // Returning early would have made the DEK a hard dependency the moment a v2
+  // slot existed — so a destroyed or unloadable DEK would report `needs-pin`
+  // forever even though the legacy anchor below still opens under the PIN key
+  // alone. That would have silently voided the backstop this module's doc
+  // comment promises. `sawLocked` remembers that something WAS present, so the
+  // final answer is still `needs-pin` rather than `absent`.
+  let sawLocked = false;
   const enc = await store.getItemAsync(SS.encFor(addr)).catch(() => null);
   if (enc) {
-    if (!keys.dek) return { status: 'needs-pin' };
-    const hex = await tryDecrypt(keys.dek, enc);
-    if (hex && (await matches(hex, addr, deriveAddress))) return { status: 'ok', hex };
-    // Present but unopenable with the key we hold: still not "absent".
-    return { status: 'needs-pin' };
+    if (keys.dek) {
+      const hex = await tryDecrypt(keys.dek, enc);
+      if (hex && (await matches(hex, addr, deriveAddress))) return { status: 'ok', hex };
+    }
+    sawLocked = true;
   }
 
   // 3. legacy raw anchor
@@ -102,12 +111,16 @@ export async function readKeyFor(
   // 4. legacy encrypted anchor — under the PIN key, never the DEK
   const legacyEnc = await store.getItemAsync(SS.legacyEnc).catch(() => null);
   if (legacyEnc) {
-    if (!keys.pinKey) return { status: 'needs-pin' };
-    const hex = await tryDecrypt(keys.pinKey, legacyEnc);
-    if (hex && (await matches(hex, addr, deriveAddress))) return { status: 'ok', hex };
+    if (keys.pinKey) {
+      const hex = await tryDecrypt(keys.pinKey, legacyEnc);
+      if (hex && (await matches(hex, addr, deriveAddress))) return { status: 'ok', hex };
+    }
+    sawLocked = true;
   }
 
-  return { status: 'absent' };
+  // Key material exists for this address but nothing we hold opens it. NOT
+  // absent — see the `needs-pin` doc above.
+  return sawLocked ? { status: 'needs-pin' } : { status: 'absent' };
 }
 
 /** Whether any key material exists for `addr`, without needing to open it. */

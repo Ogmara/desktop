@@ -5,6 +5,59 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.65.0] - 2026-09-03
+
+Multi-account Phase 3c of 6 — the account index and the v1 → v2 migration.
+**No behaviour change**: `runVaultMigrations` does not call this yet, so the
+vault still stores a single account.
+
+### Added
+
+- `src/lib/vaultIndex.ts` — the account index where the merge rules meet
+  storage. A read is the UNION of all four sources and survives any one of them
+  failing (a poisoned secure store, blocked localStorage, an older shell with
+  no keystore command). A write merges INTO what is persisted rather than over
+  it, and removal is the only path that may shrink the index — so a missing
+  account can never be the result of a failed read. 17 tests, each driving a
+  source that FAILS, because a source that always works cannot demonstrate
+  either invariant.
+
+- `src/lib/vaultMigrateV2.ts` — v1 → v2, single-wallet anchors to per-account
+  slots. The legacy anchors are **never deleted**: the v2 slots are additional
+  copies, so even if both indexes, the DEK and every per-account slot were
+  destroyed, the original account is still recoverable and an older build still
+  finds its wallet. Nothing is written before it is read back and its address
+  re-derived, and the version tag is written LAST as the only commit point, so
+  a crash anywhere before it leaves a pristine v1 that retries next launch.
+
+  A PIN'd vault cannot migrate before unlock — its address is not derivable
+  without the PIN — so it records a marker, stays at v1, and completes on the
+  first successful unlock. Unlike mobile's, that marker is actually READ;
+  shipping it without a reader is what stranded every mobile PIN user at the
+  old version with an empty account list.
+
+  18 crash-injection points (failing the Nth store write), each asserting the
+  same property afterwards: the key is still retrievable and a retry completes.
+
+### Fixed
+
+- **The documented recovery backstop did not work.** `readKeyFor` returned
+  `needs-pin` as soon as a per-account ciphertext slot existed, so it never
+  reached the legacy-anchor branch. That made the DEK a hard dependency the
+  moment a v2 slot was written — a destroyed or unloadable DEK would have
+  reported "needs PIN" forever even though the legacy anchor still opens under
+  the PIN key alone, silently voiding the guarantee its own doc comment makes.
+  It now falls through to the legacy branches and only reports `needs-pin` at
+  the end, so "key material exists but nothing we hold opens it" stays
+  distinct from "absent". Found by a migration crash test, not by review.
+
+- **The deferred-migration marker was cleared before the commit point.** A
+  crash on the version write left the vault at v1 with nothing recording that a
+  migration was outstanding; it recovered only because `migrateV1toV2` happens
+  to re-set the marker on the next launch. Depending on caller ordering is not
+  a safety property, so the marker is now cleared after the commit, and a stale
+  one left by a crash between the two is swept on the next call.
+
 ## [1.64.0] - 2026-09-03
 
 Multi-account Phase 3b of 6 — the per-account key path. **No behaviour

@@ -162,3 +162,28 @@ test('a silently-dropped write is caught, not reported as success', async () => 
     /did not survive a round-trip/,
   );
 });
+
+test('a destroyed DEK falls through to the legacy anchor rather than latching needs-pin', async () => {
+  // Regression: step 2 used to RETURN `needs-pin` as soon as a per-account
+  // ciphertext slot existed, so it never reached the legacy branch. That made
+  // the DEK a hard dependency the moment a v2 slot was written, and silently
+  // voided the documented backstop — "even if the DEK is destroyed, the
+  // original account is still recoverable". Caught by a migration crash test.
+  const keys = await withDek();
+  const pinKey = keys.pinKey!;
+  await writeKeyFor(A, KEY_A, store, keys, deriveAddress);
+  map.set(SS.legacyEnc, await encryptWithKey(pinKey, KEY_A));
+
+  // DEK gone; PIN key still held — the exact state after a crashed migration.
+  const got = await readKeyFor(A, store, { pinKey, dek: null }, deriveAddress);
+  assert.deepEqual(got, { status: 'ok', hex: KEY_A });
+});
+
+test('with no backstop and no DEK it is still needs-pin, never absent', async () => {
+  const keys = await withDek();
+  await writeKeyFor(A, KEY_A, store, keys, deriveAddress);
+  assert.deepEqual(
+    await readKeyFor(A, store, { pinKey: keys.pinKey, dek: null }, deriveAddress),
+    { status: 'needs-pin' },
+  );
+});
