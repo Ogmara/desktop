@@ -5,6 +5,39 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.60.0] - 2026-09-03
+
+Multi-account Phase 1 of 6. **No behaviour change** — nothing imports this yet.
+
+### Added
+
+- `src/lib/vaultAccounts.ts` — the pure, storage-agnostic core of the account
+  index, ported from mobile with 18 unit tests. Every rule in it encodes a
+  finding from that implementation's audit rounds, in particular: a read is the
+  UNION of every source and never drops an entry for being absent from one, and
+  entries with a real timestamp sort ahead of ones recovered without
+  provenance, so a display cap sheds unconfirmed candidates rather than real
+  accounts (on mobile, an ascending sort meant a cap added to bound work
+  evicted every genuine account instead).
+
+  Desktop diverges from mobile in three ways, all deliberate:
+  - **A fourth index source: the keystore listing.** Mobile's premise — no
+    enumeration API, so the index is the only way to find a key and therefore a
+    single point of wallet loss — does not hold here. `list_vault_accounts`
+    proves a slot exists rather than merely recording that one did, so it is
+    never capped. The other three sources are kept because the Rust call can
+    fail on a poisoned store.
+  - **`source` is `'builtin'` only.** There is no Klever extension and no K5
+    delegation on desktop, so mobile's `'k5-delegation'` variant and the
+    exclusion filters it requires are not ported — they would be dead code that
+    reads as meaningful. Anything else found in a stored index is coerced.
+  - **Keys live under `ogmara.vault.`**, including the per-account E2E secret.
+    Mobile's `ogmara.e2e.*` naming would be rejected outright by the Rust
+    `validate_key` allowlist. A test asserts every generated key is storable.
+
+  `MAX_ACCOUNTS` stays 10, but as a UI bound rather than a storage one: values
+  may be 64 KB here, where mobile's cap existed to fit a 2048-byte limit.
+
 ## [1.59.0] - 2026-09-03
 
 Groundwork for multi-account support (Phase 0 of 6). No user-visible change
