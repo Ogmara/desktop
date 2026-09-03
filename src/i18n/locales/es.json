@@ -561,5 +561,6 @@
   "wallet_invalid_key": "Clave privada no válida: se esperan 64 caracteres hexadecimales.",
   "channel_not_found": "Canal no encontrado",
   "channel_not_found_desc": "Este canal no existe o ya no está disponible.",
-  "channel_private_invite_link": "Enlace de invitación privado"
+  "channel_private_invite_link": "Enlace de invitación privado",
+  "store_poisoned_warning": "El almacenamiento es de solo lectura: el archivo del monedero no se pudo leer al iniciar y no se sobrescribe, para proteger tu cartera. Los cambios NO se están guardando. Reinicia la app; si persiste, restaura o aparta .secure-store.json."
 }

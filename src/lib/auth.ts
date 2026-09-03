@@ -261,12 +261,11 @@ export async function disconnectWallet(): Promise<void> {
   // `wipeDeviceEncKey` WRITES empty markers, so it must precede the scope wipe
   // or it recreates the very breadcrumbs that wipe just removed — and the
   // recovery scan would resurrect the removed address.
-  // Close the socket and clear the DM/channel/media/key-vault caches for the
-  // departing account. This must happen BEFORE any handover below: the old
-  // code cleared them fire-and-forget at the end, which under a handover would
-  // have wiped the INCOMING account's freshly-populated caches instead.
-  await tearDownAccountSession();
-
+  // The DESTRUCTIVE step first, because it is the one that can fail or be
+  // refused: removing the last wallet key raises a native confirmation the
+  // webview cannot dismiss, and the user may cancel it. Tearing the session
+  // down first would leave the app with a closed socket and cleared caches
+  // while the account is still there — signed in to nothing.
   await wipeDeviceEncKey().catch(() => {});
   if (leaving) {
     await vaultRemoveAccount(leaving);
@@ -274,6 +273,12 @@ export async function disconnectWallet(): Promise<void> {
     // No active account to scope to — fall back to the total wipe.
     await vaultWipe();
   }
+
+  // Only now: close the socket and clear the DM/channel/media/key-vault caches
+  // for the departing account. Before any handover below — an earlier version
+  // cleared them fire-and-forget at the END, which under a handover would have
+  // wiped the INCOMING account's freshly-populated caches instead.
+  await tearDownAccountSession();
   setSetting('walletSource', '');
   setSetting('walletAddress', '');
   setSetting('deviceRegistered', '');

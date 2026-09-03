@@ -561,5 +561,6 @@
   "wallet_invalid_key": "Kein gültiger privater Schlüssel — 64 hexadezimale Zeichen erwartet.",
   "channel_not_found": "Kanal nicht gefunden",
   "channel_not_found_desc": "Dieser Kanal existiert nicht oder ist nicht mehr verfügbar.",
-  "channel_private_invite_link": "Privater Einladungslink"
+  "channel_private_invite_link": "Privater Einladungslink",
+  "store_poisoned_warning": "Speicher ist schreibgeschützt: Die Vault-Datei konnte beim Start nicht gelesen werden und wird zum Schutz deiner Wallet nicht überschrieben. Änderungen werden NICHT gespeichert. Starte die App neu; wenn es bestehen bleibt, stelle .secure-store.json wieder her oder verschiebe sie."
 }

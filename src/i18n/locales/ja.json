@@ -561,5 +561,6 @@
   "wallet_invalid_key": "秘密鍵が正しくありません。16進数64文字が必要です。",
   "channel_not_found": "チャンネルが見つかりません",
   "channel_not_found_desc": "このチャンネルは存在しないか、利用できなくなりました。",
-  "channel_private_invite_link": "プライベート招待リンク"
+  "channel_private_invite_link": "プライベート招待リンク",
+  "store_poisoned_warning": "ストレージが読み取り専用です。起動時に保管庫ファイルを読み取れず、ウォレット保護のため上書きしていません。変更は保存されていません。アプリを再起動してください。続く場合は .secure-store.json を復元するか退避してください。"
 }

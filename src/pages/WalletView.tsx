@@ -95,7 +95,17 @@ export const WalletView: Component = () => {
       setShowDisconnectConfirm(true);
       return;
     }
-    await disconnectWallet();
+    // Removing the last wallet key raises a native confirmation the webview
+    // cannot dismiss, and the user may cancel it. That rejects, so without
+    // this the confirm dialog would sit there with no explanation — and the
+    // rejection would go unhandled.
+    setError('');
+    try {
+      await disconnectWallet();
+    } catch (e: any) {
+      setError(e?.message || t('error_generic'));
+      return;
+    }
     clearExportedKey();
     setShowDisconnectConfirm(false);
     navigate('/news');

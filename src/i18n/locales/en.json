@@ -561,5 +561,6 @@
   "accounts_switch_failed": "Could not switch to that account.",
   "wallet_copy": "Copy",
   "wallet_private_key": "Private key",
-  "wallet_invalid_key": "That is not a valid private key — expected 64 hexadecimal characters."
+  "wallet_invalid_key": "That is not a valid private key — expected 64 hexadecimal characters.",
+  "store_poisoned_warning": "Storage is read-only: the vault file could not be read at startup and is not being overwritten, to protect your wallet. Changes are NOT being saved. Restart the app; if this persists, restore or move aside .secure-store.json."
 }

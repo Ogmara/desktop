@@ -561,5 +561,6 @@
   "wallet_invalid_key": "私钥无效——需要 64 个十六进制字符。",
   "channel_not_found": "未找到频道",
   "channel_not_found_desc": "该频道不存在或已不可用。",
-  "channel_private_invite_link": "私密邀请链接"
+  "channel_private_invite_link": "私密邀请链接",
+  "store_poisoned_warning": "存储为只读：启动时无法读取保险库文件，为保护您的钱包不会覆盖它。更改未被保存。请重启应用；若仍然如此，请恢复或移开 .secure-store.json。"
 }

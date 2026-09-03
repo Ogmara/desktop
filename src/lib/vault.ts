@@ -21,7 +21,7 @@ import { cancelAllPending as cancelPendingTxConfirms } from './txConfirm';
 import { AS, SS, MAX_ACCOUNTS, isValidAddress, type AccountEntry } from './vaultAccounts';
 import { importDek, loadDek, hasDek, deleteDek, type StoreLike } from './vaultDek';
 import {
-  readKeyFor, writeKeyFor, hasSlot, keyArtefactsFor,
+  readKeyFor, writeKeyFor, keyArtefactsFor,
   type UnlockedKeys,
 } from './vaultAccess';
 import {
@@ -189,10 +189,6 @@ export async function vaultExportKeyFor(addr: string): Promise<string | null> {
   return got.status === 'ok' ? got.hex : null;
 }
 
-/** Whether `addr` has key material on this device. */
-export async function vaultHasSlot(addr: string): Promise<boolean> {
-  return hasSlot(addr, store);
-}
 
 /**
  * Check if the vault has a stored wallet (encrypted or raw).

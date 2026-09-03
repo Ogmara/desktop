@@ -8,7 +8,7 @@
  * because losing a private key is unrecoverable.
  */
 
-import { createSignal, createResource, For, Show } from 'solid-js';
+import { createSignal, createResource, onCleanup, For, Show } from 'solid-js';
 import { t } from '../i18n/init';
 import { navigate } from '../lib/router';
 import {
@@ -25,6 +25,17 @@ export function AccountsView() {
   const [error, setError] = createSignal('');
   /** The account awaiting a removal confirmation, and its exported key. */
   const [removing, setRemoving] = createSignal<{ addr: string; key: string | null } | null>(null);
+  /** Drops the revealed key from memory if the dialog is left open. */
+  let revealTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function stopReveal() {
+    if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
+    setRemoving(null);
+  }
+
+  // A private key must not outlive the dialog that showed it — not on an
+  // abandoned screen, and not in a component that merely unmounted.
+  onCleanup(stopReveal);
   const [reload, setReload] = createSignal(0);
 
   const [accounts] = createResource(reload, async () => {
@@ -62,6 +73,8 @@ export function AccountsView() {
     setError('');
     const key = await vaultExportKeyFor(addr).catch(() => null);
     setRemoving({ addr, key });
+    if (revealTimer) clearTimeout(revealTimer);
+    revealTimer = setTimeout(stopReveal, 120_000);
   }
 
   async function confirmRemove() {
@@ -71,7 +84,7 @@ export function AccountsView() {
     try {
       const others = (accounts() ?? []).filter((e) => e.a !== target.addr);
       await vaultRemoveAccount(target.addr);
-      setRemoving(null);
+      stopReveal();
       setReload((n) => n + 1);
       // If the active account went away, hand over rather than leaving the app
       // holding a signer for an account that no longer exists.
@@ -153,7 +166,7 @@ export function AccountsView() {
                 </button>
               </Show>
               <div class="modal-actions">
-                <button class="btn-secondary" onClick={() => setRemoving(null)}>
+                <button class="btn-secondary" onClick={stopReveal}>
                   {t('cancel')}
                 </button>
                 <button class="btn-danger" onClick={confirmRemove} disabled={busy() !== null}>

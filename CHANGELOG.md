@@ -5,6 +5,51 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.69.0] - 2026-09-03
+
+Multi-account Phase 6 of 6 — diagnostics, and the audit pass over the whole
+feature. Multi-account is now complete.
+
+### Fixed
+
+- **Cancelling the native "remove last wallet key" dialog left a gutted
+  session.** `disconnectWallet` tore the session down — closed the socket,
+  cleared every E2E cache — and only then attempted the removal, which raises a
+  confirmation the webview cannot dismiss. Refusing it left the app signed in
+  to nothing with the account still present. The destructive step now runs
+  FIRST, since it is the one that can fail or be refused, and the teardown
+  follows only once it succeeded. `WalletView` also surfaces the failure
+  instead of leaving the dialog open on an unhandled rejection.
+- `verifyVaultIntegrity` inspected only the three legacy keys, so a fully
+  migrated vault reported `hasWallet: false` — and the caller acts on that by
+  offering to create a new wallet over one that exists. It now counts
+  per-account slots, reports the account count, and treats an unfinished PIN
+  journal as unhealthy.
+- The revealed private key in the removal dialog is cleared after two minutes
+  and on unmount, matching `WalletView`. It previously stayed in memory for as
+  long as the screen was left open.
+
+### Added
+
+- `getVaultDiagnostics` reports the multi-account state — counts and flags
+  only, never values: how many accounts each of the three index sources knows
+  about and **whether they agree** (disagreement means one is stale and the
+  union is carrying the difference), whether the DEK and its mirror exist,
+  whether a deferred migration or PIN journal is outstanding, and the store's
+  poisoned / machine-bound state.
+- A persistent banner when the secure store has gone read-only. Such a store
+  fails every write invisibly: settings appear to save, an added account
+  appears in the list, and none of it is on disk. With several accounts that is
+  how one gets lost.
+- A settings-classification test that fails when a new `Settings` key has no
+  scope decision. An unclassified key defaults to install-scope, which silently
+  leaks a per-account value between accounts — this whole bug class,
+  reintroduced one key at a time.
+
+### Removed
+
+- `vaultHasSlot`, which had no callers.
+
 ## [1.68.0] - 2026-09-03
 
 Multi-account Phase 5 of 6 — the UI. Multiple accounts are now reachable.

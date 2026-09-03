@@ -158,6 +158,7 @@ export async function verifyVaultIntegrity(): Promise<{
   hasWallet: boolean;
   mode: 'raw' | 'encrypted' | 'none';
   version: number;
+  accounts: number;
   healthy: boolean;
 }> {
   const version = await getStoredVersion();
@@ -165,18 +166,28 @@ export async function verifyVaultIntegrity(): Promise<{
   const raw = await SecureStore.getItemAsync(V1_KEYS.rawKey).catch(() => null);
   const enc = await SecureStore.getItemAsync(V1_KEYS.encryptedKey).catch(() => null);
 
-  const hasWallet = !!(raw || enc);
+  // Per-account slots count as a wallet. Checking only the legacy anchors
+  // would report `hasWallet: false` for a fully-migrated vault — and the
+  // caller acts on that by offering to create a new wallet.
+  const accounts = await SecureStore.listVaultAccounts().catch(() => [] as string[]);
+
+  const hasWallet = !!(raw || enc) || accounts.length > 0;
   let healthy = true;
 
   if (mode === 'raw' && !raw) healthy = false; // claims raw but no key
   if (mode === 'encrypted' && !enc) healthy = false; // claims encrypted but no key
   if (raw && !/^[0-9a-fA-F]{64}$/.test(raw)) healthy = false; // corrupt raw key
   if (enc && !enc.includes(':')) healthy = false; // corrupt encrypted format
+  // A v2 vault with an outstanding deferred migration is expected, not broken;
+  // an unfinished PIN journal is not.
+  const journal = await SecureStore.getItemAsync('ogmara.vault.pin_migration').catch(() => null);
+  if (journal) healthy = false;
 
   return {
     hasWallet,
     mode: (mode as 'raw' | 'encrypted') || 'none',
     version,
+    accounts: accounts.length,
     healthy,
   };
 }
@@ -185,12 +196,46 @@ export async function verifyVaultIntegrity(): Promise<{
  * Vault diagnostics — reports key existence for debugging/support.
  * Does NOT return key values (that would defeat the vault).
  */
-export async function getVaultDiagnostics(): Promise<Record<string, boolean>> {
-  const result: Record<string, boolean> = {};
+export async function getVaultDiagnostics(): Promise<Record<string, boolean | number | string>> {
+  const result: Record<string, boolean | number | string> = {};
   for (const [name, key] of Object.entries(V1_KEYS)) {
-    const val = await SecureStore.getItemAsync(key).catch(() => null);
-    result[name] = !!val;
+    result[name] = !!(await SecureStore.getItemAsync(key).catch(() => null));
   }
-  result['version'] = !!(await SecureStore.getItemAsync(VERSION_KEY).catch(() => null));
+  result['version'] = await getStoredVersion();
+
+  // Multi-account state. Reported as counts and flags only — never values,
+  // which would defeat the vault.
+  const keystore = await SecureStore.listVaultAccounts().catch(() => [] as string[]);
+  result['keystoreAccounts'] = keystore.length;
+  try {
+    const primary = JSON.parse(localStorage.getItem('ogmara.vault.accounts.index') || '[]');
+    result['indexedAccounts'] = Array.isArray(primary) ? primary.length : 0;
+  } catch {
+    result['indexedAccounts'] = 0;
+  }
+  const mirror = await SecureStore.getItemAsync('ogmara.vault.accounts').catch(() => null);
+  try {
+    const parsed = mirror ? JSON.parse(mirror) : [];
+    result['mirroredAccounts'] = Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    result['mirroredAccounts'] = 0;
+  }
+  // Disagreement between the three is the signal worth surfacing: it means one
+  // source is stale, and the union is carrying the difference.
+  result['indexSourcesAgree'] =
+    result['keystoreAccounts'] === result['indexedAccounts'] &&
+    result['indexedAccounts'] === result['mirroredAccounts'];
+
+  result['activeRecorded'] = !!(await SecureStore.getItemAsync('ogmara.vault.active').catch(() => null));
+  result['dek'] = !!(await SecureStore.getItemAsync('ogmara.vault.dek').catch(() => null));
+  result['dekMirror'] = !!(await SecureStore.getItemAsync('ogmara.vault.dek.mirror').catch(() => null));
+  result['deferredMigrationPending'] =
+    !!(await SecureStore.getItemAsync('ogmara.vault.v2_pending').catch(() => null));
+  result['pinMigrationJournal'] =
+    !!(await SecureStore.getItemAsync('ogmara.vault.pin_migration').catch(() => null));
+
+  const health = await SecureStore.storeHealth();
+  result['storePoisoned'] = health.poisoned;
+  result['storeMachineBound'] = health.machineBound;
   return result;
 }

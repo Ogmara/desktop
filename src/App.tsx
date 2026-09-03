@@ -16,6 +16,7 @@ import { t } from './i18n/init';
 import { LockScreen } from './LockScreen';
 import { PinSetup } from './PinSetup';
 import { vaultMigrationsReady, verifyVaultIntegrity } from './lib/vaultMigration';
+import { storeHealth as secureStoreHealth } from './lib/secureStore';
 import {
   vaultHasWallet,
   vaultIsEncrypted,
@@ -103,6 +104,9 @@ export const App: Component = () => {
     }
   });
 
+  /** Set when the secure store has gone read-only; see the banner below. */
+  const [storePoisoned, setStorePoisoned] = createSignal(false);
+
   async function initializeVault() {
     try {
       // The per-account scope must be pointed BEFORE any per-account read,
@@ -114,6 +118,12 @@ export const App: Component = () => {
       // independently. Running the vault migration twice concurrently against
       // the same key material is not something to leave to timing.
       await vaultMigrationsReady();
+
+      // Checked once at boot. A store that went read-only on load stays that
+      // way for the session — restarting is the fix, and the banner says so.
+      void secureStoreHealth()
+        .then((h) => setStorePoisoned(h.poisoned))
+        .catch(() => {});
 
       // Verify integrity
       const integrity = await verifyVaultIntegrity();
@@ -304,6 +314,17 @@ export const App: Component = () => {
               color: white;
             }
           `}</style>
+
+          {/* A poisoned secure store fails EVERY write, invisibly from the
+              webview's point of view: settings appear to save, an added
+              account appears in the list, and none of it is on disk. With
+              several accounts that is how one gets lost, so it is surfaced
+              persistently rather than left to fail quietly. */}
+          <Show when={storePoisoned()}>
+            <div class="store-warning" role="alert">
+              {t('store_poisoned_warning')}
+            </div>
+          </Show>
 
           {/* Network activity indicator — animates when API calls are in flight,
               shows a "connecting…" label after 1.2s of slow loading. */}
