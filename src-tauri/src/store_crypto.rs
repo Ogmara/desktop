@@ -176,6 +176,14 @@ fn machine_secret(store_path: &Path) -> Result<(Vec<u8>, bool), String> {
     }
     #[cfg(not(unix))]
     std::fs::write(&side, &encoded).map_err(|e| format!("sidecar write error: {e}"))?;
+    // `.mode()` applies only when the file is CREATED, so an existing sidecar
+    // (reachable when the stored one was corrupt or the wrong length) would
+    // keep whatever mode it had. Narrow it explicitly as well.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&side, std::fs::Permissions::from_mode(0o600));
+    }
     Ok((fresh.to_vec(), false))
 }
 

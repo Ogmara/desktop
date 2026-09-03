@@ -197,9 +197,17 @@ export async function removePin(currentPin: string): Promise<boolean> {
   const key = await verifyPin(currentPin);
   if (!key) return false;
 
+  // DISARM FIRST. This is the commit point, mirroring setup, which arms last.
+  //
+  // Deleting the salt first left a window — one failed IPC, or a kill between
+  // two saves — with the lock still armed and no credentials to pass it. The
+  // lock screen has no reset and no forgot-PIN, so that state is unusable
+  // forever while the wallet sits in plaintext on disk. Disarming first means
+  // the same interruption leaves a working vault with stale credentials, which
+  // the next setup or removal clears.
+  await SecureStore.setItemAsync(LOCK_ENABLED_KEY, 'false');
   await SecureStore.deleteItemAsync(SALT_KEY);
   await SecureStore.deleteItemAsync(PIN_VERIFY_KEY);
-  await SecureStore.setItemAsync(LOCK_ENABLED_KEY, 'false');
   await SecureStore.deleteItemAsync(FAILED_ATTEMPTS_KEY).catch(() => {});
   await SecureStore.deleteItemAsync(COOLDOWN_UNTIL_KEY).catch(() => {});
   return true;

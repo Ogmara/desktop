@@ -189,8 +189,8 @@ export async function vaultRemoveAccount(addr: string): Promise<void> {
   //
   // Only removed when the anchor actually belongs to THIS account — never on a
   // guess, since deleting another account's anchor would destroy its key.
-  const provenAnchor = await legacyAnchorBelongsTo(addr);
-  if (provenAnchor) {
+  const provenAnchors = await legacyAnchorsBelongingTo(addr);
+  if (provenAnchors.length > 0) {
     // The anchors only. NOT `VAULT_MODE_KEY`: that flag is VAULT-level, and
     // `legacyAnchorBelongsTo` proves nothing about it. Deleting it made
     // `vaultIsEncrypted()` false while the lock stayed enabled, so `App.tsx`'s
@@ -200,7 +200,7 @@ export async function vaultRemoveAccount(addr: string): Promise<void> {
     // Only the anchor that was actually proven. The comment claimed as much
     // while the code deleted both; in practice a mode switch removes the other
     // one, but "proven" must mean proven.
-    targets.push(provenAnchor);
+    targets.push(...provenAnchors);
   }
 
   await SecureStore.deleteManyAsync(targets);
@@ -224,18 +224,24 @@ export async function vaultRemoveAccount(addr: string): Promise<void> {
 }
 
 /**
- * Which legacy v1 anchor holds THIS account's key, if either does.
+ * Which legacy v1 anchors hold THIS account's key.
  *
  * Answers only when it can prove it: the raw anchor is derived directly, and
  * the encrypted anchor is opened with the session PIN key. An anchor that
  * cannot be opened returns `false` — leaving key material behind is
  * recoverable, deleting someone else's anchor is not.
  */
-async function legacyAnchorBelongsTo(addr: string): Promise<string | null> {
+async function legacyAnchorsBelongingTo(addr: string): Promise<string[]> {
+  // EVERY proven anchor, not the first. Both cleanup deletes swallow their
+  // errors (`.catch(() => {})` in `encryptAllWithPin` and `vaultStore`), so a
+  // poisoned store can leave the raw and encrypted anchors holding the same
+  // account's key. Returning early left the second one behind, and the
+  // unlock fallback then reopened the account that had just been "removed".
+  const proven: string[] = [];
   const raw = await SecureStore.getItemAsync(VAULT_RAW_KEY).catch(() => null);
   if (raw && /^[0-9a-fA-F]{64}$/.test(raw)) {
     try {
-      if ((await deriveAddress(raw)) === addr) return VAULT_RAW_KEY;
+      if ((await deriveAddress(raw)) === addr) proven.push(VAULT_RAW_KEY);
     } catch {
       /* fails closed */
     }
@@ -245,13 +251,13 @@ async function legacyAnchorBelongsTo(addr: string): Promise<string | null> {
     try {
       const hex = await decryptWithKey(keys.pinKey, enc);
       if (/^[0-9a-fA-F]{64}$/.test(hex) && (await deriveAddress(hex)) === addr) {
-        return VAULT_ENCRYPTED_KEY;
+        proven.push(VAULT_ENCRYPTED_KEY);
       }
     } catch {
       /* wrong or absent PIN key — fails closed */
     }
   }
-  return null;
+  return proven;
 }
 
 /** Export a SPECIFIC account's key, without activating it. */
@@ -407,11 +413,19 @@ export async function vaultStore(privateKeyHex: string): Promise<string> {
  * ciphertext slot. Then a fresh salt loses nothing.
  */
 export async function pinCredentialsDiscardable(): Promise<boolean> {
-  if (await hasDek(store)) return false;
-  for (const a of await SecureStore.listVaultAccounts().catch(() => [] as string[])) {
-    if (await SecureStore.getItemAsync(SS.encFor(a)).catch(() => null)) return false;
+  // Every read fails CLOSED. This function authorises deleting the salt, so a
+  // storage failure must read as "something might be sealed", never as
+  // "nothing is". Previously each `.catch` pointed the other way and a single
+  // failed read could green-light discarding the key to a sealed anchor.
+  try {
+    if (await hasDek(store)) return false;
+    for (const a of await SecureStore.listVaultAccountsStrict()) {
+      if (await SecureStore.getItemAsync(SS.encFor(a))) return false;
+    }
+    return !(await SecureStore.getItemAsync(VAULT_ENCRYPTED_KEY));
+  } catch {
+    return false;
   }
-  return !(await SecureStore.getItemAsync(VAULT_ENCRYPTED_KEY).catch(() => null));
 }
 
 /** Shared dependency bundle for the PIN sequences. */
@@ -421,7 +435,9 @@ function pinOpsDeps(): PinOpsDeps {
     keys,
     deriveAddress,
     listAccounts: async () => (await vaultListAccounts()).map((e) => e.a),
-    listKeystore,
+    // STRICT: these guards authorise destruction, so a failed listing must
+    // throw rather than read as "nothing to worry about".
+    listKeystore: () => SecureStore.listVaultAccountsStrict(),
   };
 }
 
@@ -477,7 +493,7 @@ export async function reconcilePinJournal(): Promise<void> {
   // work — the silent-fallback shape.
   let addrs: string[];
   try {
-    addrs = await SecureStore.listVaultAccounts();
+    addrs = await SecureStore.listVaultAccountsStrict();
   } catch {
     return; // cannot tell; leave the journal for a later boot
   }
@@ -573,38 +589,15 @@ export async function vaultWipe(): Promise<void> {
   keys.pinKey = null;
   keys.dek = null;
 
-  // Enumerate the UNION plus the recorded active account, uncapped: a wipe
-  // must reach every account, including any beyond the display cap and any
-  // known only to the keystore. Anything missed is key material left on disk
-  // that nothing can ever remove.
-  const every = new Set<string>();
-  for (const e of await vaultListAccounts().catch(() => [] as AccountEntry[])) every.add(e.a);
-  const recorded = await readActive(store).catch(() => null);
-  if (recorded) every.add(recorded);
+  // Enumerated NATIVELY, by prefix. The hand-built target list here was
+  // incomplete three audits running — it missed the DEK, then the app-lock
+  // record, then the pre-v2 device-global X25519 secret and its claim marker,
+  // each time leaving key material on disk after a wipe the UI called total.
+  // One native call removes everything under `ogmara.vault.` and
+  // `ogmara.app_lock.`, so a key added later cannot be forgotten, and it
+  // raises exactly one confirmation.
+  await SecureStore.wipeVaultStore();
 
-  const targets: string[] = [];
-  for (const a of every) targets.push(...keyArtefactsFor(a));
-  targets.push(
-    VAULT_RAW_KEY, VAULT_ENCRYPTED_KEY, VAULT_MODE_KEY,
-    SS.active, SS.mirror, SS.pending,
-    // Left behind, this makes `verifyVaultIntegrity` report unhealthy forever
-    // with no path to clear it.
-    SS.pinMigration,
-  );
-  // One batch: the native guard evaluates once and raises at most one dialog,
-  // instead of one per account for a user who would learn to click through.
-  await SecureStore.deleteManyAsync(targets).catch(() => {});
-  await deleteDek(store).catch(() => {});
-  // The PIN record too. Without this a wipe followed by a fresh wallet leaves
-  // `isLockEnabled()` true while `vaultIsEncrypted()` is false: the app arms
-  // auto-lock and then demands the OLD PIN for a plaintext wallet.
-  await SecureStore.deleteManyAsync([
-    'ogmara.app_lock.salt',
-    'ogmara.app_lock.pin_verify',
-    'ogmara.app_lock.enabled',
-    'ogmara.app_lock.failed_attempts',
-    'ogmara.app_lock.cooldown_until',
-  ]).catch(() => {});
   try {
     browserLocal.setItem(AS.primaryIndex, '[]');
   } catch {

@@ -21,7 +21,7 @@ import {
 } from './vault';
 import { getClient } from './api';
 import { getSetting, setSetting } from './settings';
-import { ensureDeviceEncBinding, wipeDeviceEncKey } from './deviceEnc';
+import { ensureDeviceEncBinding } from './deviceEnc';
 import {
   setWalletScope,
   wipeWalletScope,
@@ -282,7 +282,6 @@ export async function disconnectWallet(): Promise<void> {
   // gate. A total wipe is a separate, differently-worded action.
   const others = (await vaultListAccounts().catch(() => [])).filter((e) => e.a !== leaving);
 
-  // `wipeDeviceEncKey` WRITES empty markers, so it must precede the scope wipe
   // or it recreates the very breadcrumbs that wipe just removed — and the
   // recovery scan would resurrect the removed address.
   // The DESTRUCTIVE step first, because it is the one that can fail or be

@@ -76,6 +76,22 @@ export async function listVaultAccounts(): Promise<string[]> {
 }
 
 /**
+ * The same listing, but FAILING rather than degrading.
+ *
+ * `listVaultAccounts` swallows its error so the boot path and the account
+ * index keep working — which is right there, and wrong everywhere a caller
+ * uses the listing to authorise something destructive. Those callers wrote
+ * "a failed listing is not an empty one" checks that could never fire, because
+ * the failure had already been converted into `[]` one layer down: an empty
+ * result made a "nothing is still sealed" guard pass vacuously.
+ *
+ * Use this wherever an empty answer would permit destruction.
+ */
+export async function listVaultAccountsStrict(): Promise<string[]> {
+  return invoke<string[]>('secure_store_list_vault_accounts');
+}
+
+/**
  * Store health: read-only state, and whether at-rest encryption is bound to
  * a stable machine identifier.
  *
@@ -94,4 +110,17 @@ export async function storeHealth(): Promise<{ poisoned: boolean; machineBound: 
     // cannot confirm would be its own kind of wrong.
     return { poisoned: false, machineBound: true };
   }
+}
+
+/**
+ * Delete EVERY vault and app-lock key, enumerated natively.
+ *
+ * Prefer this over building a target list in TypeScript: that list has been
+ * incomplete three times running — the DEK, then the app-lock record, then the
+ * pre-v2 device-global encryption secret — each time leaving key material on
+ * disk after a "total" wipe. The native side enumerates what is actually
+ * stored, so nothing can be forgotten.
+ */
+export async function wipeVaultStore(): Promise<void> {
+  await invoke('secure_store_wipe_vault');
 }

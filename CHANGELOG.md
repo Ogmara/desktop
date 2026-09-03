@@ -5,6 +5,87 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.72.0] - 2026-09-03
+
+Third audit pass. Rather than patch the four keys and three orderings it found,
+this changes the SHAPE of three things that kept producing the same class of
+miss — because each of the last three rounds fixed a specific instance and the
+next round found another.
+
+### Changed — structural
+
+- **The native write guard is now deny-by-default, by classification.** Every
+  key under `ogmara.vault.` / `ogmara.app_lock.` declares the value shape it
+  accepts, and anything unrecognised is treated as a secret. Enumerating "keys
+  worth protecting" missed one every round: `ogmara.vault.dek`, then
+  `ogmara.app_lock.salt` — overwriting which makes every PIN-encrypted account
+  unrecoverable, exactly like losing the DEK — then
+  `ogmara.vault.enc_identity_claimed`. A secret added later is covered before
+  anyone remembers this file.
+- **`vaultWipe` enumerates natively, by prefix.** The hand-built target list
+  was incomplete three audits running (the DEK, the app-lock record, then the
+  pre-v2 device-global X25519 secret and its claim marker), each time leaving
+  key material on disk after a wipe the UI called total. One native call
+  removes everything under both prefixes.
+- **Destructive guards no longer read a failed listing as an empty one.**
+  `listVaultAccounts` swallows its error by design — correct for the boot path
+  and the account index, wrong wherever an empty answer AUTHORISES destruction.
+  The "a failed listing is not an empty one" fix added in 1.71.0 was dead code
+  for exactly that reason. `listVaultAccountsStrict` now backs the three guards
+  that gate deletion, and `pinCredentialsDiscardable` fails closed on every
+  read.
+
+### Fixed — regressions from 1.71.0
+
+- **The `encrypted || lockOn` gate could present a lock screen nobody can
+  pass.** `removePin` deleted the salt before disarming the lock, so an
+  interruption left the lock armed with no credentials — and the lock screen
+  has no reset, over a wallet sitting in plaintext. Under the old `&&` gate
+  that state booted normally. `removePin` now disarms FIRST (its commit point,
+  mirroring setup, which arms last), and the gate additionally requires
+  credentials that can actually be used.
+- **The startup temp sweep never matched a file.** It built its prefix from
+  `file_name()` (`.secure-store.json.tmp`) while `save()` writes
+  `.secure-store.tmp.<pid>.<nanos>` — `with_extension` REPLACES the extension.
+  The fix was a no-op and nothing tested it. Now uses `file_stem()`, skips
+  files younger than five minutes (there is no single-instance guard, so a
+  second copy may be mid-save), and has a test asserting the sweep prefix
+  matches what `save()` actually produces.
+- **Moving the `legacyMode` write after the anchor conversion traded a
+  non-window for a real one.** The window it was meant to close does not exist
+  — the legacy anchor is plaintext on disk regardless of that flag — while a
+  crash between sealing the slots and writing it left BOTH flags unset over
+  encrypted key material, which is the state the gate change exists to catch.
+  Written early again, where the failure mode is a passable lock screen.
+- **`vaultRemoveAccount` left an anchor behind.** `legacyAnchorBelongsTo`
+  returned on the first match, so when both anchors hold the same account's key
+  — reachable because both cleanup deletes swallow their errors — the second
+  survived and the unlock fallback reopened the "removed" account.
+- `wipeDeviceEncKey` is removed. It resolved its slot from the ACTIVE account,
+  so after 1.71.0 it was both unreferenced and, if called, destructive to the
+  shared legacy identity.
+
+### Fixed — other
+
+- Desktop's device-key mint re-reads before writing, closing the concurrent
+  double-mint race web fixed in 0.75.2. The `.machine-key` sidecar's mode is
+  enforced on rewrite, not only on creation (`.mode()` applies to creation
+  alone).
+
+### Known limits, stated rather than implied
+
+The native last-key guard blocks MALFORMED destruction only. Webview code can
+still mint a countable decoy, or overwrite a slot with valid-shaped wrong key
+material — both destructive, neither prompted. It already has read access to
+every key through `secure_store_get`, so exfiltration is the larger exposure
+and no delete guard addresses it. What the guard reliably prevents is an
+accidental last-key deletion by the app itself.
+
+`pinSetupOrder.test.ts` constrains `encryptAllWithPin` but reimplements the
+`PinSetup.tsx` sequence rather than importing it, so it would not catch a
+reordering in that file. Recorded because two tests in this feature have
+already been found proving nothing.
+
 ## [1.71.0] - 2026-09-03
 
 Second audit pass, run against the tree 1.70.0 fixed. **Three of those fixes

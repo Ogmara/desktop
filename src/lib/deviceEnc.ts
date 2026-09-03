@@ -97,6 +97,15 @@ export async function getOrCreateEncKeypair(): Promise<{ privateKey: Uint8Array;
     throw new Error('No account is active — refusing to create a device encryption key');
   }
   const kp = generateDeviceEncKeypair();
+  // Re-read before writing. Two concurrent callers can both see an empty slot
+  // and both mint; the loser's write would overwrite the winner's live secret,
+  // orphaning every envelope wrapped to its `enc_pub`. Whoever lost adopts the
+  // stored key instead. (Web closed the same race in 0.75.2.)
+  const raced = await getItemAsync(slot);
+  if (raced) {
+    const privateKey = hexToBytes(raced);
+    return { privateKey, publicKeyHex: encPublicKeyHex(privateKey) };
+  }
   await setItemAsync(slot, bytesToHex(kp.privateKey));
   return kp;
 }
@@ -234,12 +243,11 @@ export async function ensureDeviceEncBinding(): Promise<void> {
 }
 
 /** Wipe the device encryption key + binding markers (on wallet disconnect). */
-export async function wipeDeviceEncKey(): Promise<void> {
-  // THIS account's slot only. Deleting the shared legacy slot would break E2E
-  // for every other account on the device when one is removed, and `deviceId`
-  // / `encKeyBound` are per-account settings that resolve through the active
-  // wallet scope.
-  await deleteItemAsync(encPrivKeyFor());
-  setSetting('encKeyBound', '');
-  setSetting('deviceId', '');
-}
+// `wipeDeviceEncKey` was removed with the multi-account vault.
+//
+// Per-account removal deletes `SS.encPrivFor(addr)` through `keyArtefactsFor`,
+// and a total wipe now enumerates natively by prefix — so a separate helper
+// that resolved its slot from the ACTIVE account was both redundant and
+// dangerous: called after the account was removed it fell back to the shared
+// legacy slot and destroyed the pre-v2 identity for every other account.
+

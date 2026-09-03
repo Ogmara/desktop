@@ -28,6 +28,7 @@ import {
 } from './lib/vault';
 import {
   isLockEnabled,
+  hasPinSetup,
   getLockTimeout,
   startIdleMonitor,
   stopIdleMonitor,
@@ -151,7 +152,14 @@ export const App: Component = () => {
       // unarmed — which under `&&` booted straight past the lock screen. The
       // lock screen is recoverable (a wrong PIN just fails); walking past an
       // encrypted vault is not obviously so.
-      if (encrypted || lockOn) {
+      // `lockOn` alone is not enough: with no stored credentials `verifyPin`
+      // returns null for EVERY PIN, and the lock screen has no reset — so an
+      // armed-but-credential-less flag renders a screen nobody can pass, over
+      // a vault that is otherwise fine. An encrypted vault still locks
+      // regardless, because booting past sealed key material is the worse
+      // failure of the two.
+      const pinUsable = await hasPinSetup();
+      if (encrypted || (lockOn && pinUsable)) {
         // Vault is encrypted — show lock screen
         setAppState('locked');
         return;

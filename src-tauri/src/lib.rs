@@ -186,7 +186,11 @@ impl SecureFileStore {
 
     /// Remove leftover `.secure-store.tmp*` files from crashed saves.
     fn sweep_temp_files(path: &std::path::Path) {
-        let (Some(dir), Some(stem)) = (path.parent(), path.file_name()) else {
+        // `file_stem()`, NOT `file_name()`. The temp names come from
+        // `with_extension("tmp.…")`, which REPLACES `.json` — so a prefix built
+        // from the full file name (`.secure-store.json.tmp`) matched nothing
+        // and this sweep silently did nothing at all.
+        let (Some(dir), Some(stem)) = (path.parent(), path.file_stem()) else {
             return;
         };
         let prefix = format!("{}.tmp", stem.to_string_lossy());
@@ -195,6 +199,17 @@ impl SecureFileStore {
             let name = entry.file_name();
             let name = name.to_string_lossy();
             if name.starts_with(&prefix) {
+                // Skip anything recent: there is no single-instance guard, so a
+                // second running copy may be mid-save, and deleting its temp
+                // between create and rename fails that save. A crashed leftover
+                // is not time-critical.
+                if let Ok(meta) = entry.metadata() {
+                    if let Ok(modified) = meta.modified() {
+                        if modified.elapsed().map(|d| d.as_secs() < 300).unwrap_or(false) {
+                            continue;
+                        }
+                    }
+                }
                 match fs::remove_file(entry.path()) {
                     Ok(()) => eprintln!("[secure-store] removed stale temp file {name}"),
                     Err(e) => eprintln!("[secure-store] could not remove stale temp {name}: {e}"),
@@ -450,6 +465,86 @@ fn is_address_shaped(s: &str) -> bool {
         && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
 }
 
+/// What a given secure-store key is allowed to hold.
+///
+/// A CLASSIFICATION rather than a list of keys to protect, because the
+/// list-of-keys approach missed one every single round: first
+/// `ogmara.vault.dek`, then `ogmara.app_lock.salt` (whose loss makes every
+/// encrypted account unrecoverable just as surely as losing the DEK), then
+/// `ogmara.vault.enc_identity_claimed`. Enumerating what is SAFE and denying
+/// the rest fails in the harmless direction when something new is added.
+enum ValueShape {
+    /// 64 hex chars — a raw private key, or an X25519 secret.
+    Hex64,
+    /// `ivHex:ctHex` — this app's AES-GCM envelope.
+    Ciphertext,
+    /// Either of the above. Slots change form on a PIN mode switch.
+    KeyMaterial,
+    /// Hex of any even length — the PBKDF2 salt.
+    Hex,
+    /// Free-form: indexes, flags, counters. Losing these costs no key material.
+    Free,
+}
+
+/// Classify a key. Unknown keys under our prefixes are treated as key material
+/// (deny-by-default), so a new secret added on the TS side is protected before
+/// anyone remembers to come back here.
+fn classify_key(key: &str) -> ValueShape {
+    // Free-form state: none of it is a secret, and all of it is rebuildable.
+    for free in [
+        "ogmara.vault.mode",
+        "ogmara.vault.version",
+        "ogmara.vault.accounts",
+        "ogmara.vault.active",
+        "ogmara.vault.v2_pending",
+        "ogmara.vault.pin_migration",
+        "ogmara.vault.enc_identity_claimed",
+        "ogmara.app_lock.enabled",
+        "ogmara.app_lock.timeout_seconds",
+        "ogmara.app_lock.failed_attempts",
+        "ogmara.app_lock.cooldown_until",
+    ] {
+        if key == free || key.starts_with(&format!("{free}.")) {
+            return ValueShape::Free;
+        }
+    }
+    if key == "ogmara.app_lock.salt" {
+        return ValueShape::Hex;
+    }
+    if key == "ogmara.app_lock.pin_verify" || key.starts_with("ogmara.vault.dek") {
+        return ValueShape::Ciphertext;
+    }
+    if key.starts_with("ogmara.vault.enc_private_key") {
+        return ValueShape::Hex64;
+    }
+    // private_key* / encrypted_key* change form on a mode switch, and anything
+    // unrecognised is assumed to be a secret.
+    ValueShape::KeyMaterial
+}
+
+/// Whether `value` is acceptable for `shape`.
+fn value_fits(shape: &ValueShape, value: &str) -> bool {
+    let hex64 = value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit());
+    let ciphertext = looks_like_ciphertext(value);
+    match shape {
+        ValueShape::Free => true,
+        ValueShape::Hex => !value.is_empty()
+            && value.len() % 2 == 0
+            && value.bytes().all(|b| b.is_ascii_hexdigit()),
+        ValueShape::Hex64 => hex64,
+        ValueShape::Ciphertext => ciphertext,
+        ValueShape::KeyMaterial => hex64 || ciphertext,
+    }
+}
+
+fn looks_like_ciphertext(value: &str) -> bool {
+    matches!(value.split_once(':'), Some((iv, ct))
+        if iv.len() == 24
+            && !ct.is_empty()
+            && iv.bytes().all(|b| b.is_ascii_hexdigit())
+            && ct.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 /// Whether `value` could plausibly BE wallet key material: 64-hex (a raw key)
 /// or `ivHex:ctHex` (this app's AES-GCM format).
 fn looks_like_key_material(value: &str) -> bool {
@@ -527,6 +622,18 @@ fn secure_store_set(app: tauri::AppHandle, key: String, value: String) -> Result
         return Err("value too large (max 64KB)".into());
     }
     let store = app.state::<SecureFileStore>();
+
+    // DENY-BY-DEFAULT by classification. Every key under our prefixes has a
+    // declared value shape; anything unrecognised is treated as a secret. The
+    // previous approach — enumerate the keys worth protecting — missed one
+    // every audit round: the DEK, then `ogmara.app_lock.salt` (whose loss
+    // makes every encrypted account unrecoverable), then
+    // `ogmara.vault.enc_identity_claimed`.
+    if !value_fits(&classify_key(&key), &value) && store.get(&key).is_some() {
+        return Err(format!(
+            "refusing to overwrite {key} with a value of the wrong form for that key"
+        ));
+    }
 
     // Writes into a slot that holds irreplaceable key material must carry
     // something that IS key material.
@@ -644,6 +751,36 @@ async fn delete_keys_guarded(app: tauri::AppHandle, keys: Vec<String>) -> Result
 #[tauri::command]
 fn secure_store_list_vault_accounts(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     app.state::<SecureFileStore>().list_vault_accounts()
+}
+
+/// Tauri command: delete EVERY vault and app-lock key.
+///
+/// A prefix wipe rather than a list, because the list has been wrong three
+/// times running: `vaultWipe` on the TS side missed the DEK, then the app-lock
+/// record, then the pre-v2 device-global X25519 secret and its claim marker —
+/// each time leaving key material on disk after a wipe the user was told was
+/// total. Enumerating on this side, where the store actually lives, means a
+/// key added later cannot be forgotten.
+///
+/// Guarded like any other last-key removal: it always removes every wallet
+/// key, so it always confirms.
+#[tauri::command]
+async fn secure_store_wipe_vault(app: tauri::AppHandle) -> Result<(), String> {
+    let keys: Vec<String> = {
+        let store = app.state::<SecureFileStore>();
+        let data = store
+            .data
+            .lock()
+            .map_err(|e| format!("lock error: {e}"))?;
+        data.keys()
+            .filter(|k| k.starts_with("ogmara.vault.") || k.starts_with("ogmara.app_lock."))
+            .cloned()
+            .collect()
+    };
+    if keys.is_empty() {
+        return Ok(());
+    }
+    delete_keys_guarded(app, keys).await
 }
 
 /// Tauri command: report whether the store has gone read-only.
@@ -1088,6 +1225,7 @@ pub fn run() {
             secure_store_delete_many,
             secure_store_list_vault_accounts,
             secure_store_health,
+            secure_store_wipe_vault,
             open_url,
             open_media_external,
             save_export_file,
@@ -1451,6 +1589,82 @@ mod tests {
         assert_eq!(listed, vec![A.to_string()]);
         assert!(is_wallet_key_slot(&raw_for(A)));
         assert!(!is_wallet_key_slot("ogmara.vault.private_key.notanaddress"));
+    }
+
+    #[test]
+    fn the_temp_sweep_actually_matches_the_names_save_writes() {
+        // The previous version built its prefix from `file_name()`, keeping the
+        // `.json` that `with_extension` replaces — so it matched nothing and
+        // the sweep was a silent no-op. This asserts the two agree.
+        let dir = tmp_dir();
+        let path = dir.join(".secure-store.json");
+        let produced = path.with_extension(format!("tmp.{}.{}", 1234, 5678));
+        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+        let prefix = format!("{stem}.tmp");
+        let produced_name = produced.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            produced_name.starts_with(&prefix),
+            "sweep prefix {prefix:?} must match the name save() writes ({produced_name:?})"
+        );
+
+        // End to end: an OLD temp file is removed, the real store is not.
+        std::fs::write(&produced, "stale").unwrap();
+        let bak = dir.join(".secure-store.json.corrupt.bak");
+        std::fs::write(&path, "{}").unwrap();
+        std::fs::write(&bak, "keep").unwrap();
+        // Backdate it past the recency skip.
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let _ = filetime_set(&produced, old);
+        SecureFileStore::sweep_temp_files(&path);
+        assert!(!produced.exists(), "a stale temp file must be removed");
+        assert!(path.exists(), "the store itself must survive");
+        assert!(bak.exists(), "a corrupt-backup sidecar must survive");
+    }
+
+    /// Best-effort mtime backdating; skipped where unsupported.
+    fn filetime_set(p: &std::path::Path, when: std::time::SystemTime) -> std::io::Result<()> {
+        let f = fs::File::options().write(true).open(p)?;
+        f.set_times(fs::FileTimes::new().set_modified(when))
+    }
+
+    #[test]
+    fn the_pin_salt_is_protected_like_the_dek() {
+        // Overwriting the salt makes every PIN-encrypted account unrecoverable
+        // — the same outcome as destroying the DEK, which was guarded while
+        // this was not. Enumerating keys to protect missed it; classification
+        // covers it.
+        assert!(!value_fits(&classify_key("ogmara.app_lock.salt"), "junk"));
+        assert!(value_fits(&classify_key("ogmara.app_lock.salt"), &"ab".repeat(16)));
+        assert!(!value_fits(&classify_key("ogmara.app_lock.pin_verify"), "junk"));
+        assert!(!value_fits(&classify_key(VAULT_DEK_KEY), "junk"));
+        assert!(!value_fits(&classify_key(&format!("ogmara.vault.enc_private_key.{A}")), "junk"));
+    }
+
+    #[test]
+    fn an_unknown_vault_key_defaults_to_protected() {
+        // Deny-by-default: a secret added on the TS side is covered before
+        // anyone remembers to update this file.
+        assert!(!value_fits(&classify_key("ogmara.vault.some_future_secret"), "junk"));
+        assert!(value_fits(&classify_key("ogmara.vault.some_future_secret"), &"a".repeat(64)));
+    }
+
+    #[test]
+    fn free_form_state_is_still_writable() {
+        // The classification must not reject legitimate writes.
+        for (k, v) in [
+            ("ogmara.vault.mode", "encrypted"),
+            (&format!("ogmara.vault.mode.{A}"), "raw"),
+            ("ogmara.vault.version", "2"),
+            ("ogmara.vault.accounts", "[]"),
+            ("ogmara.vault.active", A),
+            ("ogmara.vault.v2_pending", "encrypted"),
+            ("ogmara.vault.pin_migration", "{\"op\":\"encrypt\"}"),
+            ("ogmara.vault.enc_identity_claimed", "1"),
+            ("ogmara.app_lock.enabled", "true"),
+            ("ogmara.app_lock.failed_attempts", "0"),
+        ] {
+            assert!(value_fits(&classify_key(k), v), "legitimate write rejected: {k}");
+        }
     }
 
     #[test]

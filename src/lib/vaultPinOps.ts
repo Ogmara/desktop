@@ -75,7 +75,9 @@ export async function encryptAllWithPin(pinKey: CryptoKey, d: PinOpsDeps): Promi
   // absent from every source, be skipped here, and then sit in plaintext while
   // the UI reports the vault as PIN-protected. `decryptAllToRaw` already
   // defends this case; the mirror image needs it too.
-  for (const a of await d.listKeystore().catch(() => [] as string[])) {
+  // Same reasoning as the removal guard: an empty listing would let this
+  // "did we miss an account?" check pass without checking anything.
+  for (const a of await d.listKeystore()) {
     if (plain.has(a)) continue;
     if (await store.getItemAsync(SS.rawFor(a)).catch(() => null)) {
       throw new Error(
@@ -104,6 +106,19 @@ export async function encryptAllWithPin(pinKey: CryptoKey, d: PinOpsDeps): Promi
   // Vault-level mode, UNCONDITIONALLY — not only when a legacy anchor exists.
   // `vaultIsEncrypted()` reads this and the lock screen is gated on it, so a
   // vault with no anchor would otherwise boot straight past the lock screen.
+  // BEFORE the anchor conversion, not after.
+  //
+  // Moving it later was a mistake: the window it was meant to close is not
+  // real (the legacy anchor is plaintext on disk whether or not this flag says
+  // `encrypted`, so `readKeyFor` branch 3 opens it either way), while the
+  // window it CREATED is — a crash between sealing the slots and writing this
+  // leaves both `mode` and `lock_enabled` unset over encrypted key material,
+  // so the app boots signed out with no lock screen and no prompt.
+  //
+  // Set early, the failure mode is a lock screen for a vault that is not fully
+  // encrypted yet: passable with the same PIN, and self-healing on retry.
+  await store.setItemAsync(SS.legacyMode, 'encrypted');
+
   if (legacyRaw && HEX64.test(legacyRaw)) {
     const blob = await encryptWithKey(pinKey, legacyRaw);
     await store.setItemAsync(SS.legacyEnc, blob);
@@ -112,11 +127,6 @@ export async function encryptAllWithPin(pinKey: CryptoKey, d: PinOpsDeps): Promi
     }
     await store.deleteItemAsync(SS.legacyRaw).catch(() => {});
   }
-
-  // AFTER the anchor conversion, not before. Writing it first left a window
-  // where the vault claimed to be encrypted while the legacy anchor was still
-  // plaintext — and `readKeyFor` branch 3 opens that anchor with no PIN.
-  await store.setItemAsync(SS.legacyMode, 'encrypted');
 
   await store.deleteItemAsync(SS.pinMigration).catch(() => {});
 }
@@ -173,8 +183,12 @@ export async function decryptAllToRaw(pinKey: CryptoKey, d: PinOpsDeps): Promise
     // The loop only covers accounts the index returned; on a degraded index an
     // account can be missing from every source, and would be sealed forever
     // under a DEK whose salt the caller is about to delete.
+    // NOT `.catch(() => [])`. An empty list here makes the loop vacuous and
+    // the guard passes, and `deleteDek` runs immediately after — so a failed
+    // listing would authorise the exact destruction this check exists to
+    // refuse. Let it throw; the caller's rollback restores the session keys.
     const stillSealed: string[] = [];
-    for (const a of await d.listKeystore().catch(() => [] as string[])) {
+    for (const a of await d.listKeystore()) {
       if (await store.getItemAsync(SS.encFor(a)).catch(() => null)) stillSealed.push(a);
     }
     if (stillSealed.length > 0) {
