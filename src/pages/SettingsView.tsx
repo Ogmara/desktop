@@ -30,7 +30,7 @@ import { getClient } from '../lib/api';
 import { uploadSettings, downloadSettings } from '../lib/settings-sync';
 import { vaultExportKey } from '../lib/vault';
 import { isLockEnabled, hasPinSetup, removePin, verifyPin, getLockTimeout, setLockTimeout } from '../lib/appLock';
-import { vaultDecryptToRaw, vaultIsEncrypted } from '../lib/vault';
+import { vaultDecryptAllToRaw, vaultIsEncrypted } from '../lib/vault';
 import { enableNotifications, disableNotifications } from '../lib/push';
 import { PinSetup } from '../PinSetup';
 
@@ -101,11 +101,17 @@ const PinLockSection: Component = () => {
             if (!pin) return;
             setStatus('');
             try {
-              // Verify PIN first to get CryptoKey, then remove PIN, then decrypt vault
+              // Decrypt FIRST, remove the PIN record second.
+              //
+              // The old order removed the PIN and then decrypted, so a failure
+              // in between left the PIN record gone while the vault was still
+              // encrypted — nothing could ever unlock it again. Removing the
+              // PIN record is the commit point, so it goes last, exactly as
+              // setup writes it last.
               const cryptoKey = await verifyPin(pin);
               if (cryptoKey) {
+                await vaultDecryptAllToRaw(cryptoKey);
                 await removePin(pin);
-                await vaultDecryptToRaw(cryptoKey);
                 setPinEnabled(false);
                 setStatus(t('pin_removed') || 'PIN removed');
               } else {
@@ -189,6 +195,14 @@ export const SettingsView: Component = () => {
   return (
     <div class="settings-view">
       <h2>{t('settings_title')}</h2>
+
+      <section class="settings-section">
+        <h3>{t('accounts_title')}</h3>
+        <p class="settings-hint">{t('accounts_hint')}</p>
+        <button class="btn-secondary" onClick={() => navigate('/accounts')}>
+          {t('accounts_manage')}
+        </button>
+      </section>
 
       <section class="settings-section">
         <h3>{t('settings_language')}</h3>

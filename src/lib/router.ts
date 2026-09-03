@@ -33,6 +33,8 @@ export type ViewName =
   | 'bookmarks'
   | 'settings'
   | 'wallet'
+  | 'accounts'
+  | 'accounts-add'
   | 'token-portfolio'
   | 'compose'
   | 'channel-create'
@@ -121,6 +123,12 @@ function parseHash(hash: string): Route {
 
     case 'settings':
       return { view: 'settings', params: {}, query };
+
+    case 'accounts':
+      // `/accounts/add` is its own view rather than a modal so it can be
+      // linked to and backed out of like everything else.
+      if (second === 'add') return { view: 'accounts-add', params: {}, query };
+      return { view: 'accounts', params: {}, query };
 
     case 'wallet':
       if (second === 'tokens') {

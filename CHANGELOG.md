@@ -5,6 +5,54 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.68.0] - 2026-09-03
+
+Multi-account Phase 5 of 6 — the UI. Multiple accounts are now reachable.
+
+### Added
+
+- **Accounts view** (`/accounts`, linked from Settings) — every wallet held on
+  this device, which one is active, and one-click switching. Switching is not a
+  sign-out: each account keeps its own channels, groups, hidden DMs and
+  settings, and they come back when it is selected again.
+- **Add account** (`/accounts/add`) — create a new wallet or import a private
+  key. Both paths are ADDITIVE, going through `vaultAddAccount` +
+  `switchAccount` rather than `generateWallet`. `generateWallet` is the
+  single-wallet onboarding path: it overwrites the legacy anchor — which, for a
+  user whose PIN migration deferred, is their only key copy — and skips the
+  session teardown, so the previous account's DM and channel keys would be
+  sealed under the new account's backup key and uploaded.
+- Removal shows the account's private key **before** it removes anything. An
+  "are you sure?" that does not put the key in front of the user is not an
+  export gate, and after removal is too late. If the key cannot be read, the
+  dialog says so plainly rather than proceeding quietly.
+- 18 new strings across all 7 languages.
+
+### Fixed
+
+- **Removing a PIN could lock the user out permanently.** `removePin` — which
+  deletes the PIN record, and is the commit point — ran BEFORE the vault was
+  decrypted. A failure in between left no PIN record and a still-encrypted
+  vault, which nothing could ever unlock. Decryption now happens first and the
+  PIN record is removed last, mirroring setup, which writes it last.
+- The disconnect confirmation still said it would "permanently delete your
+  wallet". It now removes one account and hands over to another held wallet, so
+  the wording said something the button no longer does. Reworded in all 7
+  languages, and the hardcoded English fallbacks were replaced with real
+  translations.
+- Three keys (`channel_not_found`, `channel_not_found_desc`,
+  `channel_private_invite_link`) existed only in `en.json`, so six languages
+  silently fell back to English. Pre-existing; fixed while adding the new
+  strings. All 7 locales now hold the same 563 keys.
+
+### Removed
+
+- The single-account `vaultEncryptWithPin` / `vaultDecryptToRaw`. They only
+  ever touched the legacy anchor, so under v2 wiring either back would encrypt
+  the anchor while leaving every per-account slot in plaintext (or the reverse
+  on removal) — while the UI reported the vault as protected. Dead code that
+  reproduces a known bug the moment someone calls it is worse than no code.
+
 ## [1.67.0] - 2026-09-03
 
 Multi-account Phase 4 of 6 — session teardown, the switch path, and the async

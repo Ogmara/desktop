@@ -308,6 +308,14 @@ export async function vaultStore(privateKeyHex: string): Promise<string> {
   return signer.address;
 }
 
+// The single-account `vaultEncryptWithPin` / `vaultDecryptToRaw` were removed
+// with the multi-account vault. They only ever touched the legacy anchor, so
+// under v2 wiring either one back would encrypt the anchor while leaving every
+// per-account slot in plaintext (or the reverse on removal) — while the UI
+// reported the vault as protected. `vaultEncryptAllWithPin` and
+// `vaultDecryptAllToRaw` below are the replacements; they operate on the full
+// account set and refuse to act on a subset.
+
 /**
  * Encrypt EVERY account's slot under a PIN-derived key.
  *
@@ -430,67 +438,6 @@ export async function vaultDecryptAllToRaw(pinKey: CryptoKey): Promise<void> {
     throw e;
   }
   await SecureStore.deleteItemAsync(SS.pinMigration).catch(() => {});
-}
-
-/**
- * Encrypt the vault with a PIN-derived key.
- * Migrates from raw -> encrypted storage. Call after PIN setup.
- * The raw key is deleted after successful encryption.
- */
-export async function vaultEncryptWithPin(pinKey: CryptoKey): Promise<void> {
-  // Try SecureStore first, fall back to in-memory cached key
-  let hex = await SecureStore.getItemAsync(VAULT_RAW_KEY).catch(() => null);
-  if (!hex && cachedKeyHex) hex = cachedKeyHex;
-  if (!hex) throw new Error('No wallet to encrypt');
-
-  const encrypted = await encryptWithKey(pinKey, hex);
-  await SecureStore.setItemAsync(VAULT_ENCRYPTED_KEY, encrypted);
-
-  // Verify encrypted data is recoverable before deleting raw key.
-  // Tauri keyring IPC writes may not be immediately readable — retry with delay.
-  let readBack: string | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    readBack = await SecureStore.getItemAsync(VAULT_ENCRYPTED_KEY).catch(() => null);
-    if (readBack) break;
-    await new Promise(r => setTimeout(r, 200));
-  }
-  if (!readBack) {
-    // Last resort: verify the encrypted string directly (we just created it)
-    const testDecrypt = await decryptWithKey(pinKey, encrypted);
-    if (testDecrypt !== hex) throw new Error('Encryption verification failed');
-  } else {
-    const testDecrypt = await decryptWithKey(pinKey, readBack);
-    if (testDecrypt !== hex) throw new Error('Encryption verification failed: decryption mismatch');
-  }
-
-  await SecureStore.setItemAsync(VAULT_MODE_KEY, 'encrypted');
-
-  // Safe to delete raw key — encrypted data verified
-  await SecureStore.deleteItemAsync(VAULT_RAW_KEY);
-  cachedKeyHex = hex; // Keep in memory for session use
-}
-
-/**
- * Decrypt vault and switch back to raw storage (when PIN is removed).
- * Requires the PIN-derived key to decrypt first.
- */
-export async function vaultDecryptToRaw(pinKey: CryptoKey): Promise<void> {
-  const encrypted = await SecureStore.getItemAsync(VAULT_ENCRYPTED_KEY);
-  if (!encrypted) return;
-
-  const hex = await decryptWithKey(pinKey, encrypted);
-  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
-    throw new Error('Decrypted key has invalid format');
-  }
-
-  await SecureStore.setItemAsync(VAULT_RAW_KEY, hex);
-
-  // Verify raw key was written before deleting encrypted
-  const readBack = await SecureStore.getItemAsync(VAULT_RAW_KEY);
-  if (readBack !== hex) throw new Error('Raw key verification failed');
-
-  await SecureStore.setItemAsync(VAULT_MODE_KEY, 'raw');
-  await SecureStore.deleteItemAsync(VAULT_ENCRYPTED_KEY);
 }
 
 /**

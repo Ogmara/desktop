@@ -484,10 +484,14 @@ export const WalletView: Component = () => {
           </Show>
           <Show when={showDisconnectConfirm()}>
             <div class="wallet-disconnect-confirm">
-              <p class="wallet-disconnect-warning">{t('wallet_disconnect_confirm') || 'This will permanently delete your wallet. Make sure you have backed up your private key!'}</p>
+              {/* Wording matters here: this removes THIS account and hands
+                  over to another held wallet, it no longer wipes the device.
+                  Saying "delete your wallet" would misdescribe what the button
+                  does for a user holding several. */}
+              <p class="wallet-disconnect-warning">{t('wallet_disconnect_confirm')}</p>
               <div class="wallet-disconnect-actions">
                 <button class="wallet-btn danger" onClick={handleDisconnect}>
-                  {t('wallet_disconnect_yes') || 'Yes, Delete Wallet'}
+                  {t('wallet_disconnect_yes')}
                 </button>
                 <button class="wallet-btn" onClick={() => setShowDisconnectConfirm(false)}>
                   {t('cancel')}

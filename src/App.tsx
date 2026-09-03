@@ -46,6 +46,8 @@ import { NewsView } from './pages/NewsView';
 import { BookmarksView } from './pages/BookmarksView';
 import { SettingsView } from './pages/SettingsView';
 import { WalletView } from './pages/WalletView';
+import { AccountsView } from './pages/AccountsView';
+import { AddAccountView } from './pages/AddAccountView';
 import { TokenPortfolioView } from './pages/TokenPortfolioView';
 import { ComposeView } from './pages/ComposeView';
 import { DmListView } from './pages/DmListView';
@@ -325,7 +327,7 @@ export const App: Component = () => {
               {/* Global mobile back button — Modern style on narrow viewport
                   for views that don't have their own header/back button. */}
               <Show when={isModernStyle() && isMobileViewport() && !mobileListOpen()
-                && ['news', 'bookmarks', 'search', 'settings', 'wallet', 'token-portfolio', 'notifications', 'compose', 'user', 'follow-list'].includes(route().view)}>
+                && ['news', 'bookmarks', 'search', 'settings', 'wallet', 'accounts', 'accounts-add', 'token-portfolio', 'notifications', 'compose', 'user', 'follow-list'].includes(route().view)}>
                 <div style="display:flex; align-items:center; padding:8px 12px; background:var(--color-bg-secondary); border-bottom:1px solid var(--color-border)">
                   <button style="width:38px; height:38px; border-radius:50%; color:var(--color-text-secondary); display:flex; align-items:center; justify-content:center; cursor:pointer"
                     onClick={() => goBack('/chat')}>
@@ -352,6 +354,12 @@ export const App: Component = () => {
                 </Match>
                 <Match when={route().view === 'settings'}>
                   <SettingsView />
+                </Match>
+                <Match when={route().view === 'accounts'}>
+                  <AccountsView />
+                </Match>
+                <Match when={route().view === 'accounts-add'}>
+                  <AddAccountView />
                 </Match>
                 <Match when={route().view === 'wallet'}>
                   <WalletView />
