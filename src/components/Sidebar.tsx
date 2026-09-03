@@ -92,6 +92,7 @@ import { confirmDialog, promptDialog } from './Dialogs';
 import { hideConversation, isConversationHidden } from '../lib/dm-hide';
 import { keepMenuInViewport } from '../lib/menu-position';
 import { vaultExportKey } from '../lib/vault';
+import { scopedGet, scopedSet } from '../lib/walletScope';
 
 // Re-exported for existing importers (ChannelJoinView, ChannelCreateView) that
 // historically imported these from the Sidebar; the implementation now lives in
@@ -817,7 +818,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     if (authStatus() !== 'ready') return;
     try {
       const client = getClient();
-      const lastSeenNotif = parseInt(localStorage.getItem('ogmara.lastSeenNotifTs') || '0', 10);
+      const lastSeenNotif = parseInt(scopedGet('ogmara.lastSeenNotifTs') || '0', 10);
       const [unread, dmUnread, notifResp] = await Promise.all([
         // audit 2026-06-07 B4.1: fallback must include `mentions` so the union keeps the field
         client.getUnreadCounts().catch(() => ({ unread: {}, mentions: {} })),
@@ -987,7 +988,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
                 <div style="height:1px; background:var(--color-border); margin:4px 0" />
                 <button class="modern-menu-item" onClick={() => modernNavTo('/channel/create')}>{t('menu_new_channel')}</button>
                 <div style="height:1px; background:var(--color-border); margin:4px 0" />
-                <button class="modern-menu-item" onClick={() => { localStorage.setItem('ogmara.lastSeenNotifTs', Date.now().toString()); modernNavTo('/notifications'); }}>{t('menu_notifications')}</button>
+                <button class="modern-menu-item" onClick={() => { scopedSet('ogmara.lastSeenNotifTs', Date.now().toString()); modernNavTo('/notifications'); }}>{t('menu_notifications')}</button>
               </Show>
               <button class="modern-menu-item" onClick={() => modernNavTo('/search')}>{t('menu_search')}</button>
               <button class="modern-menu-item" onClick={() => modernNavTo('/bookmarks')}>{t('menu_bookmarks')}</button>
@@ -1016,7 +1017,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         </div>
         <Show when={authStatus() === 'ready'}>
           <button style="position:relative; width:38px; height:38px; border-radius:50%; color:var(--color-text-secondary); display:flex; align-items:center; justify-content:center; flex-shrink:0"
-            onClick={() => { localStorage.setItem('ogmara.lastSeenNotifTs', Date.now().toString()); setNotifUnread(0); go('/notifications'); }}>
+            onClick={() => { scopedSet('ogmara.lastSeenNotifTs', Date.now().toString()); setNotifUnread(0); go('/notifications'); }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
             <Show when={notifUnread() > 0}>
               <span style="position:absolute; top:4px; right:4px; min-width:16px; height:16px; border-radius:9999px; background:var(--color-accent-primary); color:var(--color-text-inverse); font-size:10px; font-weight:700; display:flex; align-items:center; justify-content:center; padding:0 4px">{notifUnread()}</span>
@@ -1579,7 +1580,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
             class={`sidebar-nav-item ${route().view === 'notifications' ? 'active' : ''}`}
             onClick={() => {
               // Mark notifications as seen (store current timestamp)
-              localStorage.setItem('ogmara.lastSeenNotifTs', Date.now().toString());
+              scopedSet('ogmara.lastSeenNotifTs', Date.now().toString());
               setNotifUnread(0);
               go('/notifications');
             }}

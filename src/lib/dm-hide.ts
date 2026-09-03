@@ -14,6 +14,7 @@
  */
 
 import { createSignal } from 'solid-js';
+import { scopedGet, scopedSet, registerWalletSwitchReset } from './walletScope';
 
 /** peer wallet address → ms epoch when it was hidden. */
 export type HiddenDms = Record<string, number>;
@@ -48,7 +49,7 @@ function normalize(raw: unknown): HiddenDms {
 
 function load(): HiddenDms {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = scopedGet(STORAGE_KEY);
     if (!raw) return emptyHidden();
     return normalize(JSON.parse(raw));
   } catch {
@@ -76,7 +77,7 @@ function commit(next: HiddenDms, fromRemote = false): void {
       .slice(0, MAX_HIDDEN_DMS),
   );
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(capped));
+    scopedSet(STORAGE_KEY, JSON.stringify(capped));
   } catch { /* quota — keep the in-memory copy regardless */ }
   setHiddenSignal(capped);
   if (!fromRemote) scheduleUpload();
@@ -129,3 +130,13 @@ function scheduleUpload(): void {
     } catch { /* best-effort; local copy already persisted */ }
   }, 2500);
 }
+
+/** Hidden-DM lists are per account: one account's hidden conversations must
+ *  never be applied to another's DM list. */
+registerWalletSwitchReset(() => {
+  if (uploadTimer) {
+    clearTimeout(uploadTimer);
+    uploadTimer = null;
+  }
+  setHiddenSignal(load());
+});

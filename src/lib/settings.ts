@@ -12,6 +12,7 @@
 
 import { createSignal } from 'solid-js';
 import { validateCurrency } from './sanitize';
+import { scopedKey } from './walletScope';
 
 export interface Settings {
   lang: string;
@@ -132,9 +133,56 @@ const defaults: Settings = {
   kleverNetwork: 'mainnet',
 };
 
+/**
+ * Settings that belong to the ACCOUNT, not the install.
+ *
+ * These are namespaced per account (see `walletScope.ts`). Everything else —
+ * language, theme, node URL, font size, currency, window/sidebar layout, push
+ * — belongs to the install and stays global, so switching accounts does not
+ * reset the user's app preferences.
+ *
+ * `walletAddress` and `walletSource` are deliberately NOT here. They are the
+ * pointer that BOOTSTRAPS the scope: namespacing them to the account they
+ * identify is self-referential and unbootstrappable. This looks like an
+ * omission, so it is stated explicitly.
+ */
+const PER_ACCOUNT: ReadonlySet<keyof Settings> = new Set([
+  'pinnedChannels',
+  'mutedChannels',
+  'mutedUsers',
+  'lastChannel',
+  'newsLastReadGlobal',
+  'newsLastReadFollowing',
+  'newsLastViewedAt',
+  // Registration and E2E binding state are per account: `deviceRegistered`
+  // records a wallet-to-device mapping, and a shared `deviceId` would publish
+  // ONE identifier for several accounts, publicly linking them (protocol §2.4).
+  'deviceRegistered',
+  'encKeyBound',
+  'deviceId',
+] as (keyof Settings)[]);
+
+/** Whether a key is account-scoped rather than install-scoped. */
+export function isPerAccountSetting(key: keyof Settings): boolean {
+  return PER_ACCOUNT.has(key);
+}
+
+/**
+ * Resolve a key to its actual storage location.
+ *
+ * Per-account keys resolve to `<base>::<address>`; with no account active they
+ * fall back to the bare key, which after the one-time adoption migration holds
+ * nothing.
+ */
+function storageKey(key: keyof Settings): string {
+  const base = `ogmara.${key}`;
+  if (!PER_ACCOUNT.has(key)) return base;
+  return scopedKey(base) ?? base;
+}
+
 /** Load a setting from localStorage with fallback to default. */
 export function getSetting<K extends keyof Settings>(key: K): Settings[K] {
-  const stored = localStorage.getItem(`ogmara.${key}`);
+  const stored = localStorage.getItem(storageKey(key));
   if (stored === null) return defaults[key];
   try {
     return JSON.parse(stored);
@@ -145,7 +193,7 @@ export function getSetting<K extends keyof Settings>(key: K): Settings[K] {
 
 /** Save a setting to localStorage. */
 export function setSetting<K extends keyof Settings>(key: K, value: Settings[K]): void {
-  localStorage.setItem(`ogmara.${key}`, JSON.stringify(value));
+  localStorage.setItem(storageKey(key), JSON.stringify(value));
 }
 
 // --- Reactive accessors ---

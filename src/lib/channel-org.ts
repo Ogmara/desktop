@@ -14,6 +14,7 @@
  */
 
 import { createSignal } from 'solid-js';
+import { scopedGet, scopedSet, registerWalletSwitchReset } from './walletScope';
 
 /** A user-created sidebar group. Render order = position in `ChannelOrg.groups`. */
 export interface ChannelGroup {
@@ -127,7 +128,7 @@ function normalizeOrg(raw: unknown): ChannelOrg {
 
 function load(): ChannelOrg {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = scopedGet(STORAGE_KEY);
     if (!raw) return emptyOrg();
     return normalizeOrg(JSON.parse(raw));
   } catch {
@@ -158,7 +159,7 @@ function commitOrg(next: ChannelOrg, fromRemote = false): void {
     placements: next.placements,
   };
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(org));
+    scopedSet(STORAGE_KEY, JSON.stringify(org));
   } catch { /* quota — keep the in-memory copy regardless */ }
   setOrgSignal(org);
   if (!fromRemote) scheduleUpload();
@@ -307,7 +308,7 @@ function scheduleUpload(): void {
 
 function loadCollapsed(): Record<string, boolean> {
   try {
-    const raw = localStorage.getItem(COLLAPSE_KEY);
+    const raw = scopedGet(COLLAPSE_KEY);
     if (!raw) return {};
     const v = JSON.parse(raw);
     return v && typeof v === 'object' ? v : {};
@@ -326,7 +327,7 @@ export function isGroupCollapsed(id: string): boolean {
 /** Toggle a group's collapsed state (local only — never synced). */
 export function toggleGroupCollapsed(id: string): void {
   const next = { ...collapsedSignal(), [id]: !isGroupCollapsed(id) };
-  try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  scopedSet(COLLAPSE_KEY, JSON.stringify(next));
   setCollapsedSignal(next);
 }
 
@@ -399,3 +400,15 @@ export function resolveSidebarLayout(channels: OrgChannel[], org: ChannelOrg): S
     ungrouped: [...ungroupedPinned.map((x) => x.ch), ...ungroupedAuto],
   };
 }
+
+/** Reload BOTH stores for the newly-active account and drop any armed upload.
+ *  Missing the collapsed-groups store would leave one account's collapse state
+ *  applied to another's sidebar. */
+registerWalletSwitchReset(() => {
+  if (uploadTimer) {
+    clearTimeout(uploadTimer);
+    uploadTimer = null;
+  }
+  setOrgSignal(load());
+  setCollapsedSignal(loadCollapsed());
+});

@@ -16,6 +16,7 @@
 
 import { createSignal } from 'solid-js';
 import { normalizeHashtag } from '@ogmara/sdk';
+import { scopedGet, scopedSet, registerWalletSwitchReset } from './walletScope';
 
 /** A user-named subgroup of followed hashtags. Render order = array order. */
 export interface TopicGroup {
@@ -103,7 +104,7 @@ function normalize(raw: unknown): TopicGroups {
 
 function load(): TopicGroups {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = scopedGet(STORAGE_KEY);
     if (!raw) return emptyTopicGroups();
     return normalize(JSON.parse(raw));
   } catch {
@@ -139,7 +140,7 @@ function commit(next: TopicGroups, fromRemote = false): void {
     groups: next.groups.slice(0, MAX_GROUPS),
   };
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(tg));
+    scopedSet(STORAGE_KEY, JSON.stringify(tg));
   } catch {
     /* quota — keep the in-memory copy regardless */
   }
@@ -282,3 +283,24 @@ function scheduleUpload(): void {
     }
   }, 2500);
 }
+
+/**
+ * Reload from the newly-active account's namespace, and cancel any armed
+ * upload.
+ *
+ * The signal is created at MODULE LOAD, before an account is known, so without
+ * this it holds the empty value forever — and after a switch it would still
+ * hold the previous account's groups, then persist them under the new account
+ * on the first edit and sync them to the node.
+ *
+ * The timer must be CANCELLED, not merely left: when it fires it resolves
+ * `vaultExportKey()`, so an upload armed for the old account would seal that
+ * account's groups under whichever key is active by then.
+ */
+registerWalletSwitchReset(() => {
+  if (uploadTimer) {
+    clearTimeout(uploadTimer);
+    uploadTimer = null;
+  }
+  setSignal(load());
+});

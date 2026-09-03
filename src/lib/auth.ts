@@ -18,6 +18,12 @@ import {
 import { getClient } from './api';
 import { getSetting, setSetting } from './settings';
 import { ensureDeviceEncBinding, wipeDeviceEncKey } from './deviceEnc';
+import {
+  setWalletScope,
+  wipeWalletScope,
+  runWalletScopeMigrationOnce,
+  runWalletSwitchResets,
+} from './walletScope';
 
 export type AuthStatus = 'none' | 'loading' | 'locked' | 'ready';
 export type WalletSource = 'builtin' | null;
@@ -46,6 +52,12 @@ export function getSigner(): WalletSigner | null {
 export async function initAuth(): Promise<void> {
   setAuthStatus('loading');
   try {
+    // BEFORE anything reads or creates a wallet. The adoption migration claims
+    // the pre-namespacing global keys for whoever last owned them, and must run
+    // exactly once while no account is scoped — running it later, with a
+    // different account active, would irreversibly adopt the previous
+    // account's channels, topic groups and hidden DMs into the new namespace.
+    runWalletScopeMigrationOnce();
     const address = await vaultInit();
     if (address) {
       const signer = vaultGetSigner();
@@ -56,6 +68,9 @@ export async function initAuth(): Promise<void> {
         const savedSource = getSetting('walletSource');
         const savedAddress = getSetting('walletAddress');
 
+        // Point per-account storage at this wallet BEFORE any per-account
+        // setting is read below.
+        setWalletScope(address);
         // L2 address is always the device key (signer) address
         setL2Address(address);
 
@@ -95,6 +110,9 @@ export async function connectWithKey(hexKey: string): Promise<string> {
   const signer = vaultGetSigner()!;
   getClient().withSigner(signer);
   setWalletAddress(address);
+  // Before the per-account `setSetting` calls below, or they land in the
+  // previous account's namespace (or the bare key with none active).
+  setWalletScope(address);
   setL2Address(address);
   setWalletSource('builtin');
   setSetting('walletSource', 'builtin');
@@ -116,6 +134,9 @@ export async function generateWallet(): Promise<string> {
   const signer = vaultGetSigner()!;
   getClient().withSigner(signer);
   setWalletAddress(address);
+  // Before the per-account `setSetting` calls below, or they land in the
+  // previous account's namespace (or the bare key with none active).
+  setWalletScope(address);
   setL2Address(address);
   setWalletSource('builtin');
   setWalletJustCreated(true);
@@ -132,16 +153,33 @@ export async function generateWallet(): Promise<string> {
 
 /** Disconnect wallet and wipe vault. */
 export async function disconnectWallet(): Promise<void> {
+  // Capture before anything clears it — the wipe needs to know which namespace
+  // to remove, and `walletAddress()` is nulled part-way through.
+  const leaving = walletAddress();
+  // Cancel armed settings-sync uploads before tearing anything down: a timer
+  // firing mid-teardown resolves `vaultExportKey()` and would seal this
+  // account's data under whatever key is current by then, or upload it after
+  // the vault is gone.
+  runWalletSwitchResets();
   await vaultWipe();
   await wipeDeviceEncKey();
   setSetting('walletSource', '');
   setSetting('walletAddress', '');
   setSetting('deviceRegistered', '');
+  // Remove this account's namespaced data. Namespacing alone would keep it
+  // addressable on disk forever; wiping alone would lose it on every switch.
+  // Doing both means an account's data survives a SWITCH but not a deliberate
+  // disconnect.
+  if (leaving) wipeWalletScope(leaving);
   setWalletAddress(null);
   setL2Address(null);
   setWalletSource(null);
   setAuthStatus('none');
   setIsRegistered(false);
+  // Cleared LAST: this fires the store resets, which reload each signal from
+  // the (now empty) namespace, so the UI drops the previous account's lists in
+  // the same tick rather than at the next launch.
+  setWalletScope(null);
   // Drop the cached own avatar so a different account doesn't inherit it.
   import('./ownAvatar').then(({ clearOwnAvatar }) => clearOwnAvatar()).catch(() => {});
   // Clear E2E session state so a different account can't read this one's keys:

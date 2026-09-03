@@ -12,12 +12,13 @@
 
 import { createSignal } from 'solid-js';
 import { DEFAULT_CHANNEL_SLUG } from './channel-org';
+import { scopedGet, scopedSet, registerWalletSwitchReset } from './walletScope';
 
 const STORAGE_KEY = 'ogmara_joined_channels';
 
 function loadJoinedFromStorage(): Set<number> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = scopedGet(STORAGE_KEY);
     if (!raw) return new Set();
     const arr = JSON.parse(raw);
     if (Array.isArray(arr)) return new Set(arr);
@@ -27,7 +28,7 @@ function loadJoinedFromStorage(): Set<number> {
 
 /** Whether the joined-set has ever been initialized on this device. */
 export function storageInitialized(): boolean {
-  return localStorage.getItem(STORAGE_KEY) !== null;
+  return scopedGet(STORAGE_KEY) !== null;
 }
 
 const [joinedSignal, setJoinedSignal] = createSignal<Set<number>>(loadJoinedFromStorage());
@@ -36,7 +37,7 @@ const [joinedSignal, setJoinedSignal] = createSignal<Set<number>>(loadJoinedFrom
 export { joinedSignal };
 
 function persistJoined(ids: Set<number>): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify([...ids]));
+  scopedSet(STORAGE_KEY, JSON.stringify([...ids]));
   setJoinedSignal(new Set(ids));
 }
 
@@ -105,3 +106,9 @@ export function syncJoinedWithApi(
 
   if (changed) persistJoined(current);
 }
+
+/** The joined-channel set is per account — it drives which channels the
+ *  sidebar shows and which the client subscribes to. */
+registerWalletSwitchReset(() => {
+  setJoinedSignal(loadJoinedFromStorage());
+});

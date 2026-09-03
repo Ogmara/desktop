@@ -120,6 +120,12 @@ export async function ensureDeviceEncBinding(): Promise<void> {
   if (!wallet) return;
 
   const kp = await getOrCreateEncKeypair();
+  // The keypair is resolved from the CURRENT account, which may have changed
+  // while that await was outstanding — this runs un-awaited on connect. Going
+  // on would bind the NEW account's enc_pub to the OLD account's wallet, and
+  // the revoke below would retire the old account's real key, making every
+  // envelope already wrapped to it permanently undecryptable.
+  if (vaultGetAddress() !== wallet) return;
   const marker = `v2:${wallet}:${kp.publicKeyHex}`;
   const deviceId = getOrCreateDeviceId();
 
@@ -155,6 +161,9 @@ export async function ensureDeviceEncBinding(): Promise<void> {
   e2elog('published binding', { deviceId, encPub: kp.publicKeyHex });
   // Retire any stale enc_pub for this device AFTER the new key is registered, so
   // there is never a window with zero active keys for the device.
+  // Re-checked before the DESTRUCTIVE step: revocation is not reversible and
+  // the publish above may itself have taken a while.
+  if (vaultGetAddress() !== wallet) return;
   await revokeStaleEncKeys(wallet, deviceId, kp.publicKeyHex, sign);
   setSetting('encKeyBound', marker);
 }

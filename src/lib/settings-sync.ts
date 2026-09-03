@@ -6,6 +6,7 @@
 
 import { getSetting, setSetting } from './settings';
 import { getClient } from './api';
+import { walletAddress } from './auth';
 import { DESIGN_STYLES, COLOR_SCHEMES, type DesignStyle, type ColorScheme } from './theme';
 import { getChannelOrg, applyRemoteOrg } from './channel-org';
 import { addJoinedChannels } from './joined-channels';
@@ -204,8 +205,12 @@ export async function uploadSettings(hexKey: string): Promise<void> {
 /** Download and apply settings from L2 node. */
 export async function downloadSettings(hexKey: string): Promise<boolean> {
   const client = getClient();
+  // Which account this pull belongs to. Applying it after a switch would write
+  // one account's pinned/muted channels and news positions into another's
+  // namespace.
+  const forWallet = walletAddress();
   const resp = await client.getSettings();
-  if (!resp) return false;
+  if (!resp || walletAddress() !== forWallet) return false;
   await decryptAndApplySettings(
     hexKey,
     new Uint8Array(resp.encrypted_settings),
@@ -223,7 +228,14 @@ export async function downloadSettings(hexKey: string): Promise<boolean> {
  */
 export async function downloadChannelOrg(hexKey: string): Promise<boolean> {
   try {
+    // The fetch and the decrypt below are both awaits, and an account switch
+    // can land in that window — applying afterwards would write THIS account's
+    // channel organisation and hidden DMs into the OTHER account's namespace,
+    // then upload them under that account's key, linking the two accounts'
+    // interest graphs on the server.
+    const forWallet = walletAddress();
     const resp = await getClient().getSettings();
+    if (walletAddress() !== forWallet) return false;
     if (!resp) {
       // Fresh node with nothing for this wallet. If THIS device holds real
       // synced state, seed the node once — it then gossips it to the mesh so
@@ -233,6 +245,8 @@ export async function downloadChannelOrg(hexKey: string): Promise<boolean> {
       return false;
     }
     const key = await deriveKey(hexKey);
+    // Re-checked after the decrypt, immediately before the first write.
+    if (walletAddress() !== forWallet) return false;
     const plaintext = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: new Uint8Array(resp.nonce) },
       key,

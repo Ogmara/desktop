@@ -5,6 +5,60 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.61.0] - 2026-09-03
+
+Multi-account Phase 2 of 6 — per-account preference namespacing. Still one
+account, but its data is now stored where a second account cannot see it.
+
+### Fixed
+
+- **Disconnecting a wallet left the previous account's data on disk.** Topic
+  groups, channel organisation, collapsed groups, joined channels, hidden DMs,
+  the cached own-avatar, pinned/muted channels and users, news read positions
+  and the notification read marker all lived under GLOBAL localStorage keys.
+  Connecting a different wallet showed the previous account's lists. Reported
+  against mobile, fixed there in 0.47.0 and on web in 0.75.0; desktop had it
+  from the same pattern.
+
+  Per-account data is namespaced `<key>::<address>` and wiped on disconnect.
+  Namespacing alone keeps it addressable forever; wiping alone loses it on
+  every switch — doing both means an account's data survives a SWITCH (which
+  Phase 5 introduces) but not a deliberate disconnect. Install-level
+  preferences (language, theme, node URL, font size, currency, layout, push)
+  stay global, so switching accounts will not reset the app.
+
+  `walletAddress` and `walletSource` deliberately stay global: they are the
+  pointer that bootstraps the scope, so namespacing them to the account they
+  identify is unbootstrappable. Stated in the code, because it reads as an
+  omission.
+
+  The one-time adoption migration claims the pre-namespacing keys for the
+  wallet that owned them and runs before any wallet is loaded. Doing it later,
+  with a different account active, would irreversibly adopt the previous
+  account's channels and topic groups into the new namespace — the same bug,
+  made worse. With no recorded owner the data is discarded rather than handed
+  to whichever account appears next.
+
+### Security
+
+- **Settings sync could write one account's data into another's namespace.**
+  `downloadChannelOrg` and `downloadSettings` had no account guard despite
+  several awaits between fetching the blob and applying it. A switch landing in
+  that window wrote the first account's channel organisation and hidden DMs
+  into the second's storage, then uploaded them under that account's key —
+  linking the two accounts' interest graphs on the server. Both now capture the
+  account up front and re-check after every await, before any write. (Found on
+  mobile in a second audit round; present here and on web too.)
+- **The enc-key binding could revoke the wrong account's key.**
+  `ensureDeviceEncBinding` runs un-awaited on connect and resolves its keypair
+  from the current account. A switch mid-flight bound the new account's
+  `enc_pub` to the old account's wallet, and the follow-up revoke retired the
+  old account's real key — making every envelope already wrapped to it
+  permanently undecryptable. Guarded after the keypair resolves and again
+  immediately before the irreversible revoke.
+- Armed settings-sync upload timers are cancelled before teardown, rather than
+  being left to fire against whatever key is current by then.
+
 ## [1.60.0] - 2026-09-03
 
 Multi-account Phase 1 of 6. **No behaviour change** — nothing imports this yet.

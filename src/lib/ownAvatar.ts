@@ -15,6 +15,7 @@
 
 import { createSignal } from 'solid-js';
 import { getClient } from './api';
+import { scopedGet, scopedSet, scopedRemove, registerWalletSwitchReset } from './walletScope';
 
 const STORAGE_KEY = 'ogmara.ownAvatar';
 /** Don't cache images larger than this (localStorage is ~5 MB). Avatars are
@@ -28,7 +29,7 @@ interface OwnAvatar {
 
 function load(): OwnAvatar | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = scopedGet(STORAGE_KEY);
     return raw ? (JSON.parse(raw) as OwnAvatar) : null;
   } catch {
     return null;
@@ -42,7 +43,7 @@ export { ownAvatar };
 export function setOwnAvatar(cid: string, dataUrl: string): void {
   const v: OwnAvatar = { cid, dataUrl };
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(v));
+    scopedSet(STORAGE_KEY, JSON.stringify(v));
   } catch {
     /* quota — keep the in-memory copy at least */
   }
@@ -52,7 +53,7 @@ export function setOwnAvatar(cid: string, dataUrl: string): void {
 /** Drop the cached avatar (e.g. on wallet disconnect). */
 export function clearOwnAvatar(): void {
   try {
-    localStorage.removeItem(STORAGE_KEY);
+    scopedRemove(STORAGE_KEY);
   } catch {
     /* ignore */
   }
@@ -100,3 +101,9 @@ export async function ensureOwnAvatarCached(cid: string | undefined | null): Pro
     /* node may not have it — keep whatever we already cached */
   }
 }
+
+/** The cached own-avatar is per account; showing the previous account's
+ *  picture after a switch is the most visible form of this leak. */
+registerWalletSwitchReset(() => {
+  setOwnAvatarSignal(load());
+});
