@@ -5,6 +5,49 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.64.0] - 2026-09-03
+
+Multi-account Phase 3b of 6 — the per-account key path. **No behaviour
+change**: nothing calls this yet.
+
+### Added
+
+- `src/lib/vaultAccess.ts` — reading and writing one account's key, in
+  whichever mode the vault is in. It is a separate module so the rule that
+  matters most is reviewable on its own: **`readKeyFor` inverts every write
+  path**, in every partially-completed state a crash can leave behind. An
+  encrypt path without a matching decrypt path does not lock data away, it
+  destroys it — which is why mobile deleted its PIN support rather than ship
+  it.
+
+  The read order is four branches, each the inverse of a specific write: the
+  plaintext slot (no-PIN writes, and a PIN encrypt that crashed before
+  destroying the plaintext); the ciphertext slot under the DEK; the legacy raw
+  anchor (a half-finished migration, or a downgrade to an older build); and the
+  legacy encrypted anchor decrypted DIRECTLY under the PIN key rather than the
+  DEK, since it predates it. **That last branch is never removed** — it is what
+  keeps the original account recoverable even if the DEK and both indexes are
+  destroyed.
+
+  Two guarantees are enforced rather than assumed:
+  - A locked slot reports `needs-pin`, **never** `absent`. Collapsing them
+    would make a locked account look removed to the account list, and a caller
+    could then overwrite it.
+  - A key that decrypts but whose re-derived address does not match the one
+    asked for is REJECTED. Returning it would hand one account another's key,
+    and `settings-sync` would then seal one account's data under the other's
+    key — unrecoverable on every device.
+
+  `writeKeyFor` verifies by read-back and address re-derivation before
+  returning, so a caller may safely destroy a previous copy on success; a store
+  that silently dropped the write (a poisoned file store fails every save) is
+  caught there rather than discovered when the key is next needed.
+
+- 15 tests covering the round trips, the locked/absent distinction, the
+  address-mismatch guard, a silently-dropped write, and three crash states —
+  including that a pre-migration PIN'd vault still opens through the legacy
+  anchor with no DEK, no per-account slot and no index present.
+
 ## [1.63.0] - 2026-09-03
 
 Multi-account Phase 3a of 6 — the PIN-at-rest key layer. **No behaviour
