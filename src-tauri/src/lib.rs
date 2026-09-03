@@ -145,22 +145,110 @@ impl SecureFileStore {
         self.save()
     }
 
-    /// Atomically remove `key` UNLESS it is the last remaining wallet-key slot
-    /// (i.e. `key` is present and `other` is absent). In that case it returns
-    /// `NeedsConfirmation` WITHOUT removing — the caller must get explicit user
-    /// confirmation and then call `delete`. The last-key check and the removal
-    /// happen under a single lock so two concurrent deletes of the two slots
-    /// can't both slip past the guard (audit 2026-06-07 W-1).
-    fn delete_guarded(&self, key: &str, other: &str) -> Result<DeleteOutcome, String> {
+    /// Atomically remove `keys` UNLESS doing so would destroy the LAST wallet
+    /// key material on this device. In that case it returns `NeedsConfirmation`
+    /// WITHOUT removing anything — the caller must get explicit user
+    /// confirmation and then call `delete_many`.
+    ///
+    /// The check and the removal happen under a single lock so two concurrent
+    /// deletes can't both slip past the guard (audit 2026-06-07 W-1).
+    ///
+    /// Generalised for multi-account: the original guard compared `key` against
+    /// exactly two constants, so a per-account slot
+    /// (`ogmara.vault.private_key.<addr>`) matched NEITHER and deleting the
+    /// last one bypassed the prompt entirely. The rule is now structural —
+    /// "would any wallet-key slot remain?" — so it holds however many accounts
+    /// exist and whatever they are named.
+    ///
+    /// Legitimate migrations and PIN mode-switches always write the new slot
+    /// BEFORE deleting the old one, so at least one slot always remains and
+    /// this never prompts. It fires only on a genuine last-key removal.
+    fn delete_guarded_many(&self, keys: &[String]) -> Result<DeleteOutcome, String> {
         let mut data = self.data.lock().map_err(|e| format!("lock error: {e}"))?;
-        if data.contains_key(key) && !data.contains_key(other) {
-            return Ok(DeleteOutcome::NeedsConfirmation);
+
+        let removing_wallet_key = keys.iter().any(|k| is_wallet_key_slot(k) && data.contains_key(k));
+        if removing_wallet_key {
+            let remaining = data
+                .keys()
+                .filter(|k| is_wallet_key_slot(k))
+                .filter(|k| !keys.iter().any(|d| d == *k))
+                .count();
+            if remaining == 0 {
+                return Ok(DeleteOutcome::NeedsConfirmation);
+            }
         }
-        data.remove(key);
+
+        // The DEK is not a key COPY, but destroying it makes every encrypted
+        // slot permanently unreadable — the same outcome as losing the keys, so
+        // it gets the same prompt. The `.mirror` copy is deliberately NOT
+        // guarded: it exists to be redundant.
+        let removing_dek = keys.iter().any(|k| k == VAULT_DEK_KEY && data.contains_key(k));
+        if removing_dek {
+            let encrypted_slots_remain = data
+                .keys()
+                .any(|k| k.starts_with(VAULT_ENCRYPTED_KEY) && !keys.iter().any(|d| d == k));
+            if encrypted_slots_remain {
+                return Ok(DeleteOutcome::NeedsConfirmation);
+            }
+        }
+
+        for k in keys {
+            data.remove(k);
+        }
         drop(data); // release before save() re-locks
         self.save()?;
         Ok(DeleteOutcome::Deleted)
     }
+
+    /// Addresses that have a per-account wallet-key slot.
+    ///
+    /// Deliberately narrow: it returns only the `<addr>` suffixes of the two
+    /// wallet-key slot prefixes — no key names, no values, and nothing outside
+    /// the vault namespace. The webview already reads the private keys
+    /// themselves, so this exposes nothing new, and it gives the account index
+    /// a source whose presence PROVES a slot exists rather than merely
+    /// recording that one did.
+    fn list_vault_accounts(&self) -> Result<Vec<String>, String> {
+        let data = self.data.lock().map_err(|e| format!("lock error: {e}"))?;
+        let mut out: Vec<String> = data
+            .keys()
+            .filter_map(|k| {
+                for prefix in [VAULT_RAW_KEY, VAULT_ENCRYPTED_KEY] {
+                    if let Some(rest) = k.strip_prefix(prefix) {
+                        if let Some(addr) = rest.strip_prefix('.') {
+                            if !addr.is_empty() {
+                                return Some(addr.to_string());
+                            }
+                        }
+                    }
+                }
+                None
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        Ok(out)
+    }
+}
+
+/// Whether `key` names storage that holds wallet key material.
+///
+/// Matches the legacy single-wallet anchors exactly AND the per-account slots
+/// derived from them (`<prefix>.<address>`).
+fn is_wallet_key_slot(key: &str) -> bool {
+    for prefix in [VAULT_RAW_KEY, VAULT_ENCRYPTED_KEY] {
+        if key == prefix {
+            return true;
+        }
+        if let Some(rest) = key.strip_prefix(prefix) {
+            // Only a `.`-suffixed per-account slot, so a future
+            // `ogmara.vault.private_key_backup` is not silently treated as one.
+            if rest.starts_with('.') && rest.len() > 1 {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Outcome of [`SecureFileStore::delete_guarded`].
@@ -230,6 +318,9 @@ fn secure_store_set(app: tauri::AppHandle, key: String, value: String) -> Result
 /// The two vault key slots that hold irreplaceable wallet key material.
 const VAULT_RAW_KEY: &str = "ogmara.vault.private_key";
 const VAULT_ENCRYPTED_KEY: &str = "ogmara.vault.encrypted_key";
+/// PIN-wrapped data-encryption key. Every per-account ciphertext slot is
+/// encrypted under it, so losing it bricks all of them at once.
+const VAULT_DEK_KEY: &str = "ogmara.vault.dek";
 
 /// Tauri command: delete a value from the secure file store.
 ///
@@ -243,43 +334,82 @@ const VAULT_ENCRYPTED_KEY: &str = "ogmara.vault.encrypted_key";
 #[tauri::command]
 async fn secure_store_delete(app: tauri::AppHandle, key: String) -> Result<(), String> {
     validate_key(&key)?;
-    let store = app.state::<SecureFileStore>();
+    delete_keys_guarded(app, vec![key]).await
+}
 
-    if key == VAULT_RAW_KEY || key == VAULT_ENCRYPTED_KEY {
-        let other = if key == VAULT_RAW_KEY { VAULT_ENCRYPTED_KEY } else { VAULT_RAW_KEY };
-        // Atomic check-and-delete: returns NeedsConfirmation (without removing)
-        // only when this is the sole remaining wallet key. Two concurrent
-        // deletes of the two slots therefore cannot both bypass the prompt.
-        match store.delete_guarded(&key, other)? {
-            DeleteOutcome::Deleted => return Ok(()),
-            DeleteOutcome::NeedsConfirmation => {
-                let app2 = app.clone();
-                let confirmed = tokio::task::spawn_blocking(move || {
-                    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-                    app2.dialog()
-                        .message(
-                            "This permanently removes your wallet key from this device. \
-                             Without an exported backup your wallet CANNOT be recovered. Continue?",
-                        )
-                        .title("Remove wallet key?")
-                        .kind(MessageDialogKind::Warning)
-                        .buttons(MessageDialogButtons::OkCancelCustom(
-                            "Remove".into(),
-                            "Cancel".into(),
-                        ))
-                        .blocking_show()
-                })
-                .await
-                .map_err(|e| format!("confirm dialog error: {e}"))?;
-                if !confirmed {
-                    return Err("wallet key deletion cancelled by user".into());
-                }
-                return store.delete(&key); // user confirmed removing this key
+/// Tauri command: delete several secure-store keys as ONE guarded operation.
+///
+/// Removing an account touches four keys, and a total wipe touches four per
+/// account. Routing them through `secure_store_delete` one at a time evaluates
+/// the last-key guard N times and can pop N native dialogs — which users learn
+/// to click through, defeating the guard. One call, one lock, one prompt.
+#[tauri::command]
+async fn secure_store_delete_many(app: tauri::AppHandle, keys: Vec<String>) -> Result<(), String> {
+    if keys.len() > 256 {
+        return Err("too many keys in one delete (max 256)".into());
+    }
+    for k in &keys {
+        validate_key(k)?;
+    }
+    delete_keys_guarded(app, keys).await
+}
+
+/// Shared implementation: guard, prompt once if this is the last wallet key,
+/// then delete.
+async fn delete_keys_guarded(app: tauri::AppHandle, keys: Vec<String>) -> Result<(), String> {
+    let store = app.state::<SecureFileStore>();
+    match store.delete_guarded_many(&keys)? {
+        DeleteOutcome::Deleted => Ok(()),
+        DeleteOutcome::NeedsConfirmation => {
+            let app2 = app.clone();
+            let confirmed = tokio::task::spawn_blocking(move || {
+                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+                app2.dialog()
+                    .message(
+                        "This permanently removes the last wallet key from this device. \
+                         Without an exported backup your wallet CANNOT be recovered. Continue?",
+                    )
+                    .title("Remove wallet key?")
+                    .kind(MessageDialogKind::Warning)
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Remove".into(),
+                        "Cancel".into(),
+                    ))
+                    .blocking_show()
+            })
+            .await
+            .map_err(|e| format!("confirm dialog error: {e}"))?;
+            if !confirmed {
+                return Err("wallet key deletion cancelled by user".into());
             }
+            // User confirmed: delete unguarded.
+            let store = app.state::<SecureFileStore>();
+            for k in &keys {
+                store.delete(k)?;
+            }
+            Ok(())
         }
     }
+}
 
-    store.delete(&key)
+/// Tauri command: list the addresses that have a wallet-key slot.
+#[tauri::command]
+fn secure_store_list_vault_accounts(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    app.state::<SecureFileStore>().list_vault_accounts()
+}
+
+/// Tauri command: report whether the store has gone read-only.
+///
+/// A poisoned store fails EVERY write, silently from the webview's point of
+/// view. With multiple accounts that means index writes vanish while the UI
+/// looks healthy — which is how an account gets lost. The app surfaces this as
+/// a persistent banner rather than letting it fail quietly.
+#[tauri::command]
+fn secure_store_health(app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(app
+        .state::<SecureFileStore>()
+        .poisoned
+        .load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// Tauri command: send a native OS notification.
@@ -694,6 +824,9 @@ pub fn run() {
             secure_store_get,
             secure_store_set,
             secure_store_delete,
+            secure_store_delete_many,
+            secure_store_list_vault_accounts,
+            secure_store_health,
             open_url,
             open_media_external,
             save_export_file,
@@ -771,4 +904,184 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error running Ogmara desktop app");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    const A: &str = "klv1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaqqqqqq";
+    const B: &str = "klv1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbqqqqqq";
+
+    /// A store backed by a temp file, so `save()` succeeds and the guard runs
+    /// against real persisted state rather than a mock.
+    fn store_with(entries: &[(&str, &str)]) -> SecureFileStore {
+        let dir = std::env::temp_dir().join(format!(
+            "ogmara-test-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut data = HashMap::new();
+        for (k, v) in entries {
+            data.insert(k.to_string(), v.to_string());
+        }
+        SecureFileStore {
+            path: dir.join(".secure-store.json"),
+            data: Mutex::new(data),
+            poisoned: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn raw_for(addr: &str) -> String {
+        format!("{VAULT_RAW_KEY}.{addr}")
+    }
+
+    fn is_needs_confirmation(o: &DeleteOutcome) -> bool {
+        matches!(o, DeleteOutcome::NeedsConfirmation)
+    }
+
+    #[test]
+    fn per_account_slots_are_recognised_as_wallet_keys() {
+        // The original guard compared against two exact constants, so these
+        // matched NEITHER and deleting the last one bypassed the prompt.
+        assert!(is_wallet_key_slot(VAULT_RAW_KEY));
+        assert!(is_wallet_key_slot(VAULT_ENCRYPTED_KEY));
+        assert!(is_wallet_key_slot(&raw_for(A)));
+        assert!(is_wallet_key_slot(&format!("{VAULT_ENCRYPTED_KEY}.{A}")));
+        // Not key material — must not be dragged into the guard.
+        assert!(!is_wallet_key_slot("ogmara.vault.mode"));
+        assert!(!is_wallet_key_slot("ogmara.vault.accounts"));
+        assert!(!is_wallet_key_slot("ogmara.vault.private_key_backup"));
+        assert!(!is_wallet_key_slot(VAULT_DEK_KEY));
+    }
+
+    #[test]
+    fn deleting_one_account_of_two_needs_no_confirmation() {
+        let s = store_with(&[(&raw_for(A), "aa"), (&raw_for(B), "bb")]);
+        let out = s.delete_guarded_many(&[raw_for(A)]).unwrap();
+        assert!(!is_needs_confirmation(&out));
+        assert!(s.get(&raw_for(A)).is_none());
+        assert!(s.get(&raw_for(B)).is_some(), "the other account must survive");
+    }
+
+    #[test]
+    fn deleting_the_last_account_needs_confirmation_and_removes_nothing() {
+        let s = store_with(&[(&raw_for(A), "aa")]);
+        let out = s.delete_guarded_many(&[raw_for(A)]).unwrap();
+        assert!(is_needs_confirmation(&out));
+        assert!(
+            s.get(&raw_for(A)).is_some(),
+            "a guarded delete must not remove anything before confirmation"
+        );
+    }
+
+    #[test]
+    fn wiping_every_account_at_once_needs_confirmation() {
+        // The total-wipe path. Evaluated once for the whole set, so the user
+        // sees ONE dialog rather than one per account.
+        let s = store_with(&[(&raw_for(A), "aa"), (&raw_for(B), "bb")]);
+        let out = s.delete_guarded_many(&[raw_for(A), raw_for(B)]).unwrap();
+        assert!(is_needs_confirmation(&out));
+        assert!(s.get(&raw_for(A)).is_some());
+        assert!(s.get(&raw_for(B)).is_some());
+    }
+
+    #[test]
+    fn pin_mode_switch_never_prompts() {
+        // Every legitimate migration and mode switch writes the new slot BEFORE
+        // deleting the old, so a slot always remains. If this ever prompts,
+        // users get a scary "your wallet cannot be recovered" dialog during a
+        // routine PIN change.
+        let s = store_with(&[
+            (VAULT_RAW_KEY, "aa"),
+            (&format!("{VAULT_ENCRYPTED_KEY}.{A}"), "ct"),
+        ]);
+        let out = s.delete_guarded_many(&[VAULT_RAW_KEY.to_string()]).unwrap();
+        assert!(!is_needs_confirmation(&out));
+    }
+
+    #[test]
+    fn deleting_the_dek_while_ciphertext_remains_needs_confirmation() {
+        // The DEK is not a key copy, but every encrypted slot is unreadable
+        // without it — same outcome, same prompt.
+        let s = store_with(&[
+            (VAULT_DEK_KEY, "wrapped"),
+            (&format!("{VAULT_ENCRYPTED_KEY}.{A}"), "ct"),
+        ]);
+        let out = s.delete_guarded_many(&[VAULT_DEK_KEY.to_string()]).unwrap();
+        assert!(is_needs_confirmation(&out));
+        assert!(s.get(VAULT_DEK_KEY).is_some());
+    }
+
+    #[test]
+    fn dek_mirror_is_not_guarded() {
+        // The mirror exists to be redundant; guarding it would prompt on every
+        // routine re-wrap.
+        let s = store_with(&[
+            (VAULT_DEK_KEY, "wrapped"),
+            ("ogmara.vault.dek.mirror", "wrapped"),
+            (&format!("{VAULT_ENCRYPTED_KEY}.{A}"), "ct"),
+        ]);
+        let out = s
+            .delete_guarded_many(&["ogmara.vault.dek.mirror".to_string()])
+            .unwrap();
+        assert!(!is_needs_confirmation(&out));
+    }
+
+    #[test]
+    fn deleting_the_dek_with_no_ciphertext_left_is_fine() {
+        let s = store_with(&[(VAULT_DEK_KEY, "wrapped"), (&raw_for(A), "aa")]);
+        let out = s.delete_guarded_many(&[VAULT_DEK_KEY.to_string()]).unwrap();
+        assert!(!is_needs_confirmation(&out));
+    }
+
+    #[test]
+    fn deleting_a_non_key_never_prompts_even_with_one_account() {
+        let s = store_with(&[(&raw_for(A), "aa"), ("ogmara.vault.active", A)]);
+        let out = s
+            .delete_guarded_many(&["ogmara.vault.active".to_string()])
+            .unwrap();
+        assert!(!is_needs_confirmation(&out));
+        assert!(s.get(&raw_for(A)).is_some());
+    }
+
+    #[test]
+    fn listing_accounts_returns_addresses_from_both_slot_kinds() {
+        let s = store_with(&[
+            (&raw_for(A), "aa"),
+            (&format!("{VAULT_ENCRYPTED_KEY}.{B}"), "ct"),
+            // Same address in both slot kinds must appear once.
+            (&format!("{VAULT_ENCRYPTED_KEY}.{A}"), "ct"),
+            // Non-account keys must not leak into the list.
+            (VAULT_RAW_KEY, "legacy"),
+            ("ogmara.vault.accounts", "[]"),
+            ("ogmara.app_lock.pin_verify", "tok"),
+        ]);
+        let mut got = s.list_vault_accounts().unwrap();
+        got.sort();
+        assert_eq!(got, vec![A.to_string(), B.to_string()]);
+    }
+
+    #[test]
+    fn every_generated_key_passes_validate_key() {
+        // The Rust layer rejects anything outside the two allowed prefixes, so
+        // a per-account slot name that fails here would break the vault at
+        // runtime rather than at compile time.
+        for k in [
+            raw_for(A),
+            format!("{VAULT_ENCRYPTED_KEY}.{A}"),
+            format!("ogmara.vault.mode.{A}"),
+            format!("ogmara.vault.enc_private_key.{A}"),
+            VAULT_DEK_KEY.to_string(),
+            "ogmara.vault.dek.mirror".to_string(),
+        ] {
+            assert!(validate_key(&k).is_ok(), "rejected: {k}");
+            assert!(k.len() <= 256, "too long: {k}");
+        }
+    }
 }

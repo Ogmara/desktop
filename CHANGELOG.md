@@ -5,6 +5,56 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.59.0] - 2026-09-03
+
+Groundwork for multi-account support (Phase 0 of 6). No user-visible change
+yet — this hardens the native layer BEFORE per-account key slots exist,
+because landing them in the other order would open a window where the last
+wallet key could be deleted with no confirmation.
+
+### Security
+
+- **The native last-wallet-key guard was bypassable by per-account slots.**
+  `secure_store_delete` compared the key against exactly two constants
+  (`ogmara.vault.private_key`, `ogmara.vault.encrypted_key`), so a per-account
+  slot named `ogmara.vault.private_key.<address>` matched NEITHER — deleting
+  the last one would have destroyed the only copy of a wallet key with no
+  native prompt. The rule is now structural ("would any wallet-key slot
+  remain?"), so it holds however many accounts exist and whatever they are
+  named. Legitimate migrations and PIN mode-switches always write the new slot
+  before deleting the old, so they still never prompt.
+- **The PIN-wrapped data-encryption key is guarded too.** It is not a key copy,
+  but destroying it while encrypted slots remain makes all of them permanently
+  unreadable — the same outcome, so the same confirmation. Its `.mirror` copy
+  is deliberately unguarded, since it exists to be redundant.
+
+### Added
+
+- `secure_store_delete_many` — deletes a set of keys as ONE guarded operation.
+  Removing an account touches four keys and a total wipe touches four per
+  account; deleting them individually would evaluate the guard N times and
+  raise up to N native dialogs, which users learn to click through.
+- `secure_store_list_vault_accounts` — the addresses that have a wallet-key
+  slot. Deliberately narrow: suffixes only, no key names, no values, nothing
+  outside the vault namespace. Because this store is enumerable (unlike
+  mobile's), the account index becomes a metadata cache rather than the only
+  way to find a key, so a lost or corrupt index cannot strand an account.
+- `secure_store_health` — reports the store's poisoned (read-only) state. A
+  poisoned store fails every write invisibly from the webview; with several
+  accounts that means index writes vanish while the UI looks healthy.
+- 11 Rust tests covering the guard, including that a PIN mode-switch never
+  prompts and that a total wipe prompts exactly once.
+
+### Fixed
+
+- `secureStore.ts` claimed to wrap "macOS Keychain, Windows Credential Manager,
+  Linux Secret Service". It never did — keys live in a 0600 JSON file in the
+  app data directory, deliberately, because the Linux keyring is often
+  session-scoped and would lose the user's wallet. Behaviour unchanged; the
+  header now describes where private keys actually live.
+- `Cargo.toml` was at 1.57.0 while `package.json` was at 1.58.0. Both, and
+  `tauri.conf.json`, now agree.
+
 ## [1.58.0] - 2026-09-02
 
 Verification now pays the on-chain registration fee and credits the node the
