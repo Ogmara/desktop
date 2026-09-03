@@ -4,13 +4,20 @@
  * API-compatible with `expo-secure-store` so vault/appLock code can be shared
  * with mobile.
  *
- * WHERE THE DATA ACTUALLY LIVES: a JSON file (`.secure-store.json`, 0600) in
- * the app data directory — NOT the OS keyring. This is deliberate: on Linux
- * gnome-keyring/kwallet is frequently session-scoped and does not survive a
- * reboot or run without the secret service, which would lose the user's
- * wallet. The file is always available and survives restarts. When a PIN is
- * set the private key is AES-256-GCM encrypted inside it; without a PIN the
- * file is only as protected as its filesystem permissions.
+ * WHERE THE DATA ACTUALLY LIVES: an AES-256-GCM encrypted file
+ * (`.secure-store.json`, 0600) in the app data directory — NOT the OS keyring.
+ * The keyring is avoided deliberately: on Linux gnome-keyring/kwallet is
+ * frequently session-scoped and does not survive a reboot or run without the
+ * secret service, and a keyring entry that vanishes would make every wallet on
+ * the device permanently unopenable.
+ *
+ * The file key is MACHINE-BOUND, so a copy of the file — in a backup, a synced
+ * folder, or a stolen disk image — is useless elsewhere. This is NOT equivalent
+ * to the PIN and must not be described as one: the app opens this file
+ * unattended at startup, so code running as the same user can too. When a PIN
+ * is set the private key is encrypted a SECOND time under a key derived from
+ * it, and that is the only layer that protects key material from a local
+ * attacker.
  *
  * (This header previously claimed Keychain / Credential Manager / Secret
  * Service. It never used them — see the rationale in `src-tauri/src/lib.rs`.)
@@ -69,17 +76,22 @@ export async function listVaultAccounts(): Promise<string[]> {
 }
 
 /**
- * Whether the store has gone read-only after a corrupt load.
+ * Store health: read-only state, and whether at-rest encryption is bound to
+ * a stable machine identifier.
  *
  * A poisoned store fails EVERY write, invisibly from here. With several
  * accounts that means index writes silently vanish while the UI looks healthy,
  * which is how an account gets lost — so the app surfaces this rather than
  * letting it fail quietly.
  */
-export async function isStorePoisoned(): Promise<boolean> {
+export async function storeHealth(): Promise<{ poisoned: boolean; machineBound: boolean }> {
   try {
-    return await invoke<boolean>('secure_store_health');
+    const h = await invoke<{ poisoned: boolean; machine_bound: boolean }>('secure_store_health');
+    return { poisoned: !!h?.poisoned, machineBound: !!h?.machine_bound };
   } catch {
-    return false;
+    // An older shell without the command. Assume healthy rather than alarming
+    // the user — but assume machine-bound too, since claiming a downgrade we
+    // cannot confirm would be its own kind of wrong.
+    return { poisoned: false, machineBound: true };
   }
 }

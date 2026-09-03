@@ -1,8 +1,14 @@
 //! Ogmara Desktop — Tauri backend.
 //!
 //! Provides native OS integration: system tray, notifications,
-//! secure storage via OS credential store, and Tauri commands
-//! accessible from the frontend.
+//! persistent secure storage, and Tauri commands accessible from the
+//! frontend.
+//!
+//! Secure storage is an ENCRYPTED file in the app data directory, not the OS
+//! credential store — see `store_crypto` for why, and for exactly what that
+//! does and does not protect against.
+
+mod store_crypto;
 
 use std::collections::HashMap;
 use std::fs;
@@ -56,10 +62,44 @@ impl SecureFileStore {
     fn new(app_data_dir: PathBuf) -> Self {
         let path = app_data_dir.join(".secure-store.json");
         let mut poisoned = false;
+        let mut needs_upgrade = false;
         let data = if path.exists() {
             match fs::read_to_string(&path) {
+                // ENCRYPTED (v2) is the normal case. A bare JSON map is the
+                // pre-0.62 plaintext format and is migrated in place below.
+                Ok(contents) if !store_crypto::is_legacy_plaintext(&contents) => {
+                    match store_crypto::open(&path, &contents)
+                        .and_then(|pt| {
+                            serde_json::from_slice::<HashMap<String, String>>(&pt)
+                                .map_err(|e| format!("decrypted store is not a map: {e}"))
+                        }) {
+                        Ok(map) => map,
+                        Err(e) => {
+                            // Wrong machine, tampering, or truncation. NEVER
+                            // overwrite: the bytes may still be decryptable
+                            // elsewhere (a store copied from another machine
+                            // opens on the machine that wrote it). Poison and
+                            // surface rather than silently starting empty,
+                            // which would look exactly like "no wallet" and
+                            // invite the user to create a new one over it.
+                            poisoned = true;
+                            eprintln!(
+                                "[secure-store] ERROR: store could not be decrypted ({e}); refusing to overwrite to protect wallet data"
+                            );
+                            HashMap::new()
+                        }
+                    }
+                }
                 Ok(contents) => match serde_json::from_str::<HashMap<String, String>>(&contents) {
-                    Ok(map) => map,
+                    Ok(map) => {
+                        // One-way migration from the plaintext format. The
+                        // rewrite is deferred to the first save() rather than
+                        // done here, so a failure to encrypt cannot leave the
+                        // user with neither file — `needs_encryption_upgrade`
+                        // drives an immediate save right after construction.
+                        needs_upgrade = !map.is_empty();
+                        map
+                    }
                     Err(e) => {
                         // Corrupt JSON. NEVER overwrite — the bytes may still
                         // hold a recoverable (encrypted) wallet. Preserve them in
@@ -94,11 +134,24 @@ impl SecureFileStore {
         } else {
             HashMap::new()
         };
-        Self {
+        let store = Self {
             path,
             data: Mutex::new(data),
             poisoned: std::sync::atomic::AtomicBool::new(poisoned),
+        };
+        if needs_upgrade {
+            // Rewrite the plaintext store encrypted, immediately. `save()`
+            // writes atomically (temp + rename), so an interruption leaves the
+            // original plaintext file intact and the upgrade simply retries on
+            // the next launch.
+            match store.save() {
+                Ok(()) => eprintln!("[secure-store] store upgraded to encrypted at-rest format"),
+                Err(e) => eprintln!(
+                    "[secure-store] WARNING: could not upgrade store to encrypted format ({e}); continuing with the existing file"
+                ),
+            }
         }
+        store
     }
 
     fn save(&self) -> Result<(), String> {
@@ -113,15 +166,41 @@ impl SecureFileStore {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("dir error: {e}"))?;
         }
-        let json = serde_json::to_string_pretty(&*data)
+        let json = serde_json::to_string(&*data)
             .map_err(|e| format!("serialize error: {e}"))?;
-        fs::write(&self.path, json).map_err(|e| format!("write error: {e}"))?;
-        // Restrict file permissions to owner-only on Unix (0600)
+        drop(data); // seal() may read the sidecar; don't hold the map lock
+
+        // Encrypt at rest. Wallet key material must never touch the disk in
+        // the clear — see `store_crypto` for exactly what this does and does
+        // not protect against.
+        let sealed = store_crypto::seal(&self.path, json.as_bytes())?;
+        // Verify what we are about to persist actually opens, BEFORE replacing
+        // a good file with it. Writing an unopenable store over a working one
+        // is indistinguishable from losing the wallet.
+        store_crypto::open(&self.path, &sealed)
+            .map_err(|e| format!("refusing to write a store that does not decrypt: {e}"))?;
+
+        // Atomic replace: write a temp file in the same directory, fsync it,
+        // then rename over the target. A crash mid-write therefore leaves the
+        // PREVIOUS store intact rather than a truncated one — the old
+        // `fs::write` truncated in place, so an interrupted save could destroy
+        // a working vault.
+        let tmp = self.path.with_extension("tmp");
+        {
+            use std::io::Write;
+            let mut f = fs::File::create(&tmp).map_err(|e| format!("write error: {e}"))?;
+            f.write_all(sealed.as_bytes())
+                .map_err(|e| format!("write error: {e}"))?;
+            f.sync_all().map_err(|e| format!("sync error: {e}"))?;
+        }
+        // Permissions BEFORE the rename, so the file is never briefly readable
+        // at the final path with default permissions.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(0o600));
+            let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
         }
+        fs::rename(&tmp, &self.path).map_err(|e| format!("replace error: {e}"))?;
         Ok(())
     }
 
@@ -285,16 +364,20 @@ fn get_platform() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
-// --- Secure Storage (file-based, persistent) ---
+// --- Secure Storage (file-based, persistent, encrypted at rest) ---
 //
-// Uses a JSON file in the app data directory instead of the OS keyring.
-// The OS keyring (gnome-keyring/kwallet) on Linux is often session-scoped
-// and doesn't persist across reboots or when the secret service isn't running.
-// The file store is always available and survives restarts.
+// Uses a file in the app data directory instead of the OS keyring. The OS
+// keyring (gnome-keyring/kwallet) on Linux is often session-scoped and doesn't
+// persist across reboots or when the secret service isn't running; losing it
+// would mean losing every wallet on the device. The file store is always
+// available and survives restarts.
 //
-// Note: the private key is still encrypted with AES-256-GCM when PIN is set.
-// This file is only as secure as the user's filesystem permissions, which is
-// equivalent to how most desktop apps store credentials (e.g., browser profiles).
+// The file is AES-256-GCM encrypted under a machine-bound key (`store_crypto`),
+// so a copy of it — in a backup, a synced folder, or a stolen disk image — is
+// useless elsewhere. That is NOT equivalent to the PIN: the app opens this file
+// unattended, so code running as the same user can too. When a PIN is set the
+// private key is encrypted a second time under a key derived from it, and that
+// is the layer that protects against a local attacker.
 
 /// Tauri command: read a value from the secure file store.
 #[tauri::command]
@@ -405,11 +488,24 @@ fn secure_store_list_vault_accounts(app: tauri::AppHandle) -> Result<Vec<String>
 /// looks healthy — which is how an account gets lost. The app surfaces this as
 /// a persistent banner rather than letting it fail quietly.
 #[tauri::command]
-fn secure_store_health(app: tauri::AppHandle) -> Result<bool, String> {
-    Ok(app
-        .state::<SecureFileStore>()
-        .poisoned
-        .load(std::sync::atomic::Ordering::Relaxed))
+fn secure_store_health(app: tauri::AppHandle) -> Result<StoreHealth, String> {
+    let store = app.state::<SecureFileStore>();
+    Ok(StoreHealth {
+        poisoned: store.poisoned.load(std::sync::atomic::Ordering::Relaxed),
+        machine_bound: store_crypto::is_machine_bound(&store.path),
+    })
+}
+
+/// Reported to the frontend so neither failure mode can go unnoticed.
+#[derive(serde::Serialize)]
+struct StoreHealth {
+    /// The store went read-only after an unreadable load. Every write silently
+    /// fails from the webview's point of view, so this must be surfaced.
+    poisoned: bool,
+    /// Whether the at-rest key is bound to a stable OS identifier. `false`
+    /// means it fell back to a sidecar file that travels WITH the store, so a
+    /// copied directory is decryptable — weaker, and never a silent downgrade.
+    machine_bound: bool,
 }
 
 /// Tauri command: send a native OS notification.
@@ -943,6 +1039,89 @@ mod tests {
 
     fn is_needs_confirmation(o: &DeleteOutcome) -> bool {
         matches!(o, DeleteOutcome::NeedsConfirmation)
+    }
+
+    fn tmp_dir() -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "ogmara-store-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn a_plaintext_store_is_migrated_to_encrypted_without_losing_data() {
+        // The upgrade path every existing install takes. If this loses the
+        // map, it loses the wallet.
+        let dir = tmp_dir();
+        let path = dir.join(".secure-store.json");
+        std::fs::write(
+            &path,
+            format!(r#"{{"{}":"deadbeefcafe"}}"#, VAULT_RAW_KEY),
+        )
+        .unwrap();
+
+        let store = SecureFileStore::new(dir.clone());
+        assert_eq!(store.get(VAULT_RAW_KEY).as_deref(), Some("deadbeefcafe"));
+
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !on_disk.contains("deadbeefcafe"),
+            "the key must not remain readable on disk after the upgrade"
+        );
+        assert!(!store_crypto::is_legacy_plaintext(&on_disk));
+
+        // And it must still be there on the next launch.
+        let reopened = SecureFileStore::new(dir);
+        assert_eq!(reopened.get(VAULT_RAW_KEY).as_deref(), Some("deadbeefcafe"));
+        assert!(!reopened.poisoned.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[test]
+    fn writes_survive_a_reopen() {
+        let dir = tmp_dir();
+        let store = SecureFileStore::new(dir.clone());
+        store.set(&raw_for(A), "aa").unwrap();
+        store.set(&raw_for(B), "bb").unwrap();
+        let reopened = SecureFileStore::new(dir);
+        assert_eq!(reopened.get(&raw_for(A)).as_deref(), Some("aa"));
+        assert_eq!(reopened.get(&raw_for(B)).as_deref(), Some("bb"));
+    }
+
+    #[test]
+    fn an_undecryptable_store_poisons_instead_of_starting_empty() {
+        // Starting empty would look exactly like "no wallet yet" and invite the
+        // user to create a new one on top of a recoverable file.
+        let dir = tmp_dir();
+        let path = dir.join(".secure-store.json");
+        std::fs::write(
+            &path,
+            r#"{"v":2,"salt":"00112233445566778899aabbccddeeff","nonce":"000102030405060708090a0b","ct":"deadbeef"}"#,
+        )
+        .unwrap();
+        let store = SecureFileStore::new(dir);
+        assert!(
+            store.poisoned.load(std::sync::atomic::Ordering::Relaxed),
+            "an undecryptable store must poison"
+        );
+        assert!(store.save().is_err(), "a poisoned store must refuse to write");
+        // The original bytes must still be there for recovery.
+        assert!(std::fs::read_to_string(&path).unwrap().contains("deadbeef"));
+    }
+
+    #[test]
+    fn an_empty_new_store_is_not_treated_as_an_upgrade() {
+        // A first run has no file; it must not report an upgrade or write one
+        // before there is anything to protect.
+        let dir = tmp_dir();
+        let store = SecureFileStore::new(dir.clone());
+        assert!(store.get(VAULT_RAW_KEY).is_none());
+        assert!(!store.poisoned.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     #[test]

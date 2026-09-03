@@ -5,6 +5,62 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.62.0] - 2026-09-03
+
+### Security
+
+- **The secure store is now encrypted at rest, always — with or without a
+  PIN.** Until now `.secure-store.json` held private keys in the clear unless
+  the user had set a PIN, protected only by filesystem permissions. It is now
+  AES-256-GCM encrypted under a machine-bound key, so a copy of the file is
+  useless elsewhere: a backup, a synced folder, a stolen disk image, or another
+  user's hands no longer yield wallet keys.
+
+  **What this is not.** The app opens this file unattended at startup, so the
+  unwrapping key is necessarily reachable on the same machine — code running as
+  the same user can do what the app does. This layer defeats the file leaving
+  the machine; it does not defeat a local attacker. **Only the PIN does that**,
+  and with a PIN set the private key is encrypted a second time under a
+  PIN-derived key. The code says this plainly in both `store_crypto.rs` and
+  `secureStore.ts` so it cannot be mistaken for full at-rest protection.
+
+  The OS keyring was considered and rejected as the key holder: on Linux
+  gnome-keyring/kwallet is frequently session-scoped, and an entry that
+  silently vanishes would make every wallet on the device permanently
+  unopenable — a worse failure than the one being fixed. Where no stable
+  machine identifier exists, the key falls back to a 0600 sidecar; that is
+  weaker (it travels with the store), so `secure_store_health` now reports
+  `machine_bound` and it can never be a silent downgrade.
+
+  Existing plaintext stores are migrated on first launch. The rewrite is
+  verified to decrypt BEFORE it replaces anything, and a store that fails to
+  decrypt poisons the app read-only rather than starting empty — starting empty
+  would look exactly like "no wallet yet" and invite the user to create a new
+  one on top of a recoverable file.
+
+### Fixed
+
+- **An interrupted save could destroy a working vault.** `save()` truncated the
+  store in place, so a crash or power loss mid-write left a partial file. Writes
+  are now atomic: a temp file in the same directory, fsynced, permissions set
+  before the rename, then renamed over the target. An interrupted save now
+  leaves the PREVIOUS store intact.
+- `lib.rs` and `secureStore.ts` both claimed the store used the OS credential
+  store. It never has; the headers now describe the real mechanism and its
+  limits.
+
+### Added
+
+- `aes-gcm` 0.11, `sha2` 0.11, `hkdf` 0.13, `getrandom` 0.4, `zeroize` 1.9.
+  `cargo audit`: 0 vulnerabilities. (The 23 warnings are pre-existing
+  unmaintained-GTK3 advisories from Tauri's tree; none of the new crates pull
+  in `rand`.)
+- 10 more Rust tests, covering the plaintext migration, that key material never
+  appears in the file, that a tampered ciphertext is rejected rather than
+  silently decrypting to something that parses as an empty store, that each
+  save uses a fresh nonce and salt, and that an undecryptable store poisons
+  instead of starting empty.
+
 ## [1.61.0] - 2026-09-03
 
 Multi-account Phase 2 of 6 — per-account preference namespacing. Still one
