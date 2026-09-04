@@ -563,5 +563,8 @@
   "channel_not_found_desc": "该频道不存在或已不可用。",
   "channel_private_invite_link": "私密邀请链接",
   "store_poisoned_warning": "存储为只读：启动时无法读取保险库文件，为保护您的钱包不会覆盖它。更改未被保存。请重启应用；若仍然如此，请恢复或移开 .secure-store.json。",
-  "lock_unlocked_no_account": "PIN 正确，但无法打开任何账户。密钥数据可能已损坏——请查看 设置 → 账户，或从备份恢复。"
+  "lock_unlocked_no_account": "PIN 正确，但无法打开任何账户。密钥数据可能已损坏——请查看 设置 → 账户，或从备份恢复。",
+  "news_topics_manage_hint": "关注单个话题标签，或将它们分组，使话题组像独立的信息流一样使用。",
+  "news_topic_add_button": "添加",
+  "news_topic_group_empty": "该分组暂无话题。"
 }

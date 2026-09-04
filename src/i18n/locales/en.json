@@ -563,5 +563,8 @@
   "wallet_private_key": "Private key",
   "wallet_invalid_key": "That is not a valid private key — expected 64 hexadecimal characters.",
   "store_poisoned_warning": "Storage is read-only: the vault file could not be read at startup and is not being overwritten, to protect your wallet. Changes are NOT being saved. Restart the app; if this persists, restore or move aside .secure-store.json.",
-  "lock_unlocked_no_account": "PIN accepted, but no account could be opened. Your key material may be damaged — check Settings → Accounts, or restore from a backup."
+  "lock_unlocked_no_account": "PIN accepted, but no account could be opened. Your key material may be damaged — check Settings → Accounts, or restore from a backup.",
+  "news_topics_manage_hint": "Follow individual hashtags, or group them so a topic group behaves like its own feed.",
+  "news_topic_add_button": "Add",
+  "news_topic_group_empty": "No topics in this group yet."
 }

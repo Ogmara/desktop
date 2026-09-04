@@ -563,5 +563,8 @@
   "channel_not_found_desc": "Dieser Kanal existiert nicht oder ist nicht mehr verfügbar.",
   "channel_private_invite_link": "Privater Einladungslink",
   "store_poisoned_warning": "Speicher ist schreibgeschützt: Die Vault-Datei konnte beim Start nicht gelesen werden und wird zum Schutz deiner Wallet nicht überschrieben. Änderungen werden NICHT gespeichert. Starte die App neu; wenn es bestehen bleibt, stelle .secure-store.json wieder her oder verschiebe sie.",
-  "lock_unlocked_no_account": "PIN korrekt, aber es konnte kein Konto geöffnet werden. Möglicherweise ist das Schlüsselmaterial beschädigt — siehe Einstellungen → Konten oder stelle aus einem Backup wieder her."
+  "lock_unlocked_no_account": "PIN korrekt, aber es konnte kein Konto geöffnet werden. Möglicherweise ist das Schlüsselmaterial beschädigt — siehe Einstellungen → Konten oder stelle aus einem Backup wieder her.",
+  "news_topics_manage_hint": "Folge einzelnen Hashtags oder gruppiere sie, sodass eine Themengruppe wie ein eigener Feed funktioniert.",
+  "news_topic_add_button": "Hinzufügen",
+  "news_topic_group_empty": "Noch keine Themen in dieser Gruppe."
 }

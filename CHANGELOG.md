@@ -5,6 +5,32 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.74.0] - 2026-09-04
+
+### Changed
+
+- **Followed Topics moved out of the News sidebar and into its own settings
+  page.** The sidebar section used to be an always-expanded management panel —
+  an add-topic input, per-tag ✕ buttons, inline rename fields, a floating
+  ⋯ menu — sitting in a list of feeds that otherwise looks like Global and
+  Following: an icon, a label, a description, click to switch. It read as a
+  settings panel bolted onto the sidebar rather than a set of feeds you pick
+  from.
+
+  The sidebar now shows exactly two entries — "Followed Topics" and one row
+  per topic group — styled identically to Global/Following in both the modern
+  (icon-circle + label + description) and classic sidebar styles, with the
+  description line listing the hashtags each one covers. All the editing lives
+  on a new page at `/settings/topics` (`TopicsSettingsView`), reached via a
+  "Manage topics" link at the bottom of the section.
+
+### Fixed
+
+- `.settings-hint`, used by the Accounts entry point added in 1.72.1, had no
+  CSS rule and rendered unstyled — the same class of bug fixed in 1.72.2 for
+  the Accounts page itself, caught this time by checking every class against
+  the stylesheet before shipping rather than after a screenshot.
+
 ## [1.73.0] - 2026-09-04
 
 ### Added

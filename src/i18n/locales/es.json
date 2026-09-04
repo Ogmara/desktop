@@ -563,5 +563,8 @@
   "channel_not_found_desc": "Este canal no existe o ya no está disponible.",
   "channel_private_invite_link": "Enlace de invitación privado",
   "store_poisoned_warning": "El almacenamiento es de solo lectura: el archivo del monedero no se pudo leer al iniciar y no se sobrescribe, para proteger tu cartera. Los cambios NO se están guardando. Reinicia la app; si persiste, restaura o aparta .secure-store.json.",
-  "lock_unlocked_no_account": "PIN correcto, pero no se pudo abrir ninguna cuenta. Puede que las claves estén dañadas: revisa Ajustes → Cuentas o restaura desde una copia."
+  "lock_unlocked_no_account": "PIN correcto, pero no se pudo abrir ninguna cuenta. Puede que las claves estén dañadas: revisa Ajustes → Cuentas o restaura desde una copia.",
+  "news_topics_manage_hint": "Sigue hashtags individuales o agrúpalos para que un grupo de temas funcione como su propio feed.",
+  "news_topic_add_button": "Añadir",
+  "news_topic_group_empty": "Aún no hay temas en este grupo."
 }

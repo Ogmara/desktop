@@ -577,3 +577,37 @@ html.compact {
 .account-text .account-addr {
   font-size: var(--font-size-xs); color: var(--color-text-secondary);
 }
+
+/* Missing since 1.72.1 — used in Settings' Accounts entry point, never had a rule. */
+.settings-hint { color: var(--color-text-secondary); font-size: var(--font-size-sm); margin: 0; }
+
+/* --- Topics Settings --- */
+.topic-pill-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.topic-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 6px 4px 10px; font-size: var(--font-size-xs);
+  background: var(--color-bg-tertiary); border-radius: var(--radius-full);
+  color: var(--color-text-secondary);
+}
+.topic-pill-remove {
+  background: transparent; border: none; cursor: pointer;
+  font-weight: 700; line-height: 1; padding: 2px 4px;
+  color: var(--color-text-secondary); border-radius: var(--radius-full);
+}
+.topic-pill-remove:hover { background: var(--color-bg-primary); color: var(--color-error); }
+
+.topic-group-card {
+  display: flex; flex-direction: column; gap: var(--spacing-sm);
+  border-top: 1px solid var(--color-border); padding-top: var(--spacing-md);
+}
+.topic-group-header { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-sm); }
+.topic-group-name { color: var(--color-text-primary); font-size: var(--font-size-sm); }
+.topic-group-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.icon-btn {
+  background: transparent; border: none; cursor: pointer;
+  padding: 4px 8px; border-radius: var(--radius-sm);
+  color: var(--color-text-secondary); font-size: var(--font-size-sm);
+}
+.icon-btn:hover { background: var(--color-bg-tertiary); }
+.icon-btn.danger:hover { color: var(--color-error); }
+.topic-group-add-btn { align-self: flex-start; padding: 4px 12px; font-size: var(--font-size-xs); }
