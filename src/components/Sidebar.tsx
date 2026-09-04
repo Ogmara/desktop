@@ -186,7 +186,48 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
 
   // --- Modern style: burger menu + tabbed sidebar ---
   type SidebarTab = 'chats' | 'feed' | 'dms';
-  const [activeTab, setActiveTab] = createSignal<SidebarTab>('chats');
+
+  /**
+   * Which tab a route belongs to, or `null` for a view that isn't owned by
+   * any of the three (Settings, Wallet, Accounts, Bookmarks, Search, …,
+   * reached via the profile menu, not a sidebar tab) — the sidebar should
+   * keep showing whatever tab the user was last on rather than jump when one
+   * of those opens.
+   */
+  const tabForView = (view: ReturnType<typeof route>['view']): SidebarTab | null => {
+    switch (view) {
+      case 'chat':
+      case 'channel-create':
+      case 'channel-settings':
+      case 'channel-join':
+        return 'chats';
+      case 'news':
+      case 'news-detail':
+      case 'compose':
+        return 'feed';
+      case 'dm':
+      case 'dm-conversation':
+        return 'dms';
+      default:
+        return null;
+    }
+  };
+
+  // Seeded from the ACTUAL initial route, not a hardcoded tab — `router.ts`
+  // already resolves the boot route from `defaultLandingView`, so reading it
+  // here is what keeps the tab pill in sync with what actually renders.
+  // Hardcoding 'chats' was the bug: choosing "News" as the landing view
+  // opened on the News pane while the sidebar still showed the Chat tab.
+  const [activeTab, setActiveTab] = createSignal<SidebarTab>(tabForView(route().view) ?? 'chats');
+
+  // Keep the tab in sync with navigation that doesn't go through this
+  // sidebar's own pill buttons — a deep link, a mention inside a post, the
+  // back button — so the sidebar never again shows a different section than
+  // the one actually on screen.
+  createEffect(() => {
+    const tab = tabForView(route().view);
+    if (tab) setActiveTab(tab);
+  });
   const [searchQuery, setSearchQuery] = createSignal('');
   const [burgerOpen, setBurgerOpen] = createSignal(false);
   const [currentTheme, setCurrentTheme] = createSignal(getTheme());

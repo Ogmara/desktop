@@ -5,6 +5,21 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.75.0] - 2026-09-04
+
+### Fixed
+
+- **The sidebar's active tab did not follow "Default Landing View."** Setting
+  it to News opened the News pane correctly (`router.ts` already resolved the
+  boot route from that setting), but the modern sidebar's Chat/News
+  Feed/Messages tab strip always initialized to Chat — the two were never
+  connected, so the sidebar showed a different section than the one actually
+  on screen. `activeTab` is now seeded from the real initial route instead of
+  a hardcoded default, and a `createEffect` keeps it in sync with any
+  navigation that doesn't go through the sidebar's own tab buttons — a deep
+  link, a mention inside a post, the back button — so the two can no longer
+  drift apart. (Classic sidebar style is unaffected: it doesn't use tabs.)
+
 ## [1.74.1] - 2026-09-04
 
 Audit pass over 1.74.0.
