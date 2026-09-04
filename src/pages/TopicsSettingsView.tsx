@@ -11,6 +11,7 @@
 import { Component, createSignal, For, Show } from 'solid-js';
 import { t } from '../i18n/init';
 import { goBack } from '../lib/router';
+import { confirmDialog } from '../components/Dialogs';
 import {
   topicGroups,
   topicCaps,
@@ -62,8 +63,12 @@ export const TopicsSettingsView: Component = () => {
     setAddingTagTo(null);
   };
 
-  const handleDeleteGroup = (id: string) => {
-    if (window.confirm(t('news_topic_group_delete_confirm'))) deleteGroup(id);
+  const handleDeleteGroup = async (id: string) => {
+    // NEVER window.confirm — Tauri's dialog plugin unconditionally overrides
+    // it to call an IPC command the Rust side never registers, so it throws
+    // instead of showing anything. See Dialogs.tsx's header comment; this is
+    // the same footgun that already broke kick/ban/delete/leave/report once.
+    if (await confirmDialog(t('news_topic_group_delete_confirm'))) deleteGroup(id);
   };
 
   return (

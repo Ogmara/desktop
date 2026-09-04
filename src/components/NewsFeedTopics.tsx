@@ -29,11 +29,21 @@ function tagList(tags: readonly string[]): string {
   return tags.map((tag) => `#${tag}`).join(', ');
 }
 
-export const NewsFeedTopics: Component = () => {
+export const NewsFeedTopics: Component<{ onNavigate?: () => void }> = (props) => {
   const tg = topicGroups;
 
   const activeTopicsAll = createMemo(() => queryParam('topics') === 'all');
   const activeGroup = createMemo(() => queryParam('group'));
+
+  // Mirrors `Sidebar`'s own `go()`: on a narrow viewport the sidebar sits over
+  // the content pane (`.mobile-list-open` hides `.main-content`), so a click
+  // that only calls `navigate()` changes the URL behind a sidebar that never
+  // closes — the destination pane renders, invisibly. Every row here needs
+  // the same auto-close `Sidebar`'s Global/Following rows already get.
+  const go = (path: string) => {
+    navigate(path);
+    props.onNavigate?.();
+  };
 
   // Modern style: icon-circle + label + description, matching the
   // Global/Following pills exactly. Classic style: `.sidebar-nav-item`, no
@@ -54,7 +64,7 @@ export const NewsFeedTopics: Component = () => {
           <>
             <button
               class={`sidebar-nav-item ${activeTopicsAll() ? 'active' : ''}`}
-              onClick={() => navigate('/news?topics=all')}
+              onClick={() => go('/news?topics=all')}
               title={t('news_topics_followed')}
             >
               🏷️ {t('news_topics_followed')}
@@ -63,7 +73,7 @@ export const NewsFeedTopics: Component = () => {
               {(g) => (
                 <button
                   class={`sidebar-nav-item ${activeGroup() === g.id ? 'active' : ''}`}
-                  onClick={() => navigate(`/news?group=${encodeURIComponent(g.id)}`)}
+                  onClick={() => go(`/news?group=${encodeURIComponent(g.id)}`)}
                   title={g.name}
                 >
                   📁 {g.name}
@@ -73,7 +83,7 @@ export const NewsFeedTopics: Component = () => {
           </>
         }
       >
-        <button style={pillStyle(activeTopicsAll())} onClick={() => navigate('/news?topics=all')}>
+        <button style={pillStyle(activeTopicsAll())} onClick={() => go('/news?topics=all')}>
           <div style={iconStyle}>🏷️</div>
           <div style="flex:1; overflow:hidden">
             <div style={labelStyle(activeTopicsAll())}>{t('news_topics_followed')}</div>
@@ -85,7 +95,7 @@ export const NewsFeedTopics: Component = () => {
 
         <For each={tg().groups}>
           {(g) => (
-            <button style={pillStyle(activeGroup() === g.id)} onClick={() => navigate(`/news?group=${encodeURIComponent(g.id)}`)}>
+            <button style={pillStyle(activeGroup() === g.id)} onClick={() => go(`/news?group=${encodeURIComponent(g.id)}`)}>
               <div style={iconStyle}>📁</div>
               <div style="flex:1; overflow:hidden">
                 <div style={labelStyle(activeGroup() === g.id)}>{g.name}</div>
@@ -101,7 +111,7 @@ export const NewsFeedTopics: Component = () => {
       <div style="padding:4px 12px 0">
         <button
           style="font-size:var(--font-size-xs); color:var(--color-accent-primary); background:transparent; cursor:pointer; padding:4px 0"
-          onClick={() => navigate('/settings/topics')}
+          onClick={() => go('/settings/topics')}
         >
           {t('news_topics_manage')} →
         </button>

@@ -1171,7 +1171,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
               </>
             );
           })()}
-          <NewsFeedTopics />
+          <NewsFeedTopics onNavigate={props.onNavigate} />
         </Show>
 
         <Show when={activeTab() === 'dms'}>
@@ -1471,7 +1471,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
             <span style="margin-left:6px; font-size:11px">🔒</span>
           </Show>
         </button>
-        <NewsFeedTopics />
+        <NewsFeedTopics onNavigate={props.onNavigate} />
       </div>
 
       {/* Channels (collapsible) */}

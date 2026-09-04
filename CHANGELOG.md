@@ -5,6 +5,32 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.74.1] - 2026-09-04
+
+Audit pass over 1.74.0.
+
+### Fixed
+
+- **Deleting a topic group was completely broken.** `TopicsSettingsView`'s
+  delete confirmation used `window.confirm`, which Tauri's dialog plugin
+  unconditionally overrides to call an IPC command the Rust side never
+  registers — it throws (`dialog.confirm not allowed`) instead of showing
+  anything, so the click did nothing and the group was never deleted. This is
+  a known, previously-fixed footgun (see `Dialogs.tsx`'s header comment, and
+  the 2026-08 pass that found it blocking kick/ban/delete/leave/report) that
+  the new page walked straight back into by not reusing `confirmDialog`. Fixed
+  by importing it, same as every other destructive confirmation in the app.
+- **"Manage topics" — and every row above it — could silently do nothing on a
+  narrow window.** `NewsFeedTopics` called `navigate()` directly instead of
+  `Sidebar`'s `go()` wrapper, which also closes the mobile sidebar overlay.
+  Below ~768px width the sidebar sits over the content pane, so a click
+  changed the URL behind a sidebar that never closed — the destination
+  rendered, invisibly. Harmless before this feature, since topic management
+  used to live inline with nothing to navigate to; became a real gap once
+  "Manage topics" became the only way to reach the new settings page.
+  `NewsFeedTopics` now takes an `onNavigate` prop and calls it after every
+  navigation, matching `Sidebar`'s own rows.
+
 ## [1.74.0] - 2026-09-04
 
 ### Changed
