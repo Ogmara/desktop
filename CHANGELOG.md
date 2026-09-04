@@ -5,6 +5,15 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.75.1] - 2026-09-04
+
+### Fixed
+
+- The classic sidebar's "Settings" row didn't highlight while on
+  `/settings/topics`, `/accounts`, or `/accounts/add` — `isView('settings')`
+  only matched the bare `settings` route. Found while auditing the same fix
+  on web.
+
 ## [1.75.0] - 2026-09-04
 
 ### Fixed

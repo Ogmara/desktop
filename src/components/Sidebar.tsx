@@ -965,7 +965,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     if (view === 'dm') return r.view === 'dm' || r.view === 'dm-conversation';
     if (view === 'bookmarks') return r.view === 'bookmarks';
     if (view === 'search') return r.view === 'search';
-    if (view === 'settings') return r.view === 'settings';
+    if (view === 'settings') return r.view === 'settings' || r.view === 'topics-settings' || r.view === 'accounts' || r.view === 'accounts-add';
     return false;
   };
 
