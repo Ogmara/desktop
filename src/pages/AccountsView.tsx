@@ -8,9 +8,11 @@
  * because losing a private key is unrecoverable.
  */
 
-import { createSignal, createResource, onCleanup, For, Show } from 'solid-js';
+import { Component, createSignal, createEffect, createResource, onCleanup, For, Show } from 'solid-js';
 import { t } from '../i18n/init';
 import { navigate } from '../lib/router';
+import { getClient } from '../lib/api';
+import { resolveProfile, type CachedProfile } from '../lib/profile';
 import {
   vaultListAccounts,
   vaultExportKeyFor,
@@ -19,6 +21,43 @@ import {
 } from '../lib/vault';
 import { switchAccount, walletAddress } from '../lib/auth';
 import type { AccountEntry } from '../lib/vaultAccounts';
+
+/**
+ * One account row's avatar + name, resolved from the currently connected
+ * node — same lookup `BookmarksView`/`NewsView` use for any other address, so
+ * it shares that cache rather than adding a second one.
+ *
+ * A bare address is hard to tell apart from another at a glance; the name and
+ * picture are what a user actually recognises their own accounts by.
+ */
+const AccountIdentity: Component<{ address: string }> = (props) => {
+  const [profile, setProfile] = createSignal<CachedProfile>({});
+
+  createEffect(() => {
+    resolveProfile(props.address).then(setProfile);
+  });
+
+  return (
+    <>
+      <Show
+        when={profile().avatar_cid}
+        fallback={
+          <span class="account-avatar-placeholder" aria-hidden="true">
+            {(profile().display_name || props.address).slice(0, 2).toUpperCase()}
+          </span>
+        }
+      >
+        <img class="account-avatar" src={getClient().getMediaUrl(profile().avatar_cid!)} alt="" loading="lazy" />
+      </Show>
+      <span class="account-text">
+        <Show when={profile().display_name}>
+          <span class="account-name">{profile().display_name}</span>
+        </Show>
+        <span class="account-addr">{props.address.slice(0, 14)}…{props.address.slice(-6)}</span>
+      </span>
+    </>
+  );
+};
 
 export function AccountsView() {
   const [busy, setBusy] = createSignal<string | null>(null);
@@ -120,7 +159,7 @@ export function AccountsView() {
                 aria-current={isActive(acc.a) ? 'true' : undefined}
               >
                 <span class="account-dot" aria-hidden="true">{isActive(acc.a) ? '●' : '○'}</span>
-                <span class="account-addr">{acc.a.slice(0, 14)}…{acc.a.slice(-6)}</span>
+                <AccountIdentity address={acc.a} />
                 <Show when={isActive(acc.a)}>
                   <span class="account-badge">{t('accounts_active')}</span>
                 </Show>

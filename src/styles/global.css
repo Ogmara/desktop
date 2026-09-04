@@ -557,3 +557,23 @@ html.compact {
   user-select: all;
 }
 .modal-actions { display: flex; gap: 12px; margin-top: var(--spacing-sm); justify-content: flex-end; }
+
+.account-avatar, .account-avatar-placeholder {
+  width: 32px; height: 32px; border-radius: var(--radius-full);
+  flex-shrink: 0; object-fit: cover;
+}
+.account-avatar-placeholder {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--color-accent-bg); color: var(--color-accent-primary);
+  font-size: var(--font-size-xs); font-weight: 700;
+}
+.account-text {
+  display: flex; flex-direction: column; overflow: hidden; min-width: 0;
+}
+.account-name {
+  color: var(--color-text-primary); font-size: var(--font-size-sm); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.account-text .account-addr {
+  font-size: var(--font-size-xs); color: var(--color-text-secondary);
+}

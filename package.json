@@ -1,6 +1,6 @@
 {
   "name": "@ogmara/desktop",
-  "version": "1.72.2",
+  "version": "1.73.0",
   "private": true,
   "description": "Ogmara desktop application \u2014 decentralized chat and news with standalone wallet",
   "scripts": {
