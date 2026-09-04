@@ -5,6 +5,18 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.72.1] - 2026-09-04
+
+### Fixed
+
+- **Multi-account had no discoverable entry point.** Switching and adding
+  accounts was reachable only via Settings → Accounts (the first section, a
+  plain "Manage accounts" button) — a place a user reaches to change
+  preferences, not to manage which wallet is active. Added
+  `menu_account_security`'s neighbour in the profile menu (click the avatar,
+  top of the sidebar), which is where every other account-adjacent action
+  already lives (My profile, Wallet, Account security).
+
 ## [1.72.0] - 2026-09-03
 
 Third audit pass. Rather than patch the four keys and three orderings it found,
