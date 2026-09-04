@@ -5,6 +5,21 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.75.2] - 2026-09-04
+
+### Fixed
+
+- **"Ungrouped" was the only channel section in the sidebar that couldn't
+  collapse**, while user-created groups could. Its header was a plain,
+  non-interactive `<div>` with no toggle at all. Now uses the same
+  `org-group-header`/`org-group-toggle` markup as a real group (chevron +
+  click-to-collapse), keyed on the `UNGROUPED_BUCKET` sentinel already used for
+  its drag-and-drop drop target — with no rename/delete menu, since it isn't a
+  real group. When there are no groups yet there is no header at all, matching
+  the existing plain-list behavior, and in that case the list is never hidden
+  (there would be no way to expand it again). Same bug, found and fixed
+  identically on mobile and web.
+
 ## [1.75.1] - 2026-09-04
 
 ### Fixed

@@ -826,15 +826,25 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
           )}
         </For>
         {/* Divider before the ungrouped channels, but only when there is at
-            least one group above them — keeps the un-customized list clean. */}
+            least one group above them — keeps the un-customized list clean.
+            It can collapse exactly like a real group (via the same sentinel
+            id DroppableBucket already uses for the drop target); with no
+            groups there is no header at all, so nothing to collapse. */}
         <Show when={l.groups.length > 0 && filterList(l.ungrouped).length > 0}>
-          <div class="org-ungrouped-header">{t('sidebar_ungrouped')}</div>
+          <div class="org-group-header org-ungrouped-header">
+            <button class="org-group-toggle" onClick={() => toggleGroupCollapsed(UNGROUPED_BUCKET)}>
+              <span class={`collapse-arrow ${!isGroupCollapsed(UNGROUPED_BUCKET) ? 'open' : ''}`}>▸</span>
+              <span class="org-group-name">{t('sidebar_ungrouped')}</span>
+            </button>
+          </div>
         </Show>
-        <DroppableBucket id={UNGROUPED_BUCKET}>
-          <For each={filterList(l.ungrouped)}>
-            {(ch) => <DraggableChannel id={ch.channel_id}>{renderRow(ch)}</DraggableChannel>}
-          </For>
-        </DroppableBucket>
+        <Show when={l.groups.length === 0 || !isGroupCollapsed(UNGROUPED_BUCKET)}>
+          <DroppableBucket id={UNGROUPED_BUCKET}>
+            <For each={filterList(l.ungrouped)}>
+              {(ch) => <DraggableChannel id={ch.channel_id}>{renderRow(ch)}</DraggableChannel>}
+            </For>
+          </DroppableBucket>
+        </Show>
         <DragOverlay>
           <Show when={draggedChannel()}>
             <div class="org-drag-overlay">
