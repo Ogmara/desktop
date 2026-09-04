@@ -5,6 +5,21 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.72.2] - 2026-09-04
+
+### Fixed
+
+- **The Accounts and Add Account pages rendered with no styling at all.**
+  `AccountsView.tsx`/`AddAccountView.tsx` used a class vocabulary
+  (`account-row`, `account-badge`, `modal-backdrop`, `export-key`, …) that was
+  never checked against the app's actual stylesheet — none of it existed, so
+  everything rendered as bare, unspaced text and buttons with no chrome. Added
+  real CSS using the app's existing design tokens (`--spacing-*`,
+  `--color-*`, `--radius-*`) and its existing patterns: the account list
+  follows `.settings-section`'s card style, and the removal confirmation
+  reuses the `.pin-setup-overlay` modal pattern rather than inventing a new
+  one. Every class the two components reference now resolves to a rule.
+
 ## [1.72.1] - 2026-09-04
 
 ### Fixed

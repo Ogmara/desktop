@@ -472,3 +472,88 @@ html.compact {
   line-height: 1.4;
   text-align: center;
 }
+
+/* --- Accounts / Add Account --- */
+.accounts-view, .add-account-view {
+  padding: var(--spacing-lg) 32px; max-width: 600px; margin: 0 auto;
+  display: flex; flex-direction: column; gap: var(--spacing-lg);
+  overflow-y: auto; height: 100%;
+}
+.view-header h1 { font-size: var(--font-size-xl); color: var(--color-text-primary); margin: 0 0 var(--spacing-xs); }
+.view-header .muted { color: var(--color-text-secondary); font-size: var(--font-size-sm); margin: 0; }
+.muted { color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+
+.accounts-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--spacing-sm); }
+.account-row {
+  display: flex; align-items: center; gap: var(--spacing-sm);
+  background: var(--color-bg-secondary); border: 1px solid var(--color-border);
+  border-radius: var(--radius-md); padding: var(--spacing-sm) var(--spacing-md);
+}
+.account-row.active { border-color: var(--color-accent-primary); }
+.account-main {
+  flex: 1; display: flex; align-items: center; gap: var(--spacing-sm);
+  background: none; border: none; text-align: left; cursor: pointer;
+  color: var(--color-text-primary); font-size: var(--font-size-sm);
+  padding: var(--spacing-xs) 0;
+}
+.account-main:disabled { cursor: default; }
+.account-dot { color: var(--color-text-secondary); font-size: var(--font-size-md); line-height: 1; }
+.account-row.active .account-dot { color: var(--color-accent-primary); }
+.account-addr { font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-badge {
+  background: var(--color-accent-bg); color: var(--color-accent-primary);
+  font-size: var(--font-size-xs); font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; padding: 2px 8px; border-radius: var(--radius-full);
+}
+.account-remove {
+  background: none; border: none; color: var(--color-text-secondary);
+  font-size: var(--font-size-xs); cursor: pointer; padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--radius-sm); white-space: nowrap;
+}
+.account-remove:hover:not(:disabled) { background: var(--color-bg-tertiary); color: var(--color-error); }
+.account-remove:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.add-account-section {
+  background: var(--color-bg-secondary); border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg); padding: var(--spacing-md) 20px;
+  display: flex; flex-direction: column; gap: var(--spacing-sm);
+}
+.add-account-section h2 { font-size: var(--font-size-sm); color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin: 0; }
+
+.error-banner {
+  background: color-mix(in srgb, var(--color-error) 15%, transparent);
+  border: 1px solid var(--color-error); color: var(--color-error);
+  border-radius: var(--radius-md); padding: var(--spacing-sm) var(--spacing-md);
+  font-size: var(--font-size-sm);
+}
+
+.input {
+  width: 100%; box-sizing: border-box; padding: 10px 14px;
+  border-radius: var(--radius-md); border: 1px solid var(--color-border);
+  background: var(--color-bg-primary); color: var(--color-text-primary);
+  font-size: var(--font-size-sm); font-family: inherit;
+}
+.input:focus { outline: none; border-color: var(--color-accent-primary); }
+
+/* Removal confirmation — same overlay pattern as PIN setup. */
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+}
+.modal {
+  background: var(--color-bg-secondary); border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg); padding: 24px; max-width: 440px; width: 90%;
+  display: flex; flex-direction: column; gap: var(--spacing-sm);
+}
+.modal h2 { font-size: var(--font-size-lg); color: var(--color-text-primary); margin: 0; }
+.modal p { color: var(--color-text-secondary); font-size: var(--font-size-sm); margin: 0; }
+.export-key {
+  display: block; word-break: break-all; font-family: monospace;
+  font-size: var(--font-size-sm); background: var(--color-bg-primary);
+  border: 1px solid var(--color-border); border-radius: var(--radius-md);
+  padding: var(--spacing-sm) var(--spacing-md); color: var(--color-text-primary);
+  user-select: all;
+}
+.modal-actions { display: flex; gap: 12px; margin-top: var(--spacing-sm); justify-content: flex-end; }
