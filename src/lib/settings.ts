@@ -11,8 +11,8 @@
  */
 
 import { createSignal } from 'solid-js';
-import { validateCurrency } from './sanitize';
-import { scopedKey } from './walletScope';
+import { validateCurrency } from './sanitize.ts';
+import { scopedKey } from './walletScope.ts';
 
 export interface Settings {
   lang: string;

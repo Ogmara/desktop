@@ -5,6 +5,27 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.76.1] - 2026-09-04
+
+### Changed
+
+- Clarified `deviceEnc.ts`'s `getOrCreateDeviceId()` doc comment, which
+  called the value a *"stable per-install device identifier"* — misleading,
+  since it's actually per-ACCOUNT by construction (`deviceId` is a
+  `PER_ACCOUNT` key in `settings.ts`, transparently resolved to
+  `ogmara.deviceId::<address>`). Raised by the security audit that produced
+  1.76.0, as a possible cross-account privacy leak (a shared `device_id`
+  would publicly link two wallet addresses as the same physical device,
+  docs/specs/05-clients.md §5.5.1a) — investigated and confirmed the
+  underlying behavior was already correct (existing `PER_ACCOUNT`
+  classification + a legacy-adoption migration + a classification-guarding
+  test); only the comment was stale, most likely what produced the original
+  false alarm. Added `deviceIdScope.test.ts`, a behavioral regression test
+  (two accounts on one install resolve to two different `device_id` values,
+  stored under distinct address-suffixed keys) exercising the real modules
+  end to end, since the only existing coverage checked classification, not
+  runtime behavior. Same fix mirrored on web (0.76.2).
+
 ## [1.76.0] - 2026-09-04
 
 ### Security

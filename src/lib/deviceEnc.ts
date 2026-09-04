@@ -40,15 +40,25 @@ function hexToBytes(h: string): Uint8Array {
 }
 
 /**
- * Stable per-install device identifier (32-byte hex). Public, persisted once.
+ * Stable device identifier (32-byte hex), random rather than key-derived. Public.
  *
- * ACCEPTED SPEC DEVIATION (protocol §2.4): §2.4 defines `device_id` as the
- * device's Ed25519 *signing* key. The desktop built-in-wallet model has no
- * separate device signing key (it signs with the embedded wallet key directly),
- * so we mint a random stable per-install `device_id` instead. The node accepts
- * this (router validation only checks the value is 32-byte hex), and §2.4/§5.3
- * should acknowledge that built-in-wallet clients use a random per-install
- * device_id. Behavior is intentional — do not "fix" by deriving from a key.
+ * PER ACCOUNT, not per install — `deviceId` is a `PER_ACCOUNT` key in
+ * `settings.ts` (§5.5.1a: sharing a `device_id` across accounts would
+ * publicly link them), so `getSetting`/`setSetting` below transparently
+ * resolve it to `ogmara.deviceId::<address>` via `walletScope.ts`'s
+ * `scopedKey()`. This function itself has no scoping logic — it relies
+ * entirely on `settings.ts` already treating this key as account-scoped.
+ * Do not "simplify" by switching to a raw `localStorage` key: that would
+ * silently make it per-install again.
+ *
+ * ACCEPTED SPEC DEVIATION (protocol §2.4) — about DERIVATION, not scope:
+ * §2.4 defines `device_id` as the device's Ed25519 *signing* key. The
+ * desktop built-in-wallet model has no separate device signing key (it
+ * signs with the embedded wallet key directly), so we mint a random stable
+ * `device_id` instead. The node accepts this (router validation only checks
+ * the value is 32-byte hex), and §2.4/§5.3 should acknowledge that
+ * built-in-wallet clients use a random device_id. Behavior is intentional —
+ * do not "fix" by deriving from a key.
  */
 export function getOrCreateDeviceId(): string {
   let id = getSetting('deviceId');
