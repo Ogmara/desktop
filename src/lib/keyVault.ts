@@ -35,7 +35,7 @@ import {
   importChannelKeysFromVault,
 } from './channelCrypto';
 import { e2elog } from './e2eDebug';
-import { vaultActiveAddress } from './vault';
+import { currentSwitchGeneration } from './walletScope';
 
 let bk: Uint8Array | null = null;
 let bkWallet: string | null = null;
@@ -114,14 +114,21 @@ function scheduleBackup(): void {
 async function publishBackup(): Promise<void> {
   if (publishing) return;
   const sealWallet = walletAddress();
+  const sealGeneration = currentSwitchGeneration();
   const keyring = currentKeyring();
   if (isEmptyKeyring(keyring)) return; // nothing to back up
   const key = await ensureBackupKey();
   if (!key) return; // no wallet / user declined the signMessage
   // Guard a wallet switch between scheduling and now: only seal under the wallet
   // the keyring + backup key belong to (defence-in-depth alongside the disconnect
-  // timer cancel — never write account A's keys into account B's vault).
-  if (walletAddress() !== sealWallet || bkWallet !== sealWallet) return;
+  // timer cancel — never write account A's keys into account B's vault). The
+  // generation check is the tighter one: see `tryRestoreKeyVault()` above for
+  // why `walletAddress()` alone still leaves a narrow window, here on the
+  // publish side it would mean sealing A's keyring but sending the request
+  // under B's already-attached signer — publishing a backup B can't read AND
+  // clobbering B's own real one.
+  if (walletAddress() !== sealWallet || bkWallet !== sealWallet
+    || currentSwitchGeneration() !== sealGeneration) return;
   publishing = true;
   try {
     const sealed = sealKeyVault(key, keyring);
@@ -154,10 +161,42 @@ export function tryRestoreKeyVault(): void {
     // `importChannelKeysFromVault` write the SHARED DM/channel key caches, so
     // applying after a switch would load one account's conversation keys into
     // the other account's session.
-    const forWallet = vaultActiveAddress();
+    //
+    // MUST be `walletAddress()`, not `vaultActiveAddress()`. The two flip at
+    // different points of an account switch (`switchAccountInner` in
+    // auth.ts): `vaultActivate()` moves `vaultActiveAddress()` to the NEW
+    // account immediately, while `walletAddress()` and the API client's
+    // attached signer — the things `ensureBackupKey()` and `getKeyVault()`
+    // actually use — don't flip until teardown finishes, several awaits
+    // later. A restore that starts (e.g. from account A's own decrypt-miss,
+    // or WS traffic still arriving before its socket closes) inside that
+    // window used to capture `forWallet = vaultActiveAddress()` = the NEW
+    // account B while every fetch it performed was still authenticated as
+    // and derived from OLD account A — so it fetched and decrypted A's real
+    // vault successfully, and every "did the wallet change?" recheck below
+    // compared B against B and always passed. The result: A's real DM and
+    // channel content keys got merged into the shared caches while B was
+    // active, and B's UI could then decrypt — and send into — A's private
+    // channels it was never a member of. Gating on `walletAddress()` instead
+    // ties this guard to the same identity the fetch itself is bound to, so
+    // a switch invalidates the restore the instant the signer actually
+    // changes, matching `publishBackup()`'s existing (correct) guard below.
+    //
+    // `walletAddress()` alone still leaves a narrow residual window: it flips
+    // in the SAME statement as the API client's signer, late in the switch,
+    // but `tearDownAccountSession()`'s cache clears (the thing this restore
+    // would be poisoning) complete strictly BEFORE that point — so a restore
+    // resolving in the sliver between "caches cleared" and "walletAddress()
+    // flipped" would still read the OLD wallet and pass. `switchGeneration`
+    // (walletScope.ts) is bumped synchronously at the very TOP of the switch,
+    // before any of that, so it closes the window regardless of exactly when
+    // the async pieces interleave.
+    const forWallet = walletAddress();
+    const forGeneration = currentSwitchGeneration();
+    const stale = () => walletAddress() !== forWallet || currentSwitchGeneration() !== forGeneration;
     try {
       const key = await ensureBackupKey();
-      if (vaultActiveAddress() !== forWallet) { restoreState = 'idle'; return; }
+      if (stale()) { restoreState = 'idle'; return; }
       if (!key) {
         restoreState = 'idle'; // no wallet / declined popup — allow a later retry
         return;
@@ -170,12 +209,12 @@ export function tryRestoreKeyVault(): void {
         e2elog('keyvault: restore fetch failed (will retry)', { err: (e as Error)?.message });
         return;
       }
-      if (vaultActiveAddress() !== forWallet) { restoreState = 'idle'; return; }
+      if (stale()) { restoreState = 'idle'; return; }
       if (resp) {
         try {
           const keyring = openKeyVault(key, resp);
           // Re-checked immediately before the writes themselves.
-          if (vaultActiveAddress() !== forWallet) { restoreState = 'idle'; return; }
+          if (stale()) { restoreState = 'idle'; return; }
           const conv = importConvKeysFromVault(keyring.conv);
           const chan = importChannelKeysFromVault(keyring.chan);
           e2elog('keyvault: restored', { conv, chan });

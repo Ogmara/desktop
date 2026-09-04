@@ -5,6 +5,109 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.76.0] - 2026-09-04
+
+### Security
+
+- **Multi-account: a private channel from one account could leak into a
+  freshly switched-to account's sidebar — and, more seriously, that account
+  could actually decrypt and send messages into it despite never being a
+  member.** Reported after creating a brand-new wallet: its channel list
+  showed a private channel belonging to a prior account, and the channel's
+  history was fully readable and writable from the new account. This was two
+  layered bugs, found and fixed in sequence:
+
+  **UI/list-level leak (`Sidebar.tsx`):** the component mounts once for the
+  whole app session and never remounts on an account switch, but its
+  channel-list and DM-list `createResource`s had reactive sources that
+  didn't change value across a switch (a plain counter; a boolean that stays
+  `true`). SolidJS only discards a stale in-flight fetch's result when a
+  *newer* fetch has actually started, so a request begun under the old
+  account's signer — if it resolved after the switch (e.g. the 12s
+  background poll firing at the wrong moment) — got applied as the new
+  account's data, and a brand-new account's empty "joined channels" storage
+  auto-seeded any private channel found in it. Fixed by keying both
+  resources' fetch on the active wallet address (so a switch immediately
+  starts a fresh load Solid can supersede the old one with), and by having
+  each fetcher re-check the active wallet after its network await before
+  writing to the local cache — a stale fetch that runs to completion could
+  otherwise still poison the new account's cache directly. The same guard
+  was applied to the unread/mention/notification poll (wrong counters/tray
+  badge, not private content — lower severity, same race). Also fixed in the
+  same pass: channel-group sync from the node only ran for the first account
+  switched to per session (a latch keyed on "has this run yet" rather than
+  "for which account").
+
+  **E2E key-material leak (the actual cause of real decrypt/send access,**
+  **found on re-investigation after the UI fix alone didn't resolve the**
+  **report):** `channelKeys`/`convKeys` — the in-memory caches holding
+  actual decrypted DM/channel content keys — are shared, wallet-unscoped
+  module state. Several async chains fetch or establish a key over the
+  network and then write it into these shared caches, including
+  `keyVault.ts`'s background key-recovery-vault restore. Every one of them
+  guarded against a mid-flight account switch by re-checking *some*
+  "who's active" signal after their awaits — but the app has multiple such
+  signals that flip at different points of a switch (`vaultActiveAddress()`/
+  `getSigner()` flip the instant `vaultActivate()` returns; `walletAddress()`
+  and the API client's attached signer don't flip until teardown finishes,
+  several awaits later), and a guard tied to the wrong signal could compare
+  the new account against itself and never catch that a fetch was still
+  running as the OLD account. Net effect: a still-active account's real,
+  valid channel/DM key could land in the shared cache while a different
+  account was switching in, and from then on that account's own UI would
+  find and use it like any legitimately-held key — full decrypt, and a
+  genuine encrypted send using someone else's key.
+  Fixed with a new monotonic `switchGeneration` counter (`walletScope.ts`),
+  bumped synchronously as the literal first statement of every account
+  switch/disconnect — strictly before any of the older signals can move —
+  and threaded through as a single value stamped onto `DeviceCtx` at the
+  moment it's verified consistent, so every write into the shared key caches
+  (direct fetch, key establishment, and its internal first-write-wins
+  read-back, and the key-vault restore/backup path) is checked against the
+  SAME reference point rather than each call re-deriving its own generation
+  after its own awaits — which a dedicated re-audit pass found could still
+  be fooled by a switch landing between an outer call and its own nested
+  read-back.
+
+  A full project-standard audit pipeline (code audit + security audit, run
+  independently and in parallel, against the complete fix) then found two
+  more real gaps in the same family, both fixed in the same pass:
+  - The functions that resolve a key to actually SEND a message
+    (`ensureChannelKeyForSend`/`ensureConvKeyForSend`) were themselves
+    generation-safe, but their callers then fetched the signer to sign the
+    outgoing message with a SEPARATE, independent `getSigner()` call — not
+    tied to the same consistency check. A switch completing during the
+    (possibly slow, network-bound) key resolution could pair a real key that
+    correctly resolved to the OLD account with the signer of the NEW
+    account already active by the time send actually happened: a genuine
+    cross-account send, arrived at from the opposite direction of the fetch
+    fixed above. Fixed by returning the resolved `ctx.signer` — verified
+    consistent with the key at the same checkpoint — instead of an
+    independent later lookup, and rechecking freshness at every return path.
+  - `ensureDeviceEncBinding()` (device-encryption-key-to-wallet binding
+    publish/revoke), never touched by the fixes above, had the identical
+    early-flip-signal problem on its own separate identity check
+    (`vaultGetAddress()`, unguarded by the new generation counter) with no
+    recheck at all between resolving which wallet it was binding for and
+    the actual signed network publish/revoke — closed the same way.
+
+  Verified closed by four successive rounds of security audit + fix +
+  re-audit against the fixed tree, plus a fifth, independent full-pipeline
+  pass (code audit + security audit run separately, from scratch) that
+  found the two items above and nothing further.
+
+### Fixed
+
+- Two `establishing`-map dedup guards (channel key rotation/seed,
+  DM key establishment) cleared their in-flight entry unconditionally in a
+  `.finally()`, keyed only by channel/conversation id — a switch mid-flight
+  could let one account's settling promise delete a DIFFERENT (later)
+  caller's freshly-registered entry for the same id, forcing a redundant
+  duplicate establish/publish. Not a security issue (the generation guard
+  above already blocks the actual cross-account cache write) — found by the
+  same code-audit pass, fixed by only clearing an entry that still matches
+  the promise that registered it.
+
 ## [1.75.2] - 2026-09-04
 
 ### Fixed

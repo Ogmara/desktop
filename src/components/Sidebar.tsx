@@ -315,13 +315,38 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     if (r.view === 'dm-conversation' && r.params.address) lastDmRoute = `/dm/${r.params.address}`;
   });
 
-  // DM conversations for modern sidebar
+  // DM conversations for modern sidebar.
+  // Source includes walletAddress(): an account switch must invalidate any
+  // fetch still in flight for the PREVIOUS wallet. Solid's createResource only
+  // discards an out-of-order resolution when a newer load has actually been
+  // started (it compares the in-flight promise reference) — keying on a
+  // boolean that stays `true` across the switch (tab unchanged, still
+  // authenticated) never starts that newer load, so a conversation list
+  // fetched under the old signer can land and render after the switch.
   const [dmConversations, { refetch: refetchDmConvs }] = createResource(
-    () => activeTab() === 'dms' && authStatus() === 'ready',
-    async (shouldFetch) => {
-      if (!shouldFetch) return [];
+    () => (activeTab() === 'dms' && authStatus() === 'ready') ? walletAddress() : false,
+    async (walletKey) => {
+      if (!walletKey) return [];
       try {
         const resp = await getClient().getDmConversations({ limit: 50 });
+        // The account can switch again while this request is in flight.
+        // Solid already discards the STALE RESOURCE VALUE in that case (it
+        // tracks the in-flight promise reference), but this fetcher body
+        // keeps running to completion regardless — so without this check the
+        // cache write below would still land under the NOW-active wallet's
+        // key, poisoning it with the previous account's DM peer list.
+        //
+        // `walletAddress()` alone (not the `switchGeneration` counter used in
+        // channelCrypto.ts/dmCrypto.ts/keyVault.ts for actual key material)
+        // is sufficient HERE: this cache holds plaintext DM METADATA (peer
+        // addresses, timestamps) rather than key material, the write target
+        // (`dmCacheKey()` above) resolves `walletAddress()` live at write
+        // time regardless of this check, and there's no nested read-back call
+        // like the crypto layer's first-write-wins fetch — a single recheck
+        // right before the one write fully covers this function. Don't
+        // "upgrade" this to `switchGeneration` reflexively; it's not wrong to
+        // do so, just unnecessary complexity for UI list state.
+        if (walletAddress() !== walletKey) return getCachedDmConvs();
         for (const conv of resp.conversations) {
           if (!memberProfiles().has(conv.peer)) {
             resolveProfile(conv.peer).then((p) => {
@@ -559,12 +584,28 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
 
   const [channelVersion, setChannelVersion] = createSignal(0);
   const [hasLoadedOnce, setHasLoadedOnce] = createSignal(false);
+  // Source includes walletAddress(): without it, an account switch never
+  // starts a newer load, so a listChannels() response still in flight for the
+  // PREVIOUS account (e.g. the 12s poll firing right as the user switches)
+  // resolves after the switch and is applied as if it were the new account's
+  // list — including that account's private channels. syncJoinedWithApi()
+  // below then persists them into the (possibly brand-new) active wallet's
+  // own joined-channels storage, permanently, because a fresh account has
+  // `storageInitialized() === false` and seeds any channel_type===2 entry it
+  // is handed. See project memory: cross-account private channel leak,
+  // 2026-09-04.
   const [allChannels, { refetch: refetchChannels }] = createResource(
-    () => channelVersion(),
-    async () => {
+    () => [channelVersion(), walletAddress()] as const,
+    async ([, wallet]) => {
       try {
         const client = getClient();
         const resp = await client.listChannels(1, 50);
+        // See the walletKey check in the dmConversations fetcher above: this
+        // body keeps running after a mid-flight account switch even though
+        // Solid discards the stale RESOURCE value, so the cache write and the
+        // syncJoinedWithApi() effect below it must not see the old account's
+        // response as if it belonged to the now-active wallet.
+        if (walletAddress() !== wallet) return getCachedChannels();
         setCachedChannels(resp.channels);
         return resp.channels;
       } catch {
@@ -618,15 +659,21 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   // Auto-pull the synced objects (channel org, hidden DMs, followed topics)
   // once when the wallet becomes ready, and again on the `settings_changed`
   // WS nudge (l2-node 0.124.0+). Best-effort, LWW-guarded.
-  let orgPulled = false;
+  // Tracks the wallet the last pull ran for, not just whether one ran —
+  // `authStatus()` returns to the same 'ready' value on every account switch,
+  // so a plain boolean latch never re-arms and channel-org sync silently
+  // stops working for every account after the first one switched to in a
+  // session.
+  let orgPulledFor: string | null = null;
   const pullSyncedObjects = () => {
     vaultExportKey()
       .then((key) => { if (key) downloadChannelOrg(key).catch(() => {}); })
       .catch(() => {});
   };
   createEffect(() => {
-    if (authStatus() === 'ready' && !orgPulled) {
-      orgPulled = true;
+    const addr = walletAddress();
+    if (authStatus() === 'ready' && addr && orgPulledFor !== addr) {
+      orgPulledFor = addr;
       pullSyncedObjects();
     }
   });
@@ -867,6 +914,12 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   const pollData = async () => {
     if (authStatus() !== 'ready') return;
+    // Captured up front: if the account switches while this poll is in
+    // flight, its results belong to the OLD account and must not be applied
+    // to counters/badges the UI now attributes to whichever account is
+    // active when the poll resolves (same class of cross-account bug as the
+    // channel/DM list leak this poll's refetchChannels() call feeds into).
+    const polledFor = walletAddress();
     try {
       const client = getClient();
       const lastSeenNotif = parseInt(scopedGet('ogmara.lastSeenNotifTs') || '0', 10);
@@ -878,6 +931,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         // Refresh channel list
         refetchChannels(),
       ]);
+      if (walletAddress() !== polledFor) return;
       setUnreadCounts(unread.unread ?? {});
       setMentionCounts(unread.mentions ?? {});
       const dmCounts = dmUnread.unread ?? {};

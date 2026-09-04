@@ -22,20 +22,34 @@ import {
 } from '@ogmara/sdk';
 import { decode } from '@msgpack/msgpack';
 import { getClient } from './api';
-import { getSigner } from './auth';
 import { e2elog, withRetry } from './e2eDebug';
 import {
   deviceCtx, toHex, fromHex, targetKey, toBytes,
-  notifyKeyringChanged, requestVaultRestore,
+  notifyKeyringChanged, requestVaultRestore, ctxStillFresh,
   type DeviceCtx, type Target, type DmDisplay,
 } from './dmCrypto';
+import { currentSwitchGeneration } from './walletScope';
 
 /** Channel group-key cache: `${channelScopeHex}:${epoch}` → 32-byte key. */
 const channelKeys = new Map<string, Uint8Array>();
 const ckey = (scopeHex: string, epoch: number) => `${scopeHex}:${epoch}`;
 
-/** Cache a channel epoch key and signal the vault layer to back it up (P3). */
-function cacheChannelKey(k: string, key: Uint8Array): void {
+/**
+ * Cache a channel epoch key and signal the vault layer to back it up (P3).
+ *
+ * `forGeneration` MUST be captured by the caller before its network
+ * fetch/establish started, not read fresh here — this is the single write
+ * path into the SHARED, wallet-unscoped `channelKeys` map, and every caller
+ * (`fetchChannelKey`, `establishChannelKey`) awaits a network round trip
+ * first. If an account switch happens during that await, writing anyway
+ * would hand the NEW account whatever channel key the OLD account's
+ * in-flight fetch/establish just resolved to — the same cross-account E2E
+ * key leak fixed in `keyVault.ts`'s `tryRestoreKeyVault()`, just reachable
+ * through the plain decrypt/send path instead of the vault-restore path.
+ * See project memory: cross-account key leak, 2026-09-04.
+ */
+function cacheChannelKey(k: string, key: Uint8Array, forGeneration: number): void {
+  if (currentSwitchGeneration() !== forGeneration) return;
   channelKeys.set(k, key);
   notifyKeyringChanged();
 }
@@ -146,7 +160,7 @@ async function fetchChannelKey(
     const wrapped: WrappedKey = { ephPub: fromHex(env.eph_pub), nonce: fromHex(env.nonce), wrapped: fromHex(env.wrapped) };
     const key = unwrapConvKey(wrapped, ctx.encPriv, scope); // salt = channel scope (matches wrap)
     const ep = resp.epoch ?? env.epoch;
-    cacheChannelKey(ckey(scopeHex, ep), key);
+    cacheChannelKey(ckey(scopeHex, ep), key, ctx.generation);
     return { key, epoch: ep };
   } catch (e) {
     e2elog('channel fetchKey: unwrap FAILED → corrupt', { channelId, epoch, err: (e as Error)?.message });
@@ -184,7 +198,7 @@ async function establishChannelKey(
   const targets = await getChannelTargets(channelId);
   const key = randomConvKey();
   await wrapKeyToMembers(ctx, channelId, scope, scopeHex, key, epoch, targets);
-  cacheChannelKey(ckey(scopeHex, epoch), key);
+  cacheChannelKey(ckey(scopeHex, epoch), key, ctx.generation);
   // FWW read-back: adopt the node's stored key if ours lost a concurrent establish.
   const confirmed = await fetchChannelKey(ctx, channelId, scope, scopeHex, epoch);
   if (typeof confirmed !== 'string' && !bytesEq(confirmed.key, key)) {
@@ -261,8 +275,16 @@ export async function rotateChannelKey(channelId: number, floor: number): Promis
   try {
     let inflight = establishing.get(channelId);
     if (!inflight) {
-      inflight = establishChannelKey(ctx, channelId, scope, scopeHex, targetEpoch)
-        .finally(() => establishing.delete(channelId));
+      const started: Promise<{ key: Uint8Array; epoch: number }> = establishChannelKey(
+        ctx, channelId, scope, scopeHex, targetEpoch,
+      ).finally(() => {
+        // Only clear OUR OWN entry — a switch mid-establish can leave a
+        // different (later) caller's promise registered under the same
+        // `channelId` by the time this one settles; deleting unconditionally
+        // would drop that newer entry and force a redundant re-establish.
+        if (establishing.get(channelId) === started) establishing.delete(channelId);
+      });
+      inflight = started;
       establishing.set(channelId, inflight);
     }
     await inflight;
@@ -285,10 +307,19 @@ export async function rotateChannelKey(channelId: number, floor: number): Promis
  *   matching the node's group-key model; see l2-node 0.72.0). Rotation to the floor is
  *   NOT gated (any member may, per `rotateChannelKey`).
  * @param floor lowest epoch we may encrypt under (from the channel's `key_epoch_floor`).
+ *
+ * Returns `ctx.signer` alongside the key — NOT a signal for the caller to
+ * independently re-fetch with `getSigner()`, which could by then belong to a
+ * different account than the key just resolved (see `ctxStillFresh()` in
+ * dmCrypto.ts). A stale `ctx` at any of the return points below now yields
+ * `'waiting'`, the same state callers already treat as retryable, rather than
+ * silently pairing an old account's real key with a fresh (new account's)
+ * signer — a cross-account send that no single generation check inside key
+ * resolution alone would catch.
  */
 export async function ensureChannelKeyForSend(
   channelId: number, canEstablish: boolean, floor = 0,
-): Promise<{ convKey: Uint8Array; epoch: number } | 'waiting' | null> {
+): Promise<{ convKey: Uint8Array; epoch: number; signer: NonNullable<DeviceCtx['signer']> } | 'waiting' | null> {
   const ctx = await deviceCtx();
   if (!ctx) return null;
   const scope = computeChannelScope(channelId);
@@ -297,7 +328,8 @@ export async function ensureChannelKeyForSend(
   const best = await bestChannelKey(ctx, channelId, scope, scopeHex);
   if (best && best.epoch >= floor) {
     void coverChannelMembers(channelId);
-    return { convKey: best.key, epoch: best.epoch };
+    if (!ctxStillFresh(ctx)) return 'waiting';
+    return { convKey: best.key, epoch: best.epoch, signer: ctx.signer! };
   }
 
   if (best) {
@@ -305,7 +337,10 @@ export async function ensureChannelKeyForSend(
     // Rotate (any member may) and use the post-rotation key.
     await rotateChannelKey(channelId, floor);
     const after = cachedLatest(scopeHex);
-    if (after && after.epoch >= floor) return { convKey: after.key, epoch: after.epoch };
+    if (after && after.epoch >= floor) {
+      if (!ctxStillFresh(ctx)) return 'waiting';
+      return { convKey: after.key, epoch: after.epoch, signer: ctx.signer! };
+    }
     return 'waiting';
   }
 
@@ -314,12 +349,18 @@ export async function ensureChannelKeyForSend(
   const targetEpoch = Math.max(1, floor);
   let inflight = establishing.get(channelId);
   if (!inflight) {
-    inflight = establishChannelKey(ctx, channelId, scope, scopeHex, targetEpoch)
-      .finally(() => establishing.delete(channelId));
+    const started: Promise<{ key: Uint8Array; epoch: number }> = establishChannelKey(
+      ctx, channelId, scope, scopeHex, targetEpoch,
+    ).finally(() => {
+      // See `rotateChannelKey()`'s identical guard: only clear OUR OWN entry.
+      if (establishing.get(channelId) === started) establishing.delete(channelId);
+    });
+    inflight = started;
     establishing.set(channelId, inflight);
   }
   const res = await inflight;
-  return { convKey: res.key, epoch: res.epoch };
+  if (!ctxStillFresh(ctx)) return 'waiting';
+  return { convKey: res.key, epoch: res.epoch, signer: ctx.signer! };
 }
 
 /** Build a signed, encrypted ChatMessage for a private channel. `floor` is the
@@ -339,9 +380,7 @@ export async function buildEncryptedChannelMsg(
   const established = await ensureChannelKeyForSend(channelId, canEstablish, floor);
   if (established === 'waiting') return 'waiting';
   if (!established) throw new Error('device not ready for encrypted channels');
-  const signer = getSigner();
-  if (!signer) throw new Error('no signer');
-  return buildEncryptedChannelMessage(signer, {
+  return buildEncryptedChannelMessage(established.signer, {
     channelId, convKey: established.convKey, epoch: established.epoch,
     text, replyTo: opts?.replyTo, mentions: opts?.mentions,
     contentRating: opts?.contentRating, attachments: opts?.attachments,

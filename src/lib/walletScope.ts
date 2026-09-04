@@ -37,6 +37,40 @@ const MIGRATED_MARKER = 'ogmara.walletScope.migrated';
 let activeWallet: string | null = null;
 
 /**
+ * Monotonic counter, bumped synchronously at the very START of every account
+ * switch/disconnect — before `vaultActivate()`, before any await.
+ *
+ * Exists because a switch does NOT flip every "who's active" signal at once:
+ * `vaultActiveAddress()`/`vaultGetSigner()` (vault.ts) flip the instant
+ * `vaultActivate()` returns, while `walletAddress()` (auth.ts) and the API
+ * client's attached signer don't flip until `tearDownAccountSession()`
+ * finishes, several awaits later. An async chain that reads one of those
+ * signals, captures it, awaits, and rechecks the SAME signal can still pass
+ * every check while straddling the switch, if the signal it happens to use
+ * hasn't flipped yet at capture time but has by the time it resolves — or
+ * vice versa. A generation bumped before ANY of those signals move closes
+ * that regardless of which one a given call site reads, because it changes
+ * strictly before the earliest of them does.
+ *
+ * Found via a real cross-account E2E key leak (2026-09-04): `keyVault.ts`'s
+ * restore guarded on `vaultActiveAddress()`, which had already flipped to
+ * the new account while the fetch itself was still running as the OLD
+ * account (tied to `walletAddress()`/the signer) — so the guard always
+ * compared the new account against itself and never caught the mismatch.
+ */
+let switchGeneration = 0;
+
+/** Bump the generation. Call FIRST in a switch/disconnect, before anything else. */
+export function bumpSwitchGeneration(): number {
+  return ++switchGeneration;
+}
+
+/** The generation as of right now — capture before an async chain, recheck after. */
+export function currentSwitchGeneration(): number {
+  return switchGeneration;
+}
+
+/**
  * Caches and armed timers that must be dropped the instant the active wallet
  * changes.
  *

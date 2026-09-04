@@ -28,6 +28,7 @@ import { getClient } from './api';
 import { getSigner, walletAddress } from './auth';
 import { getOrCreateEncKeypair, getOrCreateDeviceId } from './deviceEnc';
 import { e2elog, withRetry } from './e2eDebug';
+import { currentSwitchGeneration } from './walletScope';
 
 export const toHex = (b: Uint8Array): string =>
   Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
@@ -69,8 +70,15 @@ export function notifyKeyringChanged(): void {
 export function requestVaultRestore(): void {
   vaultRestoreRequester?.();
 }
-/** Cache a DM conv_key and signal the vault layer to back it up. */
-function cacheConvKey(k: string, key: Uint8Array): void {
+/**
+ * Cache a DM conv_key and signal the vault layer to back it up.
+ *
+ * `forGeneration` MUST be captured by the caller before its network fetch/
+ * establish started — see `cacheChannelKey()` in channelCrypto.ts for the
+ * full rationale (this is the DM-side twin of the same shared-cache leak).
+ */
+function cacheConvKey(k: string, key: Uint8Array, forGeneration: number): void {
+  if (currentSwitchGeneration() !== forGeneration) return;
   convKeys.set(k, key);
   notifyKeyringChanged();
 }
@@ -124,14 +132,71 @@ export interface DeviceCtx {
   encPriv: Uint8Array;
   deviceId: string;
   wallet: string;
+  /**
+   * The switch generation (walletScope.ts) as of the moment this ctx was
+   * verified consistent. Callers that hold a `ctx` across further awaits —
+   * `establishChannelKey`/`establishMyKey` fan out into several network round
+   * trips, including a NESTED `fetchChannelKey`/`fetchConvKey` read-back call
+   * — MUST stamp their eventual `cacheChannelKey`/`cacheConvKey` write with
+   * `ctx.generation`, not a freshly re-read `currentSwitchGeneration()`.
+   * A nested call capturing its OWN fresh generation at ITS OWN entry checks
+   * "did the generation change during MY one round trip", which trivially
+   * passes even when `ctx` itself went stale several hops earlier — the
+   * original account's `encPriv`/`signer` would then get used, and the
+   * resulting key written into the shared cache, entirely on schedule as far
+   * as that inner call's own (too-late) check is concerned. Threading one
+   * generation value, stamped at ctx creation, closes that regardless of how
+   * many nested calls it passes through. See project memory: cross-account
+   * key leak, 2026-09-04 (round 3).
+   */
+  generation: number;
 }
 
 export async function deviceCtx(): Promise<DeviceCtx | null> {
   const signer = getSigner();
   const wallet = walletAddress();
   if (!signer || !wallet) return null;
+  const generation = currentSwitchGeneration();
+  // `getOrCreateEncKeypair()` resolves ITS OWN account from `vaultActiveAddress()`
+  // (deviceEnc.ts), which — like `signer`/`getSigner()` above — flips to the new
+  // account earlier in an account switch than `wallet`/`walletAddress()` does
+  // (see walletScope.ts's `bumpSwitchGeneration()` doc). A switch straddling
+  // this await would otherwise return a ctx mixing accounts: `signer`/`encPriv`
+  // already the NEW account, `wallet` still the OLD one — and callers use
+  // `wallet` to fetch "my other devices" to wrap a freshly-established content
+  // key to (`getConvTargets`/`getChannelTargets` below), so a mismatched ctx
+  // would publish the NEW account's real key wrapped to the OLD account's
+  // registered devices. Recheck and fail closed, same as a missing signer/wallet.
   const kp = await getOrCreateEncKeypair();
-  return { signer, encPriv: kp.privateKey, deviceId: getOrCreateDeviceId(), wallet };
+  if (currentSwitchGeneration() !== generation || getSigner() !== signer || walletAddress() !== wallet) {
+    return null;
+  }
+  return { signer, encPriv: kp.privateKey, deviceId: getOrCreateDeviceId(), wallet, generation };
+}
+
+/**
+ * Is `ctx` still valid for the CURRENTLY active account?
+ *
+ * `deviceCtx()` only guarantees consistency at the instant it returns. A
+ * caller that resolves a content key through several more awaits (a network
+ * fetch, a full key-establishment round trip) before actually USING `ctx`
+ * — most importantly `ctx.signer`, to author and publish something — must
+ * recheck this immediately before that use. Content-key resolution itself is
+ * already generation-gated at every cache WRITE (`cacheChannelKey`/
+ * `cacheConvKey`), but those functions still RETURN the key they computed
+ * even when the write was skipped as stale, so a caller could resolve a real,
+ * valid key belonging to the OLD account and then pair it with a signer
+ * fetched independently and fresh — which, if a switch completed in the
+ * meantime, belongs to the NEW account. That combination (old account's key,
+ * new account's signer) is exactly the cross-account send this whole fix
+ * exists to prevent, and it isn't caught by any single generation check
+ * inside key resolution — only a check at the point of use is. See project
+ * memory: cross-account key leak, 2026-09-04 (round 5).
+ */
+export function ctxStillFresh(ctx: DeviceCtx): boolean {
+  return currentSwitchGeneration() === ctx.generation
+    && getSigner() === ctx.signer
+    && walletAddress() === ctx.wallet;
 }
 
 /**
@@ -226,7 +291,7 @@ async function establishMyKey(
   }
   const convKey = randomConvKey();
   await wrapMyKeyToTargets(ctx, conversationId, convIdHex, recipient, convKey, epoch, targets);
-  cacheConvKey(cacheKey(convIdHex, epoch, ctx.wallet), convKey);
+  cacheConvKey(cacheKey(convIdHex, epoch, ctx.wallet), convKey, ctx.generation);
   const confirmed = await fetchConvKey(ctx, conversationId, convIdHex, ctx.wallet, epoch);
   if (typeof confirmed !== 'string' && !bytesEq(confirmed.key, convKey)) {
     e2elog('establish: adopted node FWW key (local lost the race)', { convIdHex, epoch });
@@ -347,7 +412,7 @@ async function fetchConvKey(
     };
     const key = unwrapConvKey(wrapped, ctx.encPriv, conversationId);
     const ep = resp.epoch ?? env.epoch;
-    cacheConvKey(cacheKey(convIdHex, ep, author), key);
+    cacheConvKey(cacheKey(convIdHex, ep, author), key, ctx.generation);
     e2elog('fetchConvKey: unwrapped OK', { author, epoch: ep, deviceId: ctx.deviceId });
     return { key, epoch: ep };
   } catch (e) {
@@ -358,10 +423,19 @@ async function fetchConvKey(
   }
 }
 
-/** Ensure MY sending key for `recipient` (establishing it if first message). */
+/**
+ * Ensure MY sending key for `recipient` (establishing it if first message).
+ *
+ * Returns `ctx.signer` alongside the key — NOT a signal for the caller to
+ * independently re-fetch with `getSigner()`, which could by then belong to a
+ * different account than the key just resolved. `null`/`'waiting'`-shaped
+ * failure isn't used here (unlike the channel equivalent) because a DM key
+ * either resolves or throws; a stale `ctx` at the final checkpoint throws the
+ * same "device not ready" the caller already treats as retryable.
+ */
 export async function ensureConvKeyForSend(
   recipient: string,
-): Promise<{ convKey: Uint8Array; epoch: number; conversationId: Uint8Array } | null> {
+): Promise<{ convKey: Uint8Array; epoch: number; conversationId: Uint8Array; signer: NonNullable<DeviceCtx['signer']> } | null> {
   const ctx = await deviceCtx();
   if (!ctx) return null;
   const conversationId = computeConversationId(ctx.wallet, recipient);
@@ -370,31 +444,38 @@ export async function ensureConvKeyForSend(
   const cached = cachedLatest(convIdHex, ctx.wallet);
   if (cached) {
     void coverDevices(ctx, conversationId, convIdHex, recipient, cached.key, cached.epoch);
-    return { convKey: cached.key, epoch: cached.epoch, conversationId };
+    if (!ctxStillFresh(ctx)) return null;
+    return { convKey: cached.key, epoch: cached.epoch, conversationId, signer: ctx.signer! };
   }
 
   const fetched = await fetchConvKey(ctx, conversationId, convIdHex, ctx.wallet);
   if (typeof fetched !== 'string') {
     void coverDevices(ctx, conversationId, convIdHex, recipient, fetched.key, fetched.epoch);
-    return { convKey: fetched.key, epoch: fetched.epoch, conversationId };
+    if (!ctxStillFresh(ctx)) return null;
+    return { convKey: fetched.key, epoch: fetched.epoch, conversationId, signer: ctx.signer! };
   }
 
   // Establish at a FRESH epoch above anything either side has — never re-establish
   // an existing epoch (re-collides with a polluted epoch; read-back adopts a stale key).
   let inflight = establishing.get(convIdHex);
   if (!inflight) {
-    inflight = (async () => {
+    const started: Promise<{ key: Uint8Array; epoch: number }> = (async () => {
       const [mine, theirs] = await Promise.all([
         latestEpochFor(ctx, conversationId, convIdHex, ctx.wallet),
         latestEpochFor(ctx, conversationId, convIdHex, recipient),
       ]);
       const epoch = Math.max(mine, theirs, 0) + 1;
       return establishMyKey(ctx, conversationId, convIdHex, recipient, epoch);
-    })().finally(() => establishing.delete(convIdHex));
+    })().finally(() => {
+      // Only clear OUR OWN entry — see the identical guard in channelCrypto.ts.
+      if (establishing.get(convIdHex) === started) establishing.delete(convIdHex);
+    });
+    inflight = started;
     establishing.set(convIdHex, inflight);
   }
   const res = await inflight;
-  return { convKey: res.key, epoch: res.epoch, conversationId };
+  if (!ctxStillFresh(ctx)) return null;
+  return { convKey: res.key, epoch: res.epoch, conversationId, signer: ctx.signer! };
 }
 
 /** Build a signed, encrypted DirectMessage envelope for `recipient`. `media` (P5)
@@ -408,9 +489,7 @@ export async function buildEncryptedDm(
 ): Promise<Uint8Array> {
   const established = await ensureConvKeyForSend(recipient);
   if (!established) throw new Error('device not ready for encrypted DMs');
-  const signer = getSigner();
-  if (!signer) throw new Error('no signer');
-  return buildEncryptedDirectMessage(signer, {
+  return buildEncryptedDirectMessage(established.signer, {
     recipient,
     convKey: established.convKey,
     epoch: established.epoch,
@@ -432,9 +511,7 @@ export async function buildEncryptedDmEditEnvelope(
 ): Promise<Uint8Array> {
   const established = await ensureConvKeyForSend(recipient);
   if (!established) throw new Error('device not ready for encrypted DMs');
-  const signer = getSigner();
-  if (!signer) throw new Error('no signer');
-  return buildEncryptedDmEdit(signer, {
+  return buildEncryptedDmEdit(established.signer, {
     recipient,
     msgId,
     convKey: established.convKey,

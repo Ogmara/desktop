@@ -27,6 +27,7 @@ import {
   wipeWalletScope,
   runWalletScopeMigrationOnce,
   runWalletSwitchResets,
+  bumpSwitchGeneration,
 } from './walletScope';
 import { vaultMigrationsReady } from './vaultMigration';
 
@@ -231,6 +232,13 @@ export async function switchAccount(addr: string): Promise<void> {
 async function switchAccountInner(addr: string): Promise<void> {
   if (addr === walletAddress()) return;
 
+  // FIRST, synchronously, before `vaultActivate()` — see walletScope.ts's
+  // `bumpSwitchGeneration()` doc. `vaultActivate()` flips `vaultActiveAddress()`
+  // as a side effect of the very next line, ahead of every other signal this
+  // switch will eventually update — a generation bumped any later would still
+  // leave a window where an in-flight async chain from the OLD account could
+  // read the NEW `vaultActiveAddress()` and mistake it for its own.
+  bumpSwitchGeneration();
   runWalletSwitchResets();
 
   const loaded = await vaultActivate(addr);
@@ -268,6 +276,8 @@ export async function disconnectWallet(): Promise<void> {
   // Capture before anything clears it — the wipe needs to know which namespace
   // to remove, and `walletAddress()` is nulled part-way through.
   const leaving = walletAddress();
+  // FIRST, synchronously — see walletScope.ts's `bumpSwitchGeneration()` doc.
+  bumpSwitchGeneration();
   // Cancel armed settings-sync uploads before tearing anything down: a timer
   // firing mid-teardown resolves `vaultExportKey()` and would seal this
   // account's data under whatever key is current by then, or upload it after

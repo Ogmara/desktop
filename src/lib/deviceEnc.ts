@@ -26,6 +26,7 @@ import { vaultActiveAddress, vaultGetAddress } from './vault';
 import { signMessage } from './klever';
 import { getClient } from './api';
 import { e2elog, withRetry } from './e2eDebug';
+import { currentSwitchGeneration } from './walletScope';
 
 const ENC_PRIV_KEY = 'ogmara.vault.enc_private_key';
 
@@ -158,9 +159,11 @@ async function revokeStaleEncKeys(
   deviceId: string,
   currentEncPub: string,
   sign: WalletSignFn,
+  isStale: () => boolean,
 ): Promise<void> {
   try {
     const { keys } = await getClient().getEncKeys(wallet);
+    if (isStale()) return;
     const did = deviceId.toLowerCase();
     const cur = currentEncPub.toLowerCase();
     const stale = keys.filter(
@@ -168,12 +171,17 @@ async function revokeStaleEncKeys(
     );
     const network = await getClient().getNetwork();
     for (const k of stale) {
+      if (isStale()) return;
       const revoke = await buildDeviceEncRevoke({
         walletAddress: wallet,
         encPubHex: k.enc_pub,
         walletSign: sign,
         network,
       });
+      // `sign` calls `signMessage()` live, at whatever moment `buildDeviceEncRevoke`
+      // invokes it — re-check right before the publish, the actual network write,
+      // not just before starting to build this one revoke.
+      if (isStale()) return;
       await withRetry(() => getClient().publishEncKeyEnvelope(wallet, revoke), 'revoke stale enc-key');
       e2elog('revoked stale enc_pub', { deviceId, staleEncPub: k.enc_pub });
     }
@@ -192,6 +200,19 @@ async function revokeStaleEncKeys(
 export async function ensureDeviceEncBinding(): Promise<void> {
   const wallet = vaultGetAddress();
   if (!wallet) return;
+  // Captured alongside `wallet` — see walletScope.ts's `bumpSwitchGeneration()`
+  // doc. `vaultGetAddress()` alone (like `vaultActiveAddress()`) flips to the
+  // NEW account the instant `vaultActivate()` returns, well before this
+  // function's `sign` closure — which calls `signMessage()` fresh, live, at
+  // whatever moment `buildDeviceEncBinding`/`revokeStaleEncKeys` invoke it —
+  // would actually sign with the new account's real signer. A switch landing
+  // during any of this function's several awaits could otherwise publish an
+  // enc-key binding envelope that CLAIMS the old account's wallet/enc_pub but
+  // is SIGNED by the new account, or revoke the old account's real enc_pub
+  // using the new account's signature. `stale()` below is rechecked at every
+  // remaining await, including immediately before the two network writes.
+  const generation = currentSwitchGeneration();
+  const stale = () => currentSwitchGeneration() !== generation || vaultGetAddress() !== wallet;
 
   const kp = await getOrCreateEncKeypair();
   // The keypair is resolved from the CURRENT account, which may have changed
@@ -199,7 +220,7 @@ export async function ensureDeviceEncBinding(): Promise<void> {
   // on would bind the NEW account's enc_pub to the OLD account's wallet, and
   // the revoke below would retire the old account's real key, making every
   // envelope already wrapped to it permanently undecryptable.
-  if (vaultGetAddress() !== wallet) return;
+  if (stale()) return;
   const marker = `v2:${wallet}:${kp.publicKeyHex}`;
   const deviceId = getOrCreateDeviceId();
 
@@ -221,6 +242,10 @@ export async function ensureDeviceEncBinding(): Promise<void> {
     if (getSetting('encKeyBound') === marker) return;
   }
   if (registryOk && getSetting('encKeyBound') === marker) return;
+  // Re-checked immediately before the network writes below: everything above
+  // this point only READ state; `signMessage()` (inside `sign`) and the
+  // publish are where a stale `wallet`/`kp` would actually reach the network.
+  if (stale()) return;
 
   // signMessage returns 128-char hex; the SDK normalizes it internally.
   const sign: WalletSignFn = (claim) => signMessage(claim);
@@ -231,14 +256,15 @@ export async function ensureDeviceEncBinding(): Promise<void> {
     walletSign: sign,
     network: await getClient().getNetwork(),
   });
+  if (stale()) return;
   await withRetry(() => getClient().publishEncKeyEnvelope(wallet, envelope), 'publish binding');
   e2elog('published binding', { deviceId, encPub: kp.publicKeyHex });
   // Retire any stale enc_pub for this device AFTER the new key is registered, so
   // there is never a window with zero active keys for the device.
   // Re-checked before the DESTRUCTIVE step: revocation is not reversible and
   // the publish above may itself have taken a while.
-  if (vaultGetAddress() !== wallet) return;
-  await revokeStaleEncKeys(wallet, deviceId, kp.publicKeyHex, sign);
+  if (stale()) return;
+  await revokeStaleEncKeys(wallet, deviceId, kp.publicKeyHex, sign, stale);
   setSetting('encKeyBound', marker);
 }
 
