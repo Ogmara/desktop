@@ -323,7 +323,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   // boolean that stays `true` across the switch (tab unchanged, still
   // authenticated) never starts that newer load, so a conversation list
   // fetched under the old signer can land and render after the switch.
-  const [dmConversations, { refetch: refetchDmConvs }] = createResource(
+  const [dmConversations, { refetch: refetchDmConvs, mutate: mutateDmConvs }] = createResource(
     () => (activeTab() === 'dms' && authStatus() === 'ready') ? walletAddress() : false,
     async (walletKey) => {
       if (!walletKey) return [];
@@ -594,7 +594,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   // `storageInitialized() === false` and seeds any channel_type===2 entry it
   // is handed. See project memory: cross-account private channel leak,
   // 2026-09-04.
-  const [allChannels, { refetch: refetchChannels }] = createResource(
+  const [allChannels, { refetch: refetchChannels, mutate: mutateAllChannels }] = createResource(
     () => [channelVersion(), walletAddress()] as const,
     async ([, wallet]) => {
       try {
@@ -619,6 +619,24 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     },
     { initialValue: getCachedChannels() },
   );
+
+  // The instant the wallet changes, clear both list resources' DISPLAYED
+  // value to THIS account's own cache instead of leaving the PREVIOUS
+  // account's real channel/DM list on screen for the one round trip it
+  // takes the fresh fetch — already correctly re-triggered by including
+  // walletAddress() in each resource's source (see the comments on
+  // `allChannels`/`dmConversations` above) — to resolve. Without this,
+  // `createResource` keeps rendering its last-resolved value across a
+  // source change; since `Sidebar` never unmounts on a switch, that stale
+  // value is the other account's real private-channel list / DM peer list,
+  // not an inert placeholder. `mutate()` only changes what's rendered — it
+  // doesn't skip, cancel, or interfere with the real fetch the source
+  // change already started.
+  createEffect(() => {
+    walletAddress(); // establishes the reactive dependency
+    mutateAllChannels(getCachedChannels());
+    mutateDmConvs(getCachedDmConvs());
+  });
 
   // Sync joined set with API data whenever the channel list refreshes.
   // Handles first-time migration and auto-adds private channels.
@@ -952,8 +970,25 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     } catch { /* ignore */ }
   };
   createEffect(() => {
+    // Track walletAddress() too, not just authStatus() — authStatus() stays
+    // 'ready' across an account switch (same value in, same value out), so a
+    // switch never re-triggered this effect on its own. The OLD interval
+    // just kept ticking on its OLD 12s cadence, and until it happened to
+    // fire again, the tray badge / sidebar unread counts kept showing
+    // whatever the PREVIOUS account's last poll computed — up to 12 seconds
+    // of a stale cross-account number on screen, and indefinitely on a full
+    // disconnect (authStatus() -> 'none' cleared the timer but never zeroed
+    // the display). Re-arming here, keyed on the wallet, closes both: a
+    // switch restarts polling immediately under the new account, and the
+    // reset below means nothing stale is ever left on screen in between.
+    const wallet = walletAddress();
     if (pollTimer) clearInterval(pollTimer);
-    if (authStatus() === 'ready') {
+    setUnreadCounts({});
+    setMentionCounts({});
+    setDmUnreadTotal(0);
+    setNotifUnread(0);
+    updateTrayBadge(0);
+    if (authStatus() === 'ready' && wallet) {
       pollData();
       pollTimer = setInterval(pollData, 12000);
     }

@@ -5,6 +5,35 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.76.2] - 2026-09-04
+
+### Fixed
+
+- **Tray badge / unread counts stayed on the PREVIOUS account's numbers
+  after a multi-account switch**, sometimes indefinitely. The poll timer
+  that drives them was only re-armed on `authStatus()`, which stays
+  `'ready'` across a switch (same value in, same value out) — so switching
+  never re-triggered it immediately; the old interval just kept ticking on
+  its old 12s schedule, and a full disconnect cleared the timer without
+  ever zeroing the display. Now also tracks `walletAddress()` and resets
+  every counter + the tray badge to zero the instant the wallet changes,
+  before conditionally re-arming — closes the window entirely rather than
+  waiting up to 12s for it to self-correct.
+- **The sidebar briefly showed the PREVIOUS account's real channel/DM list
+  for one network round trip after a switch** ("blink"), reported by a user
+  during verification of 1.76.0's fix. `Sidebar` never unmounts on a
+  switch, and while the channel-list/DM-list resources were already
+  correctly re-fetching under the new wallet (1.76.0), SolidJS's
+  `createResource` keeps rendering its last-resolved value until the new
+  fetch resolves — so that resolved value was genuinely the other
+  account's private-channel/DM data, not an inert placeholder. Fixed by
+  immediately `mutate()`-ing both resources to the newly-active wallet's
+  own local cache the instant the wallet changes, so the display flips
+  before the fetch even starts rather than after it finishes.
+- `news_following_empty` translation key was missing from every locale, so
+  the empty "Following" feed showed the raw i18n key instead of translated
+  text. Added across all 7 languages. Same fix mirrored on web.
+
 ## [1.76.1] - 2026-09-04
 
 ### Changed
