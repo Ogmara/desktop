@@ -16,6 +16,8 @@ import { resolveIsEncrypted } from '../lib/channelEncryption';
 import { buildEncryptedChannelMsg, decryptChannelMessage, coverChannelMembers, rotateChannelKey } from '../lib/channelCrypto';
 import type { DmDisplay } from '../lib/dmCrypto';
 import { MentionPopover } from '../components/MentionPopover';
+import { CommandPopover } from '../components/CommandPopover';
+import { BotBadge } from '../components/BotBadge';
 import { navigate } from '../lib/router';
 import { setSetting } from '../lib/settings';
 import { FormattedText } from '../components/FormattedText';
@@ -1426,6 +1428,12 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                             </Show>
                             <span class="message-author" onClick={() => navigate(`/user/${msg.author}`)}>{displayName(msg.author)}</span>
                             <Show when={prof()?.verified}><span class="msg-verified">✓</span></Show>
+                            {/* Beside the verified badge, never merged with it:
+                                verified is paid + on-chain, bot is free and
+                                self-declared. Shown for every bot, verified or
+                                not — an unverified bot is the one most worth
+                                labelling. */}
+                            <BotBadge isBot={prof()?.is_bot} />
                             <span class="message-time">{formatMessageTime(msg.timestamp)}<Show when={msg.edited}><span class="edited-indicator"> ({t('message_edited')})</span></Show></span>
                           </div>
                         </Show>
@@ -1484,6 +1492,12 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                             <div class="message-header">
                               <span class="message-author" onClick={() => navigate(`/user/${msg.author}`)}>{displayName(msg.author)}</span>
                               <Show when={prof()?.verified}><span class="msg-verified">✓</span></Show>
+                            {/* Beside the verified badge, never merged with it:
+                                verified is paid + on-chain, bot is free and
+                                self-declared. Shown for every bot, verified or
+                                not — an unverified bot is the one most worth
+                                labelling. */}
+                            <BotBadge isBot={prof()?.is_bot} />
                             </div>
                           </Show>
                           <Show when={!msg.deleted} fallback={<div class="message-body message-deleted-text">{t('message_deleted')}</div>}>
@@ -1596,6 +1610,30 @@ export const ChatView: Component<ChatViewProps> = (props) => {
             queueMicrotask(() => {
               el.focus();
               el.setSelectionRange(newCursor, newCursor);
+              el.style.height = 'auto';
+              el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+            });
+          }}
+        />
+        {/* `/`-command autocomplete (frontend §6.1.2). Channel composers only,
+            and only at position 0 — a mid-message `/` is a path or a date.
+            Picking a command sends an ordinary chat message (`/name ...`); when
+            two bots in the channel expose the same command name it also pushes
+            the bot's wallet into pendingMentions, so the ADDRESS routes rather
+            than the self-declared, non-unique handle. */}
+        <CommandPopover
+          textareaRef={inputRef}
+          channelId={() => props.channelId ?? undefined}
+          onSelect={(insertValue, botAddress) => {
+            const el = inputRef();
+            if (!el) return;
+            setMessageInput(insertValue);
+            if (botAddress) {
+              setPendingMentions((prev) => Array.from(new Set([...prev, botAddress])));
+            }
+            queueMicrotask(() => {
+              el.focus();
+              el.setSelectionRange(insertValue.length, insertValue.length);
               el.style.height = 'auto';
               el.style.height = Math.min(el.scrollHeight, 160) + 'px';
             });

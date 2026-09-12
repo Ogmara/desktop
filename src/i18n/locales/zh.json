@@ -567,5 +567,8 @@
   "lock_unlocked_no_account": "PIN 正确，但无法打开任何账户。密钥数据可能已损坏——请查看 设置 → 账户，或从备份恢复。",
   "news_topics_manage_hint": "关注单个话题标签，或将它们分组，使话题组像独立的信息流一样使用。",
   "news_topic_add_button": "添加",
-  "news_topic_group_empty": "该分组暂无话题。"
+  "news_topic_group_empty": "该分组暂无话题。",
+  "bot_badge": "机器人",
+  "bot_badge_tooltip": "账户自行声明 — 未经 Ogmara 验证",
+  "bot_commands_label": "机器人命令"
 }

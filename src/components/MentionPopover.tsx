@@ -27,6 +27,7 @@ import { Component, createSignal, createEffect, For, Show, onCleanup } from 'sol
 import type { UserSearchHit } from '@ogmara/sdk';
 import { getClient } from '../lib/api';
 import { t } from '../i18n/init';
+import { BotBadge } from './BotBadge';
 
 export interface MentionRange {
   /** Index of the leading `@` in the textarea value. */
@@ -287,6 +288,7 @@ export const MentionPopover: Component<MentionPopoverProps> = (props) => {
                   <span class="mention-popover-name">
                     {hit.display_name || truncateAddress(hit.address)}
                     <Show when={hit.verified}><span class="mention-popover-verified" title={t('user_verified') || 'Verified on-chain'}>✓</span></Show>
+                    <BotBadge isBot={hit.is_bot} />
                   </span>
                   <span class="mention-popover-addr">{truncateAddress(hit.address)}</span>
                 </div>

@@ -567,5 +567,8 @@
   "lock_unlocked_no_account": "PIN accepted, but no account could be opened. Your key material may be damaged — check Settings → Accounts, or restore from a backup.",
   "news_topics_manage_hint": "Follow individual hashtags, or group them so a topic group behaves like its own feed.",
   "news_topic_add_button": "Add",
-  "news_topic_group_empty": "No topics in this group yet."
+  "news_topic_group_empty": "No topics in this group yet.",
+  "bot_badge": "Bot",
+  "bot_badge_tooltip": "Self-declared — not verified by Ogmara",
+  "bot_commands_label": "Bot commands"
 }

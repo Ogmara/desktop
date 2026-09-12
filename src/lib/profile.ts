@@ -11,6 +11,14 @@ export interface CachedProfile {
   display_name?: string;
   avatar_cid?: string;
   verified?: boolean;
+  /**
+   * The wallet self-declared itself automated (protocol §3.11).
+   *
+   * Orthogonal to `verified` and never merged with it in a UI: `verified` is
+   * paid and on-chain, `is_bot` is free and self-declared. Shown for every bot,
+   * verified or not.
+   */
+  is_bot?: boolean;
 }
 
 interface CacheEntry {
@@ -53,6 +61,10 @@ export async function resolveProfile(address: string): Promise<CachedProfile> {
         display_name: resp.user?.display_name,
         avatar_cid: resp.user?.avatar_cid,
         verified: !!(pk && pk.length > 0),
+        // `GET /users/{address}` is a JSON passthrough of the node's user
+        // record, so this arrives without any node-side handler change
+        // (l2-node 0.127.0+). Absent on older nodes, which reads as false.
+        is_bot: !!(resp.user as { is_bot?: boolean } | undefined)?.is_bot,
       };
       profileCache.set(address, { profile, timestamp: Date.now() });
       return profile;

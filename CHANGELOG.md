@@ -5,6 +5,56 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.77.0] - 2026-09-12
+
+### Added
+
+- **`/`-command autocomplete for bots in channels** (frontend spec §6.1.2,
+  protocol §3.11). Typing `/` at the start of a channel composer opens a
+  keyboard-navigable picker of the commands offered by bots in that channel.
+  - Triggers at **position 0 only** — not after whitespace, unlike `@`. A
+    mid-message `/` is a date, a path, a fraction or an "and/or"; a leading one
+    is unambiguous. A space closes the picker, since the user has moved on to
+    arguments.
+  - Matching is **case-insensitive** — mobile keyboards autocapitalise an empty
+    composer, so `/C` finds `c`.
+  - Picking a command inserts an ordinary chat message (`/name …`). When two
+    bots in the channel expose the same command name it inserts `/name@handle`
+    **and** puts the bot's wallet in `mentions[]`, so the address routes and a
+    self-declared, non-unique handle cannot misdirect the command.
+  - The bot list is fetched on channel open and cached for 60s — not per
+    keystroke — and refreshed on the `bot_commands_changed` WebSocket event.
+    Rows are capped at 20, matching the mention popover.
+  - Every row shows the bot's **truncated `klv1…` address**, the same
+    anti-impersonation rule §6.1.1 imposes on the mention popover, and for the
+    same reason: handles are self-declared and non-unique.
+  - Descriptor text renders as **plain text only** — never through
+    `FormattedText` or any markdown/mention/link pass — and goes through
+    `stripBidi()` at render even though the node rejects those codepoints,
+    because the node serving you may be older than 0.127.0.
+- **Bot badge** on message bubbles, mention-popover rows and command-picker
+  rows. Neutral chrome — not a checkmark, not a shield, no green. It sits
+  **beside** the on-chain verified badge and is never merged with it: `verified`
+  means the wallet paid to register on-chain, `bot` means the account says it is
+  automated. Shown for **every** self-declared bot, verified or not — an
+  unverified bot is precisely the one a user most needs labelled.
+- `is_bot` on the profile cache, so the badge works anywhere a profile is
+  already resolved. Arrives via `GET /users/{address}`, a JSON passthrough, so
+  it needs no node-side handler change; absent on pre-0.127.0 nodes, which reads
+  as false.
+- New i18n keys (`bot_badge`, `bot_badge_tooltip`, `bot_commands_label`) in all
+  7 locales.
+
+### Notes
+
+- Requires l2-node 0.127.0 for `GET /channels/{id}/bots`. Against an older node
+  the fetch fails, the picker never opens, and `/` stays ordinary text — which
+  is the correct fallback rather than an error.
+- The picker is **not** disabled in private channels. Doing so would be theatre:
+  a bot invited into a private channel holds the symmetric epoch key and
+  decrypts every message whether or not the composer autocompletes. The access
+  comes from the invite, not the picker.
+
 ## [1.76.2] - 2026-09-04
 
 ### Fixed

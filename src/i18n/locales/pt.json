@@ -567,5 +567,8 @@
   "lock_unlocked_no_account": "PIN aceite, mas não foi possível abrir nenhuma conta. As chaves podem estar danificadas — veja Definições → Contas ou restaure a partir de uma cópia.",
   "news_topics_manage_hint": "Siga hashtags individuais ou agrupe-os para que um grupo de tópicos funcione como o seu próprio feed.",
   "news_topic_add_button": "Adicionar",
-  "news_topic_group_empty": "Ainda sem tópicos neste grupo."
+  "news_topic_group_empty": "Ainda sem tópicos neste grupo.",
+  "bot_badge": "Bot",
+  "bot_badge_tooltip": "Autodeclarado — não verificado pela Ogmara",
+  "bot_commands_label": "Comandos do bot"
 }

@@ -567,5 +567,8 @@
   "lock_unlocked_no_account": "PIN correcto, pero no se pudo abrir ninguna cuenta. Puede que las claves estén dañadas: revisa Ajustes → Cuentas o restaura desde una copia.",
   "news_topics_manage_hint": "Sigue hashtags individuales o agrúpalos para que un grupo de temas funcione como su propio feed.",
   "news_topic_add_button": "Añadir",
-  "news_topic_group_empty": "Aún no hay temas en este grupo."
+  "news_topic_group_empty": "Aún no hay temas en este grupo.",
+  "bot_badge": "Bot",
+  "bot_badge_tooltip": "Autodeclarado — no verificado por Ogmara",
+  "bot_commands_label": "Comandos del bot"
 }
