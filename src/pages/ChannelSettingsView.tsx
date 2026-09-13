@@ -265,7 +265,7 @@ export const ChannelSettingsView: Component<ChannelSettingsProps> = (props) => {
     } catch { /* ignore */ }
   };
 
-  // --- Invite by address (Private channels only — protocol spec §3.9) ---
+  // --- Invite by address (any channel type — see the Show block below for why) ---
   const [inviteAddress, setInviteAddress] = createSignal('');
   const [inviteError, setInviteError] = createSignal('');
   const [inviteSuccess, setInviteSuccess] = createSignal(false);
@@ -359,10 +359,16 @@ export const ChannelSettingsView: Component<ChannelSettingsProps> = (props) => {
         </button>
       </div>
 
-      {/* Invite by address — Private channels only; a URL alone can't grant
-          access (protocol spec §3.9/§5.5.4), so the target address must be
-          explicitly invited before it can send ChannelJoin. */}
-      <Show when={isMod() && isPrivateChannel()}>
+      {/* Invite by address. For a PRIVATE channel this is load-bearing: a URL
+          alone can't grant access (protocol spec §3.9/§5.5.4), so the target
+          address must be explicitly invited before it can send ChannelJoin.
+          For a PUBLIC channel anyone can already self-join freely, so this
+          grants no access — but ChannelInvite still generates a
+          channel_invite notification (l2-node 0.128.0+) addressed to the
+          invitee, which is how a service/bot discovers "a channel owner
+          wants me here" and joins on its own, with no confirmation step on
+          its side. Shown for every channel type for that reason. */}
+      <Show when={isMod()}>
         <div class="ch-section">
           <h3>{t('channel_invite')}</h3>
           <div class="ch-add-row">
