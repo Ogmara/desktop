@@ -570,5 +570,7 @@
   "news_topic_group_empty": "В этой группе пока нет тем.",
   "bot_badge": "Бот",
   "bot_badge_tooltip": "Заявлено самим аккаунтом — не проверено Ogmara",
-  "bot_commands_label": "Команды бота"
+  "bot_commands_label": "Команды бота",
+  "message_button_send_failed": "Не удалось отправить — попробуйте снова",
+  "message_button_sent": "Отправлено:"
 }

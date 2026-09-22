@@ -570,5 +570,7 @@
   "news_topic_group_empty": "No topics in this group yet.",
   "bot_badge": "Bot",
   "bot_badge_tooltip": "Self-declared — not verified by Ogmara",
-  "bot_commands_label": "Bot commands"
+  "bot_commands_label": "Bot commands",
+  "message_button_send_failed": "Couldn't send — try again",
+  "message_button_sent": "Sent:"
 }

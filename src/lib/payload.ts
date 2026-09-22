@@ -7,7 +7,22 @@
  */
 
 import { decode, encode } from '@msgpack/msgpack';
-import { stripBidi } from './sanitize';
+import { stripBidi, safeText } from './sanitize.ts';
+
+/**
+ * Protocol §3.3 button caps, mirrored from `l2-node/src/messages/
+ * validation.rs`. The node enforces these at SEND time and rejects the
+ * whole envelope on violation — but a node older than 0.131 (the entire
+ * fleet, as of when this field shipped) never validated `buttons` at all,
+ * and happily stores/relays whatever a client sent. Re-enforcing the caps
+ * here at DECODE time is what stops a message from a pre-0.131 node (or a
+ * buggy/hostile one) from rendering an unbounded number of buttons.
+ */
+const MAX_BUTTON_ROWS = 10;
+const MAX_BUTTONS_PER_ROW = 8;
+const MAX_BUTTONS_TOTAL = 40;
+const MAX_BUTTON_LABEL = 24;
+const MAX_BUTTON_COMMAND = 256;
 
 /**
  * Caps for the msgpack decoder when reading untrusted payloads.
@@ -57,6 +72,17 @@ export function safeAttachmentName(att: { filename?: string; cid: string }, fall
   return att.cid.slice(0, fallbackLen);
 }
 
+/** One interactive button attached to a message (protocol §3.3). */
+export interface PayloadButton {
+  label: string;
+  command: string;
+}
+
+/** A row of buttons rendered together under a message. */
+export interface PayloadButtonRow {
+  buttons: PayloadButton[];
+}
+
 /** Decoded payload with common fields across message types. */
 export interface DecodedPayload {
   content: string;
@@ -68,6 +94,58 @@ export interface DecodedPayload {
   media_cid?: string | null;
   content_rating?: string | number;
   attachments?: PayloadAttachment[];
+  /** <= 10 rows. Protocol §3.3 — any wallet's message may carry these. */
+  buttons?: PayloadButtonRow[];
+  /**
+   * Set when this message IS a button press (protocol §3.3). Client-
+   * rendering hint ONLY, never a security boundary — the node never
+   * special-cases it. A compliant feed suppresses a `true` message from the
+   * default render; search/permalinks/moderation views MUST NOT.
+   */
+  via_button?: boolean;
+}
+
+/**
+ * Decode and re-validate a `buttons` field to the protocol §3.3 caps.
+ *
+ * Node-side enforcement (`validate_buttons`, l2-node 0.131+) rejects a
+ * whole envelope that violates these caps — but that is a SEND-time gate.
+ * A message already stored/relayed by a pre-0.131 node (the entire fleet as
+ * of when this field shipped) never had it enforced, so a decode here MUST
+ * NOT trust the wire shape: truncate rather than render whatever arrives.
+ * `label`/`command` are additionally run through `safeText()` — the same
+ * control/bidi-codepoint sanitizer already used for bot command
+ * descriptions — as defense in depth against that same class of node.
+ */
+function decodeButtonRows(raw: unknown): PayloadButtonRow[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const rows: PayloadButtonRow[] = [];
+  let total = 0;
+  for (const rawRow of raw.slice(0, MAX_BUTTON_ROWS)) {
+    const rawButtons = (rawRow as any)?.buttons;
+    if (!Array.isArray(rawButtons)) {
+      rows.push({ buttons: [] });
+      continue;
+    }
+    const buttons: PayloadButton[] = [];
+    for (const rawButton of rawButtons.slice(0, MAX_BUTTONS_PER_ROW)) {
+      if (total >= MAX_BUTTONS_TOTAL) break;
+      const rawLabel = (rawButton as any)?.label;
+      const rawCommand = (rawButton as any)?.command;
+      const label = safeText(typeof rawLabel === 'string' ? rawLabel : '').slice(0, MAX_BUTTON_LABEL);
+      const command = safeText(typeof rawCommand === 'string' ? rawCommand : '').slice(0, MAX_BUTTON_COMMAND);
+      // The node rejects an empty label/command outright (validate_buttons).
+      // A pre-0.131 node never checked, and sanitization above can itself
+      // reduce a string to empty — either way, skip it rather than render a
+      // blank-but-clickable button.
+      if (!label || !command) continue;
+      buttons.push({ label, command });
+      total += 1;
+    }
+    rows.push({ buttons });
+    if (total >= MAX_BUTTONS_TOTAL) break;
+  }
+  return rows;
 }
 
 /**
@@ -107,6 +185,8 @@ export function decodePayload(payload: number[] | Uint8Array): DecodedPayload {
             thumbnail_cid: a.thumbnail_cid,
           }))
         : undefined,
+      buttons: decodeButtonRows(decoded.buttons),
+      via_button: decoded.via_button === true,
     };
   } catch {
     return { content: '' };
@@ -142,7 +222,9 @@ export function tryDecodeBase64Payload(payload: string): DecodedPayload | null {
       !decoded.content &&
       !decoded.title &&
       !decoded.media_cid &&
-      (!decoded.attachments || decoded.attachments.length === 0)
+      (!decoded.attachments || decoded.attachments.length === 0) &&
+      (!decoded.buttons || decoded.buttons.length === 0) &&
+      !decoded.via_button
     ) {
       return null;
     }
@@ -203,6 +285,28 @@ export function getPayloadMentions(payload: number[] | Uint8Array | string): str
     return tryDecodeBase64Payload(payload)?.mentions ?? [];
   }
   return decodePayload(payload).mentions ?? [];
+}
+
+/**
+ * Extract the `buttons` rows from a payload, if present (protocol §3.3).
+ * Returns an empty array when the payload has none or fails to decode.
+ */
+export function getPayloadButtons(payload: number[] | Uint8Array | string): PayloadButtonRow[] {
+  if (typeof payload === 'string') {
+    return tryDecodeBase64Payload(payload)?.buttons ?? [];
+  }
+  return decodePayload(payload).buttons ?? [];
+}
+
+/**
+ * Whether this message IS a button press. Rendering hint only — see
+ * `DecodedPayload.via_button`.
+ */
+export function getPayloadViaButton(payload: number[] | Uint8Array | string): boolean {
+  if (typeof payload === 'string') {
+    return tryDecodeBase64Payload(payload)?.via_button ?? false;
+  }
+  return decodePayload(payload).via_button ?? false;
 }
 
 /**

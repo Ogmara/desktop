@@ -570,5 +570,7 @@
   "news_topic_group_empty": "该分组暂无话题。",
   "bot_badge": "机器人",
   "bot_badge_tooltip": "账户自行声明 — 未经 Ogmara 验证",
-  "bot_commands_label": "机器人命令"
+  "bot_commands_label": "机器人命令",
+  "message_button_send_failed": "发送失败 — 请重试",
+  "message_button_sent": "已发送:"
 }

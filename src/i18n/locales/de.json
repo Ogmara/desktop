@@ -570,5 +570,7 @@
   "news_topic_group_empty": "Noch keine Themen in dieser Gruppe.",
   "bot_badge": "Bot",
   "bot_badge_tooltip": "Selbst angegeben — nicht von Ogmara verifiziert",
-  "bot_commands_label": "Bot-Befehle"
+  "bot_commands_label": "Bot-Befehle",
+  "message_button_send_failed": "Senden fehlgeschlagen — bitte erneut versuchen",
+  "message_button_sent": "Gesendet:"
 }

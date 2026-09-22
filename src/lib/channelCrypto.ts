@@ -120,6 +120,12 @@ async function getChannelTargets(channelId: number): Promise<Target[]> {
     if (resp.members.length < PAGE) break;
     if (page === 50) e2elog('channel targets: member pagination cap hit (>10k)', { channelId });
   }
+  // TEMP DIAGNOSTIC (remove once the 2026-09-05 cross-account join report is
+  // root-caused): the server's REAL member list for this channel, straight
+  // from getChannelMembers() — if an address that was never invited shows up
+  // here, the bug is server-side (CHANNEL_MEMBERS itself), not in how the
+  // client wraps/covers keys to whatever this list contains.
+  e2elog('channelCrypto: getChannelTargets member list', { channelId, addresses: members.map((m) => m.address) });
   const raw: Target[] = [];
   for (const m of members) {
     let keys: { device_id: string; enc_pub: string; created_at?: number }[] = [];
@@ -236,7 +242,11 @@ export async function coverChannelMembers(channelId: number): Promise<void> {
     const missing = targets.filter((t) => !done.has(targetKey(t)));
     if (missing.length > 0) {
       await wrapKeyToMembers(ctx, channelId, scope, scopeHex, entry.key, entry.epoch, missing);
-      e2elog('channel cover: wrapped to new devices', { channelId, count: missing.length });
+      // TEMP DIAGNOSTIC: addresses added, not just a count — see the
+      // 2026-09-05 cross-account join investigation.
+      e2elog('channel cover: wrapped to new devices', {
+        channelId, count: missing.length, targets: missing.map((t) => t.target),
+      });
     }
   } catch (e) {
     lastCoverMs.set(channelId, 0);
@@ -374,6 +384,13 @@ export async function buildEncryptedChannelMsg(
     /** P5: encrypted-media descriptors (file bytes sealed before upload). Preferred
      *  over `attachments` for encrypted channels — the file bytes are encrypted too. */
     media?: MediaDescriptor[];
+    /**
+     * Set when this message IS a button press (protocol §3.3). Forwarded
+     * verbatim to the SDK, which stamps it into the PLAINTEXT outer payload
+     * (never sealed) — feed-suppression rendering hints work identically to
+     * a plaintext channel's messages.
+     */
+    viaButton?: boolean;
   },
   floor = 0,
 ): Promise<Uint8Array | 'waiting'> {
@@ -385,6 +402,7 @@ export async function buildEncryptedChannelMsg(
     text, replyTo: opts?.replyTo, mentions: opts?.mentions,
     contentRating: opts?.contentRating, attachments: opts?.attachments,
     media: opts?.media && opts.media.length > 0 ? opts.media : undefined,
+    viaButton: opts?.viaButton,
   });
 }
 

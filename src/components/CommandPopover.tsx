@@ -23,29 +23,7 @@ import { Component, createSignal, createEffect, createMemo, For, Show, onCleanup
 import type { ChannelBot } from '@ogmara/sdk';
 import { getClient } from '../lib/api';
 import { onWsEvent } from '../lib/ws';
-import { stripBidi } from '../lib/sanitize';
-
-/**
- * Every codepoint the node refuses in a descriptor (protocol §3.11), mirrored
- * from `@ogmara/sdk`'s `FORBIDDEN_DESCRIPTOR_CHARS`.
- *
- * The shared `stripBidi()` is a STRICT SUBSET of this — it misses U+061C,
- * U+200B, U+2060-U+2064, U+FEFF, U+FFF9-U+FFFB and the U+E0000 tag block, which
- * is the primitive behind invisible text smuggling. Since the whole point of
- * sanitizing here is defending against a node OLDER than 0.127.0 that never
- * validated, a filter laxer than the node's defeats its own purpose.
- *
- * U+200C ZWNJ and U+200D ZWJ are deliberately NOT stripped — ZWJ is required
- * for emoji sequences and ZWNJ for Persian and Indic orthography, and neither
- * can reorder text.
- */
-const FORBIDDEN_DESCRIPTOR_CHARS =
-  /[\u0000-\u001F\u007F-\u009F\u061C\u200B\u200E\u200F\u2028\u2029\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\uFFF9-\uFFFB]|[\u{E0000}-\u{E007F}]/gu;
-
-/** Render-time sanitizer for any self-declared, wallet-supplied string. */
-function safeText(s: string | null | undefined): string {
-  return stripBidi(s ?? '').replace(FORBIDDEN_DESCRIPTOR_CHARS, '');
-}
+import { safeText } from '../lib/sanitize';
 import { t } from '../i18n/init';
 import { BotBadge } from './BotBadge';
 

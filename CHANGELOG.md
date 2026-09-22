@@ -5,6 +5,55 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.79.0] - 2026-09-22
+
+### Added
+
+- **Interactive message buttons** (protocol §3.3, `sdk-js` 0.61.0+): any
+  wallet's chat message can attach up to 10 rows × 8 buttons (40 total) that,
+  when tapped, sign and send an ordinary message whose content is the
+  button's literal command — no confirmation dialog, matching the "immediate
+  send" design. A press is flagged `via_button` and hidden from this
+  client's default feed, new-message scroll counter, and in-page quick-search
+  (a convenience filter over the visible feed, not the spec's dedicated
+  "search results" surface — see Fixed for what MUST stay unconditional:
+  permalinks), so only the bot's reply becomes visible, letting a bot author
+  build Telegram-style quick-reply menus (price/chart timeframe pickers,
+  poll options, sub-menus)
+  without any new wire construct. Works unchanged in encrypted and private
+  channels — only `content` is ever sealed, so a press there is built and
+  sent through the same epoch-key path as a typed message.
+- Disclosure of the literal command a button will send (frontend spec
+  §6.1.3, mandatory): a hover tooltip before pressing (mouse/desktop), and an
+  input-agnostic, persistent "Sent: `<command>`" confirmation after —
+  covering touch devices, where no hover affordance exists, without a
+  hand-rolled long-press gesture.
+
+### Fixed
+
+- A permalink (`?msg=`) to a button-press message is no longer unreachable —
+  it's exempted from the default-feed suppression, case-insensitively, once
+  a visit to it resolves, per spec's "search results, permalinks, and any
+  moderation view MUST render every message unconditionally."
+- The new-message scroll badge no longer counts a button press from another
+  user — it was suppressed from the feed but still incremented the "N new"
+  counter, so scrolling down showed nothing new.
+- A channel page consisting entirely of button-press messages (e.g. many
+  users tapping one bot menu) no longer renders permanently blank with no
+  way to reach the real history above it — `via_button` carries no
+  server-side authority, so this was reachable by any wallet, not just a
+  legitimate high-traffic bot. Older pages now auto-load (capped) until real
+  content surfaces or history runs out; a channel whose entire loaded
+  history is suppressed presses correctly falls back to the normal empty
+  state once there's nothing older left to fetch. The in-page search "no
+  matches" empty state is unaffected.
+- Buttons no longer render (and no longer risk seeding an encrypted
+  channel's epoch key as a side effect of one tap) for a user who isn't
+  allowed to post in the current channel — they're now gated behind the
+  same `canPostHere()` check as the composer.
+- A button row that decodes to zero buttons (a malformed/truncated wire
+  payload) no longer renders as blank vertical space under the message.
+
 ## [1.78.0] - 2026-09-13
 
 ### Added

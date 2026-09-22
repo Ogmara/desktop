@@ -570,5 +570,7 @@
   "news_topic_group_empty": "このグループにはまだトピックがありません。",
   "bot_badge": "ボット",
   "bot_badge_tooltip": "自己申告 — Ogmara による検証はありません",
-  "bot_commands_label": "ボットコマンド"
+  "bot_commands_label": "ボットコマンド",
+  "message_button_send_failed": "送信できませんでした — もう一度お試しください",
+  "message_button_sent": "送信済み:"
 }
