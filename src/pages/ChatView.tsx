@@ -319,6 +319,19 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   const SCROLL_LOAD_OLDER_PX = 80;
   const [hasMoreOlder, setHasMoreOlder] = createSignal(true);
   const [loadingOlder, setLoadingOlder] = createSignal(false);
+  // Declared here (not down by its own effect, near `visibleMessages`) and
+  // ahead of the `messages` resource below: `createResource`'s fetcher runs
+  // SYNCHRONOUSLY up to its first `await` as part of setting up the
+  // resource, inline during this component's initial body execution — not
+  // deferred to a later microtask the way a plain `async` callback outside
+  // Solid's reactive graph would be. The fetcher below calls
+  // `setStrandedRecoverAttempts` before any `await`, so if this signal were
+  // declared later in the file (as it originally was), that reference would
+  // hit the `const`'s temporal dead zone and throw `ReferenceError: Cannot
+  // access 'setStrandedRecoverAttempts' before initialization` on every
+  // channel open — which is exactly what shipped and broke web AND desktop
+  // (same bug, same file shape) until caught by actually running the app.
+  const [strandedRecoverAttempts, setStrandedRecoverAttempts] = createSignal(0);
   // AbortController for the in-flight initial fetch, so a fast channel-switch
   // cancels the previous request instead of letting it pile up on the main
   // thread and clobber state out of order.
@@ -866,8 +879,9 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   // Drive recovery from here instead of from a scroll event that can't
   // happen; capped so a very long, entirely-suppressed run can't turn into
   // unbounded background fetching — beyond the cap this falls through to
-  // the ordinary empty-state fallback below.
-  const [strandedRecoverAttempts, setStrandedRecoverAttempts] = createSignal(0);
+  // the ordinary empty-state fallback below. (`strandedRecoverAttempts`
+  // itself is declared up near `hasMoreOlder`/`loadingOlder` — see that
+  // declaration's comment for why.)
   const MAX_STRANDED_RECOVER = 10;
   createEffect(() => {
     if (viaButtonFilteredMessages().length === 0 && allMessages().length > 0

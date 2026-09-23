@@ -5,6 +5,23 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.79.1] - 2026-09-23
+
+### Fixed
+
+- **Channel content stopped loading entirely** (`ChatView.tsx`, since
+  1.79.0): `setStrandedRecoverAttempts` was called inside the `messages`
+  resource's fetcher, but the signal itself was declared later in the file.
+  Solid's `createResource` runs its fetcher SYNCHRONOUSLY up to the first
+  `await` as part of setting up the resource — inline during the
+  component's initial body execution, not deferred to a later microtask —
+  so this threw `ReferenceError: Cannot access 'setStrandedRecoverAttempts'
+  before initialization` on every channel open, and the uncaught rejection
+  left the message list permanently empty. Fixed by moving the signal's
+  declaration above the resource. Caught only by actually running the app —
+  neither `tsc` nor the test suite renders real Solid components, so this
+  shipped despite both passing clean.
+
 ## [1.79.0] - 2026-09-22
 
 ### Added
