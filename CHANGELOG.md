@@ -5,6 +5,69 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.79.2] - 2026-09-23
+
+### Fixed
+
+- **DM conversation list showed the raw wallet address instead of the
+  resolved display name**, while the opened chat window (`DmConversationView.tsx`)
+  showed it correctly — both `Sidebar.tsx`'s DM tab and the classic-layout
+  `DmListView.tsx` never retried a profile lookup once attempted: a `.has()`
+  guard on the `memberProfiles` cache became permanently true even when the
+  cached result was an empty/failed lookup (e.g. right after app startup,
+  before the node connection was ready), so a transient failure looked
+  identical to "already resolved" forever. Fixed by guarding on "has a
+  `display_name` yet" instead, so a failed lookup retries the next time the
+  conversation list refreshes.
+- **Regression introduced by the fix above, caught before release**: the
+  first version of this fix read `memberProfiles()` directly inside the
+  `createEffect` that also writes it, which made the effect subscribe to
+  its own write. Since `setMemberProfiles` always produces a new `Map`
+  reference (needed so other consumers of the signal see the update),
+  any peer that resolves to "still no `display_name`" — any never-
+  registered wallet, or simply a transient fetch failure, neither
+  attacker-specific — created a synchronous, self-retriggering loop:
+  effect runs → cached `resolveProfile` result → `.then` microtask →
+  `setMemberProfiles` → Solid re-runs the effect synchronously inside
+  that write → repeat, forever, never yielding to a macrotask (not even
+  `setTimeout`). Measured at ~2.3M calls/sec with the app completely
+  frozen — reachable by simply having one unregistered-wallet DM peer in
+  the conversation list, on the sidebar that's mounted on every route.
+  Fixed by reading the map via `untrack()`, so the effect only re-runs
+  when the conversation list itself changes (matching how
+  `DmConversationView.tsx`'s own header effect already avoided this by
+  never reading its own target signal). Empirically verified against the
+  actual `solid-js` reactive runtime (not just reasoned about): the
+  pre-fix version hangs indefinitely with zero event-loop progress; the
+  post-fix version produces exactly one resolution attempt per lookup and
+  the event loop proceeds normally.
+- **Same sticky-`.has()` bug, found one `memberProfiles` map away**: the
+  private-channel member list (`toggleMembers`/`refreshMembers` in
+  `Sidebar.tsx`) shares the same `memberProfiles` cache the DM fix above
+  writes into, and guarded resolution the identical wrong way — `.has()`
+  instead of checking for an actual `display_name`. A DM peer who is also
+  a channel member could get an empty `{}` written under their key by the
+  DM resolution path, then permanently block their own resolution (and the
+  member-list re-sort that depends on it) in the channel member list too.
+  These call sites are plain async event handlers, not a `createEffect`,
+  so fixing the guard here carries none of the loop risk above — it only
+  needed to actually retry.
+
+### Note
+
+- Not changed: with the `untrack` fix, the sidebar's DM-list effect now
+  re-runs on the existing 12s conversation poll and re-attempts
+  `resolveProfile` for every still-nameless peer each time (that cache's
+  empty-result TTL is 30s). For a DM list with many never-registered-wallet
+  peers this is real, new, sustained request load — worst case, roughly
+  one request every 30s per such peer, e.g. ~1.7 req/s for 50 peers — where
+  the old (buggy) `.has()` guard generated none after the first attempt.
+  Reviewed and left as-is: bounded, local-network load on today's testnet
+  scale, and the alternative (a per-address attempt counter with backoff)
+  adds real complexity for a self-healing property that's the whole point
+  of this fix. Revisit if this becomes a measurable cost at a larger peer
+  count.
+
 ## [1.79.1] - 2026-09-23
 
 ### Fixed

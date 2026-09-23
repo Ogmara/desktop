@@ -5,7 +5,7 @@
  * Messages, Bookmarks, Search, Settings.
  */
 
-import { Component, JSX, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup } from 'solid-js';
+import { Component, JSX, createResource, createSignal, createEffect, createMemo, untrack, For, Show, onCleanup } from 'solid-js';
 import {
   DragDropProvider,
   DragDropSensors,
@@ -347,13 +347,6 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         // "upgrade" this to `switchGeneration` reflexively; it's not wrong to
         // do so, just unnecessary complexity for UI list state.
         if (walletAddress() !== walletKey) return getCachedDmConvs();
-        for (const conv of resp.conversations) {
-          if (!memberProfiles().has(conv.peer)) {
-            resolveProfile(conv.peer).then((p) => {
-              setMemberProfiles((prev) => { const next = new Map(prev); next.set(conv.peer, p); return next; });
-            });
-          }
-        }
         setCachedDmConvs(resp.conversations);
         return resp.conversations;
       } catch {
@@ -371,6 +364,44 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   const visibleDmConversations = () => (dmConversations() ?? []).filter(
     (conv) => !isConversationHidden(conv.peer, conv.last_message_at),
   );
+
+  // Resolve peer profiles for whatever is currently visible, regardless of
+  // which path populated `dmConversations` (fresh fetch, the cached
+  // `initialValue`, the stale-wallet early return, or the catch fallback —
+  // all of those bypassed profile resolution entirely before this fix).
+  // Guarded on "no display_name yet" rather than "key not yet in the map",
+  // so a transient/empty lookup RETRIES the next time this effect runs
+  // instead of sticking forever (the original bug: a failed lookup cached
+  // `{}`, and the old `.has()` guard read that as permanently resolved).
+  //
+  // `memberProfiles()` is read via `untrack` DELIBERATELY — an earlier
+  // version of this effect read it directly, which made the effect
+  // subscribe to its OWN write. `setMemberProfiles` always produces a new
+  // Map reference (for the reactivity below the DM list to see the update
+  // at all), so for any peer that resolves to "still no display_name"
+  // (any never-registered wallet, or a transient fetch failure — both
+  // common, neither attacker-specific) that formed a synchronous,
+  // self-retriggering loop: effect runs -> resolveProfile (cache hit) ->
+  // .then microtask -> setMemberProfiles -> Solid re-runs this effect
+  // synchronously inside that write -> repeat. Measured at ~2.3M calls/sec
+  // with the render thread never yielding to a macrotask (not even
+  // `setTimeout`) — a full UI hang, not a slowdown, and reachable by simply
+  // opening the DM view with an unregistered wallet in your conversation
+  // list. `untrack` makes this effect re-run only when the visible
+  // conversation list itself changes (matching `DmConversationView.tsx`'s
+  // header, which never reads its own `peerProfile()` signal inside its
+  // resolving effect either) — writes to `memberProfiles` still propagate
+  // to every consumer that reads it directly in render, just not back into
+  // this effect's own trigger set.
+  createEffect(() => {
+    for (const conv of visibleDmConversations()) {
+      if (!untrack(() => memberProfiles().get(conv.peer)?.display_name)) {
+        resolveProfile(conv.peer).then((p) => {
+          setMemberProfiles((prev) => { const next = new Map(prev); next.set(conv.peer, p); return next; });
+        });
+      }
+    }
+  });
 
   const channelInitial = (ch: { display_name?: string; slug: string }) =>
     (ch.display_name || ch.slug || '#').slice(0, 1).toUpperCase();
@@ -457,7 +488,17 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         // Resolve profiles first, then sort
         const members = resp.members;
         for (const m of members) {
-          if (!memberProfiles().has(m.address)) {
+          // Guard on "has a display_name yet", not "key present at all"
+          // (re-audit finding: the DM list's identical sticky-`.has()` bug
+          // — a failed/empty lookup cached `{}` forever — lives on this
+          // SAME `memberProfiles` map, and a DM peer who is also a channel
+          // member could already have that empty entry written here before
+          // this function ever runs, permanently blocking resolution for
+          // the member list too). This call site is a plain async event
+          // handler, not a `createEffect`, so there's no risk of the
+          // self-retriggering loop that guard's naive fix caused elsewhere
+          // — it only needs to actually retry.
+          if (!memberProfiles().get(m.address)?.display_name) {
             resolveProfile(m.address).then((p) => {
               setMemberProfiles((prev) => { const next = new Map(prev); next.set(m.address, p); return next; });
               // Re-sort after profile resolves
@@ -527,7 +568,8 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       const resp = await getClient().getChannelMembers(channelId, { limit: 100 });
       setChannelMembers((prev) => ({ ...prev, [channelId]: resp.members }));
       for (const m of resp.members) {
-        if (!memberProfiles().has(m.address)) {
+        // Same sticky-`.has()` fix as `toggleMembers` above.
+        if (!memberProfiles().get(m.address)?.display_name) {
           resolveProfile(m.address).then((p) => {
             setMemberProfiles((prev) => { const next = new Map(prev); next.set(m.address, p); return next; });
           });

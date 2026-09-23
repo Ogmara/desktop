@@ -2,11 +2,12 @@
  * DmListView — list of DM conversations.
  */
 
-import { Component, createResource, createSignal, For, Show, onMount, onCleanup } from 'solid-js';
+import { Component, createEffect, createResource, createSignal, untrack, For, Show, onMount, onCleanup } from 'solid-js';
 import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { authStatus } from '../lib/auth';
 import { navigate } from '../lib/router';
+import { resolveProfile, type CachedProfile } from '../lib/profile';
 import type { DmConversation } from '@ogmara/sdk';
 
 export const DmListView: Component = () => {
@@ -25,6 +26,34 @@ export const DmListView: Component = () => {
       }
     },
   );
+
+  // This view never resolved peer display names at all (always showed the
+  // raw address) — same bug class as Sidebar.tsx's DM list. Guarded on "no
+  // display_name yet" rather than "key not yet in the map" so a transient/
+  // empty lookup retries the next time this effect runs instead of
+  // sticking forever.
+  //
+  // `memberProfiles()` is read via `untrack` DELIBERATELY (re-audit
+  // finding on the Sidebar.tsx twin of this code — same fix applies here):
+  // reading it directly inside the effect made the effect subscribe to its
+  // own write. `setMemberProfiles` always produces a new Map reference, so
+  // for any peer that resolves to "still no display_name" (a never-
+  // registered wallet, or a transient fetch failure — both common) that
+  // was a synchronous, self-retriggering loop that hard-froze the app
+  // (measured on the Sidebar.tsx twin at ~2.3M calls/sec with the render
+  // thread never yielding, not even to `setTimeout`). `untrack` makes this
+  // effect re-run only when `conversations()` itself changes (on refetch),
+  // which still retries stale lookups periodically without the loop.
+  const [memberProfiles, setMemberProfiles] = createSignal<Map<string, CachedProfile>>(new Map());
+  createEffect(() => {
+    for (const conv of conversations() ?? []) {
+      if (!untrack(() => memberProfiles().get(conv.peer)?.display_name)) {
+        resolveProfile(conv.peer).then((p) => {
+          setMemberProfiles((prev) => { const next = new Map(prev); next.set(conv.peer, p); return next; });
+        });
+      }
+    }
+  });
 
   // The list otherwise loads once (on auth) and never refreshes, so new
   // conversations and updated previews/unread don't appear. Poll periodically.
@@ -46,6 +75,7 @@ export const DmListView: Component = () => {
 
   const truncateAddress = (addr: string) =>
     `${addr.slice(0, 8)}...${addr.slice(-4)}`;
+  const peerLabel = (addr: string) => memberProfiles().get(addr)?.display_name || truncateAddress(addr);
 
   return (
     <div class="dm-list-view">
@@ -84,7 +114,7 @@ export const DmListView: Component = () => {
                   onClick={() => navigate(`/dm/${conv.peer}`)}
                 >
                   <div class="dm-item-main">
-                    <span class="dm-peer">{truncateAddress(conv.peer)}</span>
+                    <span class="dm-peer">{peerLabel(conv.peer)}</span>
                     <Show when={conv.last_message_preview || conv.last_message_at}>
                       <span class="dm-preview">{conv.last_message_preview || `🔒 ${t('dm_encrypted_preview')}`}</span>
                     </Show>
