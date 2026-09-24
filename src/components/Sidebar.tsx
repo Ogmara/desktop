@@ -17,6 +17,7 @@ import {
 } from '@thisbeyond/solid-dnd';
 import { t } from '../i18n/init';
 import { getClient, getCurrentNodeUrl } from '../lib/api';
+import { clearCachedMessages } from '../lib/messageCache';
 import { onWsEvent } from '../lib/ws';
 
 // Per-node cache of the last-seen channel/DM lists. A REST fetch failure
@@ -93,6 +94,7 @@ import { hideConversation, isConversationHidden } from '../lib/dm-hide';
 import { keepMenuInViewport } from '../lib/menu-position';
 import { vaultExportKey } from '../lib/vault';
 import { scopedGet, scopedSet } from '../lib/walletScope';
+import { e2elog } from '../lib/e2eDebug';
 
 // Re-exported for existing importers (ChannelJoinView, ChannelCreateView) that
 // historically imported these from the Sidebar; the implementation now lives in
@@ -452,6 +454,14 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     if (!ctx) return;
     if (!(await confirmDialog(t('dm_delete_confirm')))) return;
     hideConversation(ctx.address);
+    if (route().view === 'dm-conversation' && route().params.address === ctx.address) {
+      navigate('/dm');
+    }
+    // Deferred so a flush triggered by the navigate's unmount (the open
+    // conversation's persist effect writing its last snapshot) lands FIRST —
+    // otherwise that flush would silently resurrect the cache entry immediately
+    // after this clears it. Ported from web 0.80.0's Sidebar.tsx.
+    setTimeout(() => clearCachedMessages('dm', ctx.address, getCurrentNodeUrl()), 0);
   };
 
   // Close context menus on any click
@@ -726,8 +736,14 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   // session.
   let orgPulledFor: string | null = null;
   const pullSyncedObjects = () => {
+    // TEMP DIAGNOSTIC (remove once the 2026-09-05 cross-account join report is
+    // root-caused) — never log the key itself, only identity/timing.
+    e2elog('Sidebar: pullSyncedObjects invoked', { walletAtCallTime: walletAddress() });
     vaultExportKey()
-      .then((key) => { if (key) downloadChannelOrg(key).catch(() => {}); })
+      .then((key) => {
+        e2elog('Sidebar: vaultExportKey resolved for pullSyncedObjects', { walletAtResolveTime: walletAddress(), gotKey: !!key });
+        if (key) downloadChannelOrg(key).catch(() => {});
+      })
       .catch(() => {});
   };
   createEffect(() => {
@@ -1524,6 +1540,9 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
               clearPlacement(ctx.channelId); // drop its group placement (syncs)
               window.dispatchEvent(new Event('ogmara:channels-changed'));
               navigate('/news');
+              // Deferred: see the DM-delete handler above for why (lets the
+              // navigate-triggered unmount's own cache flush land first).
+              setTimeout(() => clearCachedMessages('ch', ctx.channelId, getCurrentNodeUrl()), 0);
             } catch (e: any) {
               alert(e?.message || 'Failed to leave channel');
             }
@@ -1542,6 +1561,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
                 clearPlacement(ctx.channelId); // drop its group placement (syncs)
                 window.dispatchEvent(new Event('ogmara:channels-changed'));
                 navigate('/news');
+                setTimeout(() => clearCachedMessages('ch', ctx.channelId, getCurrentNodeUrl()), 0);
               } catch (e: any) {
                 alert(e?.message || 'Failed to delete channel');
               }

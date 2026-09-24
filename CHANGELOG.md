@@ -5,6 +5,72 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.80.0] - 2026-09-24
+
+### Added
+
+- **Local message-history cache for channel and DM chat** (Phase 2 of the
+  cross-client caching plan; Phase 1 shipped as web 0.80.0). Reopening a
+  channel or DM now paints instantly from the last-seen snapshot instead of
+  blanking on every open, reconciled against the very next full fetch
+  (never refreshed via an `after` cursor — an edit/delete/reaction on a
+  message older than the cursor can't be resurfaced that way; see
+  `lib/messageCache.ts`'s doc comment). New `lib/messageCache.ts`
+  (`readCachedMessages`/`writeCachedMessages`/`clearCachedMessages`/
+  `mergeMessages`/`isAccessRevokedError`), ported verbatim from web's
+  already 5-round-audited module (zero modifications needed — it has no
+  web-specific dependencies). `ChatView.tsx`/`DmConversationView.tsx`
+  hand-integrated with the same wiring shape: a `cachedMessages` signal,
+  a `messages.loading`-guarded merge effect, and a debounced,
+  schedule-time-capture persist effect. `Sidebar.tsx`'s "Delete
+  conversation" (DM), "Leave channel", and "Delete channel" (owner) all
+  now also clear the affected conversation's cache.
+
+### Fixed
+
+- **Cross-wallet cache leak on account handover (desktop-only — web has no
+  in-app account switching).** `disconnectWallet()` can hand over to
+  another held account without unmounting the open chat view (unlike a
+  route navigation, which does unmount). The message cache's view-level
+  `cachedMessages` signal — and, found in a follow-up audit round, the
+  per-message DECRYPTED PLAINTEXT caches (`chanDisplays`/`dmDisplays` +
+  their edit-stamp dedup maps) — were reseeded on a conversation change
+  but not a wallet change, so a still-mounted view could merge/persist a
+  departing account's rows into an arriving account's cache namespace, and
+  briefly render the departing account's already-decrypted private-channel
+  plaintext to the arriving account (sticky, not a one-frame flash — the
+  resolved-decrypt cache skips re-decryption). A first-pass fix that read
+  `walletAddress()` only inside the resource's fetcher body looked correct
+  and passed manual testing but was found (via tracing SolidJS's actual
+  `createResource` internals) to work only by coincidence, since Solid runs
+  the fetcher body under `untrack()` — the real fix tracks the wallet in
+  the resource's SOURCE function instead, making the reseed structural
+  rather than dependent on an unrelated signal's timing.
+- **Cross-conversation display leak during a channel/peer switch** (shared
+  with web, not new to this port — `allMessages`'s reads of the
+  `createResource` value had no `.loading` guard, so the previous
+  conversation's rows, including already-decrypted DM plaintext, rendered
+  under the new conversation's header for the duration of the switch's
+  fetch). Guarded, and DM's message list now sorts by timestamp (a cached
+  row absent from the freshly-fetched page was landing at the bottom
+  regardless of its actual time).
+- A stale, already-superseded channel fetch's `catch` block could act on
+  its own late 403/404 rejection and wipe the wrong account's cache if the
+  rejection resolved after an account handover completed; added the same
+  abort-signal check the success path already had.
+- `localMessages` (WS-delivered rows) is now cleared alongside the cache on
+  access revocation (403/404) — it also feeds the persist effect, so a
+  pre-revocation row could otherwise be re-persisted to disk right after
+  the clear.
+
+Went through 3 rounds of Code + Security audit (Agent tool, `model: opus`,
+in parallel each round) before coming back clean — see
+`project_message_history_cache` memory for the full trail. `npm audit`:
+0 vulnerabilities. 160/160 tests pass (`node --conditions=browser --test`;
+required since Node's default module resolution otherwise picks solid-js's
+non-reactive SSR build, under which `createEffect` never fires — this test
+script change was verified harmless against all 118 pre-existing tests).
+
 ## [1.79.3] - 2026-09-24
 
 ### Changed

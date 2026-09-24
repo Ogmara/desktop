@@ -5,7 +5,8 @@
 
 import { Component, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup, untrack } from 'solid-js';
 import { t } from '../i18n/init';
-import { getClient } from '../lib/api';
+import { getClient, getCurrentNodeUrl } from '../lib/api';
+import { readCachedMessages, writeCachedMessages, clearCachedMessages, mergeMessages, isAccessRevokedError } from '../lib/messageCache';
 import { avatarUrl } from '../lib/ownAvatar';
 import { authStatus, getSigner, walletAddress, isRegistered } from '../lib/auth';
 // Desktop tracks `wsConnected` so we can pause polling while the WS is alive
@@ -131,6 +132,22 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   const [pendingMentions, setPendingMentions] = createSignal<string[]>([]);
   const [replyTo, setReplyTo] = createSignal<{ msgId: string; author: string; preview: string } | null>(null);
   const [localMessages, setLocalMessages] = createSignal<any[]>([]);
+  // Local message-history cache (`lib/messageCache.ts`) — paints a channel
+  // instantly from the last-seen snapshot instead of blanking on every
+  // (re-)open. Seeded synchronously on channel switch, in the SAME tick as
+  // `setLocalMessages([])` below, so `cachedMessages`/`localMessages`
+  // themselves never carry the previous channel's rows into the new one;
+  // reconciled against the next unconditional fetch via `mergeMessages` (see
+  // that function's doc comment for why an `after`-cursor fetch cannot be
+  // used to refresh it). Getting THIS signal right doesn't by itself keep the
+  // previous channel off screen — `allMessages`'s `apiMsgs` reads the
+  // `messages()` resource directly and needs its own `.loading` guard, since
+  // `createResource` keeps returning the previous source's resolved value
+  // while a switch's fetch is in flight.
+  // Ported from web 0.80.0 after 5 audit rounds there — see this file's
+  // resource/merge/persist-effect comments below for the load-bearing
+  // reasoning, not just what the code does.
+  const [cachedMessages, setCachedMessages] = createSignal<any[]>([]);
   const [sending, setSending] = createSignal(false);
   const [showEmoji, setShowEmoji] = createSignal(false);
   const [profiles, setProfiles] = createSignal<Map<string, CachedProfile>>(new Map());
@@ -303,14 +320,31 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   };
 
   let lastChannelId: number | null = null;
+  // Tracked alongside `lastChannelId` so an in-place account handover
+  // (`disconnectWallet()`'s handover to another held account — desktop-only,
+  // no equivalent on web) reseeds `cachedMessages` too. Desktop's account
+  // switch repoints the wallet scope WITHOUT unmounting this view (unlike a
+  // route change), so `channelId !== lastChannelId` alone missed it: the
+  // previous wallet's rows stayed in `cachedMessages` and got merged/persisted
+  // into the NEW wallet's cache namespace once its fetch resolved (found in
+  // this port's security audit).
+  let lastWallet: string | null = null;
   let prevMsgCount = 0;
   let initialLoad = true;
   const [lastReadTs, setLastReadTs] = createSignal<number | null>(null);
   // Dynamic page sizing: 50 by default, grow to fit unread + 20 lines of context.
-  // Capped at 200 to keep first-paint fast; user can scroll up for more.
+  // Capped at the node's actual page-size clamp (100 — `l2-node/src/api/
+  // routes.rs`; requesting more is silently truncated server-side, so 200
+  // here was a no-op ceiling that never took effect) to keep first-paint
+  // fast; user can scroll up for more.
   const INITIAL_PAGE = 50;
   const OLDER_PAGE = 50;
-  const MAX_INITIAL = 200;
+  const MAX_INITIAL = 100;
+  // Set right before the fetcher returns, so the post-resolve merge effect
+  // knows how big a page was actually requested — `mergeMessages` uses it
+  // to tell "the cache is a disconnected, unverifiable island older than
+  // this full page" apart from "there just isn't more history yet".
+  let lastFetchRequestedLimit = INITIAL_PAGE;
   // Hard ceiling on `localMessages` to prevent unbounded growth in a long
   // session of repeated scroll-ups. Higher than `MAX_LOCAL_MESSAGES` (which
   // governs WS receive) because user-initiated scroll-up is intentional and
@@ -337,13 +371,33 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   // thread and clobber state out of order.
   let initFetchAbort: AbortController | null = null;
   const [messages] = createResource(
-    () => ({ channelId: props.channelId, auth: authStatus() }),
+    // `wallet` is tracked here (not just read passively as `me` below via
+    // `lastWallet`) so this resource's fetcher is GUARANTEED to re-run on an
+    // in-place account handover even if nothing else about the source
+    // happens to change. Before this fix, `lastWallet`'s comparison worked
+    // only because `disconnectWallet()` also routes `authStatus` through
+    // `'none'` before restoring `'ready'`, coincidentally re-triggering the
+    // fetcher — a future in-place account switcher that skips that detour
+    // (a sidebar account picker, e.g.) would have silently regressed this
+    // back to the leak `lastWallet` exists to close. Found in this port's
+    // round-2 security re-audit.
+    () => ({ channelId: props.channelId, auth: authStatus(), wallet: walletAddress() }),
     async ({ channelId }) => {
       if (!channelId) return [];
-      // Only clear local messages on channel switch
-      if (channelId !== lastChannelId) {
+      // Clear local messages on a channel switch OR an account handover —
+      // see `lastWallet`'s doc comment above for why the wallet has to be
+      // part of this condition too.
+      const me = walletAddress();
+      if (channelId !== lastChannelId || me !== lastWallet) {
         setLocalMessages([]);
+        // Seed from the local cache in the SAME tick as the reset above —
+        // paints the channel instantly from its last-seen snapshot instead
+        // of a blank screen while this fetch is in flight. Validated (or
+        // discarded, if stale beyond recovery) once the fetch below
+        // resolves; see the merge effect after this resource.
+        setCachedMessages(readCachedMessages('ch', channelId, getCurrentNodeUrl()));
         lastChannelId = channelId;
+        lastWallet = me;
         prevMsgCount = 0;
         initialLoad = true;
         setLastReadTs(null);
@@ -386,12 +440,82 @@ export const ChatView: Component<ChatViewProps> = (props) => {
         const capped = (resp.messages || []).slice(0, limit);
         // If we got fewer messages than asked for, there's nothing older.
         if (capped.length < limit) setHasMoreOlder(false);
+        lastFetchRequestedLimit = limit;
         return capped;
-      } catch {
+      } catch (e) {
+        // A fetch this stale (superseded by a later channel switch OR an
+        // account handover — see `lastWallet` above) must not act on its
+        // result at all, error included: an unauthenticated request that ran
+        // during a handover's brief `authStatus === 'none'` window can 403 on
+        // a private channel, and if that rejection is handled AFTER the
+        // handover completes, `isAccessRevokedError` below would clear the
+        // ARRIVING account's just-seeded cache for this channel, not the
+        // departing one's. Self-healing (the next fetch reseeds it) but a
+        // needless blank flash; found in this port's round-2 security re-audit.
+        if (myAbort.signal.aborted) return [];
+        // 403/404 means access was actually revoked (removed from a
+        // private channel, channel deleted) — as opposed to a generic
+        // network blip, which a stale local cache should survive. Clear
+        // the cache too, not just the live view: otherwise the next open
+        // paints the same now-inaccessible content from disk again.
+        if (isAccessRevokedError(e)) {
+          clearCachedMessages('ch', channelId, getCurrentNodeUrl());
+          // `clearCachedMessages` only wipes disk + the module's in-memory
+          // `warm` layer — the LIVE `cachedMessages` signal, already
+          // seeded for this channel earlier in this same fetcher run,
+          // would otherwise keep rendering the pre-revocation content for
+          // the rest of the session regardless.
+          setCachedMessages([]);
+          // `localMessages` (WS-delivered rows) also feeds `allMessages`'s
+          // persist effect — without this, a pre-revocation row that arrived
+          // over WS earlier this session could get re-persisted to disk
+          // right after this clear (found in this port's security audit).
+          setLocalMessages([]);
+        }
         return [];
       }
     },
   );
+
+  // Reconcile the cache seed against the fetch above once it resolves —
+  // NOT via an `after`-cursor refresh (see `mergeMessages`'s doc comment
+  // for why that can never surface an edit/delete on an already-cached
+  // row). An empty/failed fetch (`messages()` still `[]`) is a no-op union
+  // that leaves the cache seed exactly as it was, so a transient failure
+  // right after a channel switch doesn't wipe the instant-paint content.
+  //
+  // `createResource` RETAINS the PREVIOUS channel's `value()` while a new
+  // fetch is in flight — `messages()` does not become `undefined` on a
+  // channel switch, it keeps returning the OLD channel's rows until the
+  // NEW fetch's `completeLoad` runs. This effect tracks `props.channelId`
+  // (read below) too, so on a switch it re-runs in the SAME reactive
+  // batch, BEFORE the new fetch resolves — merging the previous channel's
+  // messages into the just-seeded cache for the NEW channel, UNLESS
+  // guarded. Closed by `messages.loading` — true for the whole window
+  // described above; skipping the merge while it's true defers to the
+  // next re-run, which happens once loading flips back to false (i.e.
+  // once `value()` is guaranteed to be the CURRENT channel's data). Do
+  // NOT "helpfully" add a `channel_id`-based content spot-check here as
+  // extra defense-in-depth — web's port of this exact code went through
+  // that exact mistake and had to remove it: REST-fetched chat envelopes
+  // never carry a `channel_id` field at all (only WS frames do, via a
+  // separate path into `localMessages`), so such a check validates
+  // nothing today, and would silently disable this effect FOREVER for a
+  // channel if the node ever attached `channel_id` in a shape the check
+  // doesn't recognize.
+  //
+  // This effect's resource source (above) is always-truthy
+  // (`{ channelId, auth, wallet }`), so `createResource` never short-circuits and
+  // `loading` always cycles through its real lifecycle — a conditionally-
+  // `undefined` source would bypass this guard entirely (confirmed on
+  // web's DM view, which originally had that shape).
+  createEffect(() => {
+    if (messages.loading) return;
+    const fresh = messages();
+    const channelId = props.channelId;
+    if (!channelId || fresh === undefined) return;
+    setCachedMessages((prev) => mergeMessages(prev, fresh, lastFetchRequestedLimit));
+  });
 
   /** Load an older page and prepend it without flicker. */
   const loadOlderMessages = async () => {
@@ -561,9 +685,21 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   // WS handler: a fresh membership change renews the give-up budget, since that
   // event is exactly the signal that a cover is likely in flight.
   let waitTicks = 0;
-  // Reset the per-channel decrypt caches when switching channels.
+  // Reset the per-channel decrypt caches when switching channels — also
+  // tracks `walletAddress()` unconditionally so this reruns on an in-place
+  // account handover even when `props.channelId` doesn't change (desktop's
+  // `disconnectWallet()` can hand over to another held account WITHOUT
+  // unmounting this view). Without this, an already-decrypted private-channel
+  // message stayed resolved in `chanDisplays`/`decodedEditStamp` (component-
+  // local, no `registerWalletSwitchReset` covers it) across the handover —
+  // the arriving account then rendered the DEPARTING account's decrypted
+  // plaintext for any msg_id it had already resolved, instead of getting its
+  // own decrypt attempt (or the correct "waiting for key" state if it isn't a
+  // member yet). Found in this port's round-2 security re-audit; mirrors the
+  // fix already applied to DmConversationView.tsx's `dmDisplays`.
   createEffect(() => {
     props.channelId; // track
+    walletAddress(); // track — see comment above
     setChanDisplays({});
     decodedEditStamp.clear();
   });
@@ -798,7 +934,13 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   // Deduplicate and sort messages
   const allMessages = createMemo(() => {
     const seen = new Set<string>();
-    const apiMsgs = messages() || [];
+    // Guarded on `.loading`, not just `|| []` — `messages()` (Solid's
+    // `createResource` value) keeps returning the PREVIOUS channel's resolved
+    // rows while a switch's fetch is in flight; without this guard those rows
+    // rendered under the NEW channel's header for the ~200-400ms of the fetch
+    // (found in this port's audit — the cache write path was already correctly
+    // guarded, but this render path wasn't; same fix belongs in web).
+    const apiMsgs = messages.loading ? [] : (messages() || []);
     const local = localMessages();
     // Remove optimistic messages that now have a real counterpart (same author,
     // similar timestamp). Match against BOTH the API resource AND the real
@@ -814,8 +956,11 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       );
     });
     // localMessages first so in-place updates (delete, edit, react) applied to
-    // the localMessages copy take priority in the dedup.
-    const combined = [...filteredLocal, ...apiMsgs];
+    // the localMessages copy take priority in the dedup; cachedMessages last
+    // (lowest priority) — it's already been reconciled against the fetch
+    // above by the merge effect, but local/api still win on anything newer
+    // than that reconciliation (a WS edit landing mid-fetch, e.g.).
+    const combined = [...filteredLocal, ...apiMsgs, ...cachedMessages()];
     const deduped = combined.filter((msg) => {
       const id = msgIdToHex(msg.msg_id);
       if (!id || seen.has(id)) return false;
@@ -825,6 +970,81 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     deduped.sort((a, b) => normalizeTs(a.timestamp) - normalizeTs(b.timestamp));
     return deduped;
   });
+
+  // Persist the live, merged view (not just the raw fetch — this captures
+  // WS-applied edits/deletes/reactions too, since `allMessages()` is the
+  // full union). Debounced: an undebounced write would re-serialize the
+  // whole conversation on every single WS message.
+  //
+  // Captures BOTH the channel id and a SNAPSHOT of the message list at
+  // SCHEDULE time (synchronously, inside this effect, which re-runs on
+  // every `allMessages()`/`channelId`/`loading` change) into
+  // `pendingPersist`, and the timeout/flush/cleanup paths write ONLY from
+  // that captured snapshot — never re-reading live props/signals at fire
+  // time. Ported from web after that exact mistake there: reading
+  // `props.channelId`/`allMessages()` INSIDE the `setTimeout` callback (at
+  // FIRE time, a full second later) let a channel switch within the
+  // debounce window write the OLD channel's content under the NEW
+  // channel's cache key — reachable by simply switching channels quickly,
+  // no slow network needed, and the `onCleanup` unmount flush hit it on
+  // EVERY navigation (by the time a route disposes this component,
+  // `props.channelId` already reads `null`).
+  //
+  // Also gated on `messages.loading` — read unconditionally every run so
+  // it stays tracked — for the SAME reason the merge effect above is:
+  // `allMessages()` transitively includes `messages()`, which retains the
+  // PREVIOUS channel's value while a new fetch is in flight. Arming a new
+  // pending write is skipped while loading; this effect re-runs once
+  // loading flips back to false, at which point `allMessages()` (re-read
+  // fresh on that run) is guaranteed to reflect the CURRENT channel. Do
+  // NOT add a `channel_id`-based content filter here either — same
+  // reasoning as the merge effect above.
+  //
+  // `wallet` and `nodeUrl` are captured into `pendingPersist` alongside the
+  // channel id, for the same reason the id itself is: an in-place account
+  // handover or (in principle, though unreachable today — `NodeSelector`
+  // reloads the app) a node switch inside the 1s debounce window must not
+  // let a write armed under the OLD identity land under the NEW one's
+  // `messageCache.ts` scope key once the timer fires. `writePending` bails
+  // rather than writes if either moved between arm and fire time.
+  let persistTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingPersist: { channelId: number; wallet: string | null; nodeUrl: string; snapshot: any[] } | null = null;
+  const writePending = () => {
+    if (!pendingPersist) return;
+    const { channelId, wallet, nodeUrl, snapshot } = pendingPersist;
+    pendingPersist = null;
+    if (walletAddress() !== wallet) return;
+    writeCachedMessages('ch', channelId, snapshot, nodeUrl);
+  };
+  const flushCachePersist = () => {
+    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+    writePending();
+  };
+  createEffect(() => {
+    const channelId = props.channelId;
+    const snapshot = allMessages(); // always read — keeps this effect's
+    const loading = messages.loading; // tracking complete regardless of
+    if (persistTimer) clearTimeout(persistTimer); // which branch below runs.
+    // A channel switch mid-debounce would otherwise silently drop the
+    // PREVIOUS channel's still-unwritten snapshot (about to be overwritten
+    // below) — flush it first so a switch loses at most nothing, rather
+    // than up to a full debounce window's worth of state.
+    if (pendingPersist && pendingPersist.channelId !== channelId) writePending();
+    if (!channelId) { pendingPersist = null; return; }
+    // Don't arm a write while the resource is between channels — this run
+    // will fire again the moment `loading` flips back to `false`, at
+    // which point `allMessages()` (re-read fresh on that run) is
+    // guaranteed to reflect the CURRENT channel.
+    if (loading) return;
+    pendingPersist = { channelId, wallet: walletAddress(), nodeUrl: getCurrentNodeUrl(), snapshot };
+    persistTimer = setTimeout(writePending, 1000);
+  });
+  onCleanup(flushCachePersist);
+  if (typeof document !== 'undefined') {
+    const onVisChange = () => { if (document.visibilityState === 'hidden') flushCachePersist(); };
+    document.addEventListener('visibilitychange', onVisChange);
+    onCleanup(() => document.removeEventListener('visibilitychange', onVisChange));
+  }
 
   // Messages actually rendered. Always excludes button-press messages
   // (via_button: true) from the default feed — frontend spec §6.1.3: "the

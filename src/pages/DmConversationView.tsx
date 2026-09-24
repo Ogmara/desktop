@@ -4,7 +4,8 @@
 
 import { Component, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup, onMount, untrack } from 'solid-js';
 import { t } from '../i18n/init';
-import { getClient } from '../lib/api';
+import { getClient, getCurrentNodeUrl } from '../lib/api';
+import { readCachedMessages, writeCachedMessages, clearCachedMessages, mergeMessages, isAccessRevokedError } from '../lib/messageCache';
 import { authStatus, walletAddress, getSigner, isRegistered } from '../lib/auth';
 import { onWsEvent } from '../lib/ws';
 import { navigate, goBack } from '../lib/router';
@@ -26,6 +27,12 @@ interface DmConversationProps {
 export const DmConversationView: Component<DmConversationProps> = (props) => {
   const [messageInput, setMessageInput] = createSignal('');
   const [localMessages, setLocalMessages] = createSignal<any[]>([]);
+  // Local message-history cache (`lib/messageCache.ts`) — paints a resumed
+  // DM conversation instantly instead of blanking on every (re-)open. See
+  // ChatView.tsx's identical integration and messageCache.ts's doc comment
+  // for why this is reconciled against every full fetch via `mergeMessages`
+  // rather than refreshed through an `after` cursor. Ported from web 0.80.0.
+  const [cachedMessages, setCachedMessages] = createSignal<any[]>([]);
   const [sending, setSending] = createSignal(false);
   const [showEmoji, setShowEmoji] = createSignal(false);
   const [editingMsg, setEditingMsg] = createSignal<{ msgId: string; content: string } | null>(null);
@@ -114,15 +121,31 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   // would 401 → [], and (since only `peerAddress` is a dependency) it would
   // never refetch until the 8 s poll — the conversation looks empty on reload.
   // Re-keying on `authStatus` makes it refetch the moment auth lands.
+  //
+  // The source is kept ALWAYS-TRUTHY (an object, not the conditionally-`undefined`
+  // peer address) deliberately — `createResource` short-circuits entirely on a
+  // falsy source, which leaves `.loading` stuck at `false` and silently bypasses
+  // every `messages.loading`-guarded effect below it. Readiness is decided INSIDE
+  // the fetcher instead. Web hit this exact bug (round 3 of its message-cache
+  // audit) via the shape this resource used to have here; ported as the fix.
+  const DM_REQUESTED_LIMIT = 50;
   const [messages, { refetch: refetchDmMessages }] = createResource(
-    () => (authStatus() === 'ready' ? props.peerAddress : undefined),
-    async (address) => {
+    () => ({ peer: props.peerAddress, auth: authStatus() }),
+    async ({ peer, auth }) => {
+      const address = auth === 'ready' ? peer : undefined;
       if (!address) return [];
       try {
         const client = getClient();
         const resp = await client.getDmMessages(address);
         return resp.messages;
-      } catch {
+      } catch (e) {
+        if (isAccessRevokedError(e)) {
+          clearCachedMessages('dm', address, getCurrentNodeUrl());
+          setCachedMessages([]);
+          // See ChatView.tsx's equivalent branch: `localMessages` (WS-delivered
+          // rows) also feeds the persist effect, so it needs clearing too.
+          setLocalMessages([]);
+        }
         return [];
       }
     },
@@ -132,15 +155,54 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   // changes), so clear per-conversation local state when the peer changes —
   // otherwise the previous peer's messages (including your own optimistic sends)
   // leak into the newly-opened conversation.
+  //
+  // Also tracks `walletAddress()`, unconditionally, so this reruns on an
+  // in-place account handover even when the peer address itself doesn't
+  // change — desktop's `disconnectWallet()` can hand over to another held
+  // account WITHOUT unmounting this view (unlike a route change), and without
+  // this, `cachedMessages` would keep the previous wallet's rows and merge/
+  // persist them into the NEW wallet's cache namespace once its fetch
+  // resolved (found in this port's security audit).
   createEffect(() => {
-    props.peerAddress; // track
+    const peer = props.peerAddress; // track
+    walletAddress(); // track — see comment above
     setLocalMessages([]);
+    setCachedMessages(peer ? readCachedMessages('dm', peer, getCurrentNodeUrl()) : []);
+    // Drop decrypted plaintext from the PREVIOUS peer/wallet too — closure
+    // over `setDmDisplays`/`decodedEditStamp`, declared further down in this
+    // file; safe despite the declaration order because this effect's
+    // callback isn't invoked until after the whole component body (including
+    // that declaration) has run — same reasoning as `allMessages` being
+    // referenced by the auto-scroll effect above its own declaration.
+    // Without this, the previous conversation's already-decrypted bubbles
+    // rendered under the new peer's header for the duration of the switch
+    // (found in this port's audit, alongside the `.loading` guard on
+    // `allMessages`'s `real` above).
+    setDmDisplays({});
+    decodedEditStamp.clear();
     // Reset the auto-scroll trackers so each opened conversation scrolls to its
     // newest message once (these are component-scoped and would otherwise stay
     // `dmInitialLoad=false` from the first conversation → the next one opens
     // scrolled to the oldest message).
     prevDmCount = 0;
     dmInitialLoad = true;
+  });
+
+  // Reconcile the cache against every full fetch (never refreshed via an `after`
+  // cursor — see messageCache.ts's doc comment). Loading-guarded: `messages()`
+  // keeps returning the PREVIOUS peer's resolved value while a switch's fetch is
+  // in flight, so merging while `loading` is true would leak that stale value
+  // into the new peer's cache. Deliberately no content-based filter (e.g. an
+  // `author === peer` check) alongside this guard — web's round 2 added one that
+  // read as a second layer of defense but was vacuous (an optimistic DM's author
+  // is always "me", matching every conversation), which delayed noticing the real
+  // guard was still missing elsewhere. The guard alone is the fix.
+  createEffect(() => {
+    if (messages.loading) return;
+    const fresh = messages();
+    const peer = props.peerAddress;
+    if (!peer || fresh === undefined) return;
+    setCachedMessages((prev) => mergeMessages(prev, fresh, DM_REQUESTED_LIMIT));
   });
 
   // Auto-refresh: the open conversation otherwise only loads once (on open), so a
@@ -196,7 +258,12 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
   // refetch doesn't show the message twice; then dedup by msg_id.
   const normTs = (t: any) => { const n = Number(t) || 0; return n < 1e12 ? n * 1000 : n; };
   const allMessages = () => {
-    const real = messages() || [];
+    // Guarded on `.loading`, not just `|| []` — `messages()` keeps returning
+    // the PREVIOUS peer's resolved rows while a switch's fetch is in flight;
+    // without this guard those rows (and their already-DECRYPTED plaintext,
+    // via `dmDisplays` below) rendered under the NEW peer's header for the
+    // duration of the fetch (found in this port's audit).
+    const real = messages.loading ? [] : (messages() || []);
     const local = localMessages().filter((lm) => {
       if (!String(lm.msg_id ?? '').startsWith('local-')) return true;
       return !real.some((rm) =>
@@ -204,12 +271,65 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
         Math.abs(normTs(rm.timestamp) - normTs(lm.timestamp)) < 15000);
     });
     const seen = new Set<string>();
-    return [...real, ...local].filter((msg) => {
+    const deduped = [...real, ...local, ...cachedMessages()].filter((msg) => {
       if (!msg.msg_id || seen.has(msg.msg_id)) return false;
       seen.add(msg.msg_id);
       return true;
     });
+    // `cachedMessages()` rows absent from the current fetched page (server-
+    // pruned, or a short page) would otherwise land at the bottom regardless
+    // of their actual timestamp, below genuinely-newer messages — sort, same
+    // as ChatView's `allMessages` does.
+    deduped.sort((a, b) => normTs(a.timestamp) - normTs(b.timestamp));
+    return deduped;
   };
+  // Plain-function `allMessages` above is called ad-hoc all over this file; this
+  // memo exists purely so the persist effect below can TRACK it (a plain function
+  // call inside `createEffect` establishes no dependency).
+  const allMessagesMemo = createMemo(allMessages);
+
+  // Persist the merged view to disk, debounced. Reads `allMessagesMemo` — placed
+  // after its declaration to avoid a TDZ read — and captures its snapshot at
+  // SCHEDULE time (not flush time), matching web's fix: `allMessagesMemo` is
+  // reactive to the NEXT peer's data the instant `props.peerAddress` changes, so
+  // reading it inside the deferred callback instead would silently write the new
+  // peer's messages under the OLD peer's cache key.
+  // `wallet` and `nodeUrl` are captured into `pendingDmPersist` alongside the
+  // peer, for the same reason the peer itself is: an in-place account
+  // handover (or, in principle, a node switch) inside the 1s debounce window
+  // must not let a write armed under the OLD identity land under the NEW
+  // one's `messageCache.ts` scope key once the timer fires. `writeDmPending`
+  // bails rather than writes if either moved between arm and fire time.
+  let dmPersistTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingDmPersist: { peer: string; wallet: string | null; nodeUrl: string; snapshot: any[] } | null = null;
+  const writeDmPending = () => {
+    if (!pendingDmPersist) return;
+    const { peer, wallet, nodeUrl, snapshot } = pendingDmPersist;
+    pendingDmPersist = null;
+    if (walletAddress() !== wallet) return;
+    writeCachedMessages('dm', peer, snapshot, nodeUrl);
+  };
+  const flushDmCachePersist = () => {
+    if (dmPersistTimer) { clearTimeout(dmPersistTimer); dmPersistTimer = null; }
+    writeDmPending();
+  };
+  createEffect(() => {
+    const peer = props.peerAddress;
+    const snapshot = allMessagesMemo();
+    const loading = messages.loading;
+    if (dmPersistTimer) clearTimeout(dmPersistTimer);
+    if (pendingDmPersist && pendingDmPersist.peer !== peer) writeDmPending();
+    if (!peer) { pendingDmPersist = null; return; }
+    if (loading) return;
+    pendingDmPersist = { peer, wallet: walletAddress(), nodeUrl: getCurrentNodeUrl(), snapshot };
+    dmPersistTimer = setTimeout(writeDmPending, 1000);
+  });
+  onCleanup(flushDmCachePersist);
+  if (typeof document !== 'undefined') {
+    const onDmVisChange = () => { if (document.visibilityState === 'hidden') flushDmCachePersist(); };
+    document.addEventListener('visibilitychange', onDmVisChange);
+    onCleanup(() => document.removeEventListener('visibilitychange', onDmVisChange));
+  }
 
   // Per-message decrypted display, keyed by msg_id. Decryption is async (the
   // conv_key may need a node round-trip); `waiting` entries are retried on the next
