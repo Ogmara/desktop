@@ -5,6 +5,15 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.79.3] - 2026-09-24
+
+### Changed
+
+- Chat and DM message bubbles now use up to 90% of the available width
+  (was 72% for channel messages, 70% for DMs) — noticeably cramped for
+  wide content like bot cards/embeds. `chat-view.css`'s `.message-row` and
+  `DmConversationView.tsx`'s `.dm-msg`.
+
 ## [1.79.2] - 2026-09-23
 
 ### Fixed

@@ -733,7 +733,7 @@ export const DmConversationView: Component<DmConversationProps> = (props) => {
           color: var(--color-text-secondary);
         }
         .dm-msg {
-          max-width: 70%;
+          max-width: 90%;
           padding: var(--spacing-sm) var(--spacing-md);
           border-radius: var(--radius-lg);
         }
