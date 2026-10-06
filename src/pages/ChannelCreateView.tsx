@@ -2,7 +2,10 @@
  * ChannelCreateView — create a new channel (public or private).
  *
  * Public/ReadOnly: on-chain SC call → get channel_id from event → L2 envelope.
- * Private: L2-only, channel_id = Keccak-256(creator + slug + timestamp) truncated to u64.
+ * Private: L2-only — `OgmaraClient.createChannel` derives channel_id itself
+ * (security fix, l2-node 0.139.0: the derivation must use the resolved
+ * WALLET identity, verified node-side — centralized in the SDK rather than
+ * duplicated here to avoid a wallet-vs-device-address mixup).
  */
 
 import { Component, createSignal, Show } from 'solid-js';
@@ -12,7 +15,6 @@ import { authStatus, walletAddress, getSigner, isRegistered } from '../lib/auth'
 import { navigate, goBack } from '../lib/router';
 import { kleverAvailable, createChannelOnChain, getChannelIdFromTx } from '../lib/klever';
 import { addJoinedChannel } from '../components/Sidebar';
-import { keccak_256 } from '@noble/hashes/sha3';
 
 export const ChannelCreateView: Component = () => {
   const [slug, setSlug] = createSignal('');
@@ -43,17 +45,9 @@ export const ChannelCreateView: Component = () => {
 
     try {
       const client = getClient();
-      let channelId: number;
+      let channelId: number | undefined;
 
-      if (isPrivate) {
-        // Private channels: L2-only, no SC call.
-        // channel_id = Keccak-256(creator + slug + timestamp) truncated to u64 (per protocol spec)
-        setStatus('Creating private channel...');
-        const ts = Date.now();
-        const hash = keccak_256(new TextEncoder().encode(walletAddress()! + s + ts));
-        const view = new DataView(hash.buffer);
-        channelId = Number(view.getBigUint64(0) % BigInt(Number.MAX_SAFE_INTEGER));
-      } else {
+      if (!isPrivate) {
         // Public/ReadOnly channels: on-chain SC call → extract channel_id from event
         setStatus('Submitting on-chain transaction...');
         const txHash = await createChannelOnChain(s, channelType());
@@ -61,10 +55,11 @@ export const ChannelCreateView: Component = () => {
         setStatus('Waiting for confirmation...');
         channelId = await getChannelIdFromTx(txHash, s);
       }
+      // Private: channelId stays undefined — createChannel derives it.
 
-      // Publish L2 ChannelCreate envelope with the assigned channel_id
-      setStatus('Publishing channel to L2 network...');
-      await client.createChannel({
+      // Publish L2 ChannelCreate envelope with the assigned/derived channel_id
+      setStatus(isPrivate ? 'Creating private channel...' : 'Publishing channel to L2 network...');
+      const resp = await client.createChannel({
         channelId,
         slug: s,
         channelType: channelType(),
@@ -77,9 +72,9 @@ export const ChannelCreateView: Component = () => {
         encryptionEnabled: true,
       });
 
-      addJoinedChannel(channelId);
+      addJoinedChannel(resp.channel_id);
       window.dispatchEvent(new Event('ogmara:channels-changed'));
-      navigate(`/chat/${channelId}`);
+      navigate(`/chat/${resp.channel_id}`);
     } catch (e: any) {
       setError(e?.message || 'Failed to create channel');
     } finally {
