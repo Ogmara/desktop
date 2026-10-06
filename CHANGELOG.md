@@ -5,6 +5,24 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.81.1] - 2026-10-06
+
+### Fixed
+
+- **Sidebar (Modern style) silently clipped channels/DMs/conversations
+  past the visible height, with no scrollbar** — the `<aside class="sidebar">`
+  only set `display:flex; flex-direction:column; height:100%` inline for
+  the mobile-viewport branch. At desktop widths it set only
+  `width`/`min-width`/`position`, so the aside rendered as a plain block
+  element with no height of its own; the inner tab-content div's
+  `flex:1; overflow-y:auto` had no effect without a flex parent, and
+  overflow was silently clipped by the ancestor `.app-body`'s
+  `overflow:hidden` instead of scrolling. Added the same
+  `display:flex; flex-direction:column; height:100%` to the desktop-width
+  branch so the tab-content area actually scrolls once joined channels
+  exceed the sidebar's height. (Classic design style was unaffected — it
+  has its own separate `.sidebar` CSS with `overflow-y: auto` already.)
+
 ## [1.81.0] - 2026-10-06
 
 ### Security

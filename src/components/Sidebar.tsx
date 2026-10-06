@@ -1132,7 +1132,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       class={`sidebar ${isMobileViewport() ? 'mobile-open' : ''}`}
       style={isMobileViewport()
         ? { display: 'flex', 'flex-direction': 'column', width: '100%', height: '100%', position: 'relative' }
-        : { width: `${sidebarWidth()}px`, 'min-width': `${sidebarWidth()}px`, position: 'relative' }
+        : { display: 'flex', 'flex-direction': 'column', width: `${sidebarWidth()}px`, 'min-width': `${sidebarWidth()}px`, height: '100%', position: 'relative' }
       }
     >
       <div class="sidebar-header" style="display:flex; align-items:center; gap:8px; padding:8px 16px 8px 12px; border-bottom:1px solid var(--color-border)">
