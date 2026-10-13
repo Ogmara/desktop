@@ -13,7 +13,8 @@ import { authStatus, getSigner, walletAddress, isRegistered } from '../lib/auth'
 // (avoids the duplicate-messages bug fixed in v1.15.1).
 import { onWsEvent, wsSubscribeChannels, wsUnsubscribeChannels, wsConnected } from '../lib/ws';
 import { canPost, CHANNEL_TYPE_READ_PUBLIC, CHANNEL_TYPE_PRIVATE } from '@ogmara/sdk';
-import { resolveIsEncrypted } from '../lib/channelEncryption';
+import { resolveIsEncrypted, isChannelRecordUsable, shouldAutoJoinEncryptedChannel } from '../lib/channelEncryption';
+import { ensureEncryptedChannelMembership } from '../lib/autoJoin';
 import { buildEncryptedChannelMsg, decryptChannelMessage, coverChannelMembers, rotateChannelKey } from '../lib/channelCrypto';
 import type { DmDisplay } from '../lib/dmCrypto';
 import { MentionPopover } from '../components/MentionPopover';
@@ -585,8 +586,14 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     },
   );
 
+  // Source includes the wallet: an account switch keeps `authStatus()` at
+  // 'ready', so without it the PREVIOUS account's view of this channel (e.g.
+  // its full, member-level record of a private channel) stayed 'ready' under
+  // the new account and was trusted as that account's own. Including it puts
+  // the resource back through 'refreshing' — i.e. NOT usable — until the new
+  // account's own view arrives (a `restricted` placeholder for a non-member).
   const [channelInfo, { refetch: refetchChannelInfo }] = createResource(
-    () => ({ channelId: props.channelId, auth: authStatus() }),
+    () => ({ channelId: props.channelId, auth: authStatus(), wallet: walletAddress() }),
     async ({ channelId }) => {
       if (!channelId) return null;
       try { return await getClient().getChannel(channelId); }
@@ -658,6 +665,41 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   // can't even try to attach during the exact window `isEncrypted()` used to
   // get wrong.
   const channelInfoResolved = () => channelInfo.state === 'ready';
+  // NOTE `channelInfoResolved()` is true even when the fetch FAILED (the
+  // fetcher maps errors to `null`, which still resolves 'ready'), so it is not
+  // a "record is known" signal. Side effects — auto-join, mark-read, remember
+  // as last channel, send/edit — gate on this instead: resolved, present, and
+  // not the node's `restricted` non-member placeholder.
+  const channelRestricted = () =>
+    (channelInfo() as { restricted?: unknown } | null | undefined)?.restricted === true;
+  // Also requires the record to be for the channel ON SCREEN: a resource value
+  // can briefly belong to the previous channel id across a switch.
+  const channelRecordUsable = () => {
+    const ch = channelInfo()?.channel;
+    if (!isChannelRecordUsable(channelInfo.state, ch, channelRestricted())) return false;
+    const id = (ch as { channel_id?: unknown } | undefined)?.channel_id;
+    return id === undefined || id === props.channelId;
+  };
+
+  // A failed channel fetch resolves to `null` and would otherwise stay that
+  // way until the channel is reopened — and send is now blocked on a usable
+  // record. Retry a few times, spaced out, per channel+account. Bounded so a
+  // channel that genuinely doesn't exist (404) costs at most a handful of
+  // requests, not one every few seconds for as long as it is open.
+  const CHANNEL_INFO_RETRIES = 4;
+  let infoRetryKey: string | null = null;
+  let infoRetries = 0;
+  createEffect(() => {
+    const cid = props.channelId;
+    const me = walletAddress();
+    if (!cid || channelInfo.state !== 'ready' || channelInfo() != null) return;
+    const key = `${me ?? ''}:${cid}`;
+    if (key !== infoRetryKey) { infoRetryKey = key; infoRetries = 0; }
+    if (infoRetries >= CHANNEL_INFO_RETRIES) return;
+    infoRetries++;
+    const timer = setTimeout(() => { void refetchChannelInfo(); }, 3000 * infoRetries);
+    onCleanup(() => clearTimeout(timer));
+  });
   // Public channels have no removal-rotation (anti-bulk-readout only, not member-
   // confidential), so only PRIVATE members are gated to mods for key establishment;
   // in a public encrypted channel ANY member may seed/cover the epoch key.
@@ -667,15 +709,31 @@ export const ChatView: Component<ChatViewProps> = (props) => {
 
   // P4: reading or posting in an encrypted channel requires membership — the node
   // only wraps the epoch key to members (anyone may join a public channel
-  // permissionlessly and obtain the key). Ensure membership once when opening an
-  // encrypted public channel; private channels use the normal invite/join flow.
-  const autoJoined = new Set<number>();
+  // permissionlessly and obtain the key). Ensure membership once per account
+  // when opening an encrypted PUBLIC channel; private channels use the normal
+  // invite/join flow.
+  //
+  // Gated on POSITIVE evidence (`shouldAutoJoinEncryptedChannel`), never on
+  // `isEncrypted()`: that one fails CLOSED — true while the record is loading
+  // or after a failed fetch — which is right for "encrypt before upload" and
+  // made this effect join ANY channel it was opened on before its record
+  // arrived, including another account's private channel carried over by a
+  // stale route after an account switch. The node accepted that join, turning
+  // a UI glitch into real server-side membership and a key cover.
   createEffect(() => {
     const cid = props.channelId;
-    if (!cid || !walletAddress() || !isEncrypted() || isPrivate()) return;
-    if (autoJoined.has(cid)) return;
-    autoJoined.add(cid);
-    void getClient().joinChannel(cid).catch(() => autoJoined.delete(cid));
+    const me = walletAddress();
+    if (!cid || !me || authStatus() !== 'ready') return;
+    if (!shouldAutoJoinEncryptedChannel(
+      channelInfo.state, channelInfo()?.channel, CHANNEL_TYPE_PRIVATE, channelRestricted(),
+    )) return;
+    ensureEncryptedChannelMembership(cid, me, (id) => {
+      // The SDK binds the signer synchronously inside joinChannel; refuse if
+      // the client is not (yet / any longer) signing as this account.
+      const client = getClient();
+      if (client.address !== me) return Promise.reject(new Error('signer/account mismatch'));
+      return client.joinChannel(id);
+    });
   });
 
   // Per-message decrypted display for private channels, keyed by msg_id (async).
@@ -904,28 +962,43 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   });
   onCleanup(wsCleanup);
 
-  // Reactive channel subscription
+  // Reactive channel subscription — keyed on the channel id ONLY.
   let prevChannelId: string | null = null;
   createEffect(() => {
     const id = props.channelId ? String(props.channelId) : null;
     if (prevChannelId) wsUnsubscribeChannels([prevChannelId]);
     if (id) {
       wsSubscribeChannels([id]);
-      // Remember last opened channel for the Chat nav link
-      setSetting('lastChannel', parseInt(id, 10));
-      // Defer side effects so the channel-switch click doesn't share a frame
-      // with the network request + reactive cascade. Keeps fast channel
-      // hopping responsive. The auth re-check inside the microtask guards
-      // against a logout-in-flight signing the read-marker with a stale
-      // signer for the wrong wallet.
-      queueMicrotask(() => {
-        if (authStatus() !== 'ready') return;
-        try { getClient().markChannelRead(parseInt(id, 10)).catch(() => {}); }
-        catch { /* SDK method may not exist on older builds */ }
-      });
       setTimeout(() => inputRef()?.focus(), 50);
     }
     prevChannelId = id;
+  });
+
+  // Remember the channel as this account's last one and mark it read — only
+  // once its record is KNOWN for the active account (see channelRecordUsable),
+  // and once per account+channel per visit. These used to fire the instant the
+  // route named a channel id, so a route carried over from another account
+  // (or a channel whose fetch failed / that this account can't see) was
+  // persisted as the new account's `lastChannel` — which the Channels tab and
+  // the bare `#/chat` route then reopened — and marked read under its signer.
+  let markedFor: string | null = null;
+  createEffect(() => {
+    const cid = props.channelId;
+    const me = walletAddress();
+    if (!cid || !me || authStatus() !== 'ready' || !channelRecordUsable()) return;
+    const key = `${me}:${cid}`;
+    if (markedFor === key) return;
+    markedFor = key;
+    setSetting('lastChannel', cid);
+    // Deferred so the channel-switch click doesn't share a frame with the
+    // network request + reactive cascade. Re-checks the account inside the
+    // microtask so a switch/logout in flight never signs the read-marker for
+    // the wrong wallet.
+    queueMicrotask(() => {
+      if (authStatus() !== 'ready' || walletAddress() !== me) return;
+      try { getClient().markChannelRead(cid).catch(() => {}); }
+      catch { /* SDK method may not exist on older builds */ }
+    });
   });
   onCleanup(() => {
     if (prevChannelId) wsUnsubscribeChannels([prevChannelId]);
@@ -1358,6 +1431,14 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     const atts = attachments();
     if ((!text && atts.length === 0) || !props.channelId) return;
     if (!getSigner() || !walletAddress()) { navigate('/wallet'); return; }
+    // Never send into a channel whose record isn't known for this account:
+    // the encrypt/plaintext branch and the membership it implies both depend
+    // on it. Keep the draft so the user can simply retry.
+    if (!channelRecordUsable()) {
+      setSendError(t('chat_channel_info_loading'));
+      setTimeout(() => setSendError(null), 6000);
+      return;
+    }
 
     setSending(true);
     setSendError(null);
@@ -1460,6 +1541,13 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     command: string,
   ) => {
     const client = getClient();
+    // Same gate as handleSend/handleEdit: until the record is known for this
+    // account, canEstablishKey()/encFloor() read defaults (private → not mod,
+    // floor 0), so a press could seed an epoch key or post below the floor.
+    // Also refuse a press whose origin isn't the channel on screen.
+    if (!channelRecordUsable() || origin.channelId !== props.channelId) {
+      throw new Error(t('chat_channel_info_loading'));
+    }
     if (isEncrypted()) {
       const built = await buildEncryptedChannelMsg(origin.channelId, canEstablishKey(), command, {
         replyTo: origin.msgId, mentions: [origin.author], viaButton: true,
@@ -1545,6 +1633,19 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     const edit = editingMsg();
     const newContent = messageInput().trim();
     if (!edit || !newContent || !props.channelId) return;
+    if (!channelRecordUsable()) {
+      setSendError(t('chat_channel_info_loading'));
+      setTimeout(() => setSendError(null), 6000);
+      return;
+    }
+    // Edits are sent as PLAINTEXT and only offered on non-encrypted channels
+    // (canEdit). If the record now says encrypted (edit started before it
+    // resolved, or the channel changed), never send — leave edit mode and keep
+    // the typed text in the composer so nothing is lost.
+    if (isEncrypted()) {
+      setEditingMsg(null);
+      return;
+    }
     setSending(true);
     setSendError(null);
     try {
@@ -2093,7 +2194,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                   <button class="emoji-toggle" onClick={() => walletAddress() && setShowEmoji(!showEmoji())} title="Emoji" disabled={!walletAddress()}>😊</button>
                   <Show when={showEmoji()}><EmojiPicker onSelect={insertEmoji} onClose={() => setShowEmoji(false)} /></Show>
                 </div>
-                <button class="send-btn" onClick={handleSend} disabled={sending() || (!messageInput().trim() && attachments().length === 0) || !walletAddress()}>{t('chat_send')}</button>
+                <button class="send-btn" onClick={handleSend} disabled={sending() || (!messageInput().trim() && attachments().length === 0) || !walletAddress() || !channelRecordUsable()}>{t('chat_send')}</button>
               </div>
             </div>
           </div>
@@ -2217,8 +2318,8 @@ export const ChatView: Component<ChatViewProps> = (props) => {
               <button
                 class="send-btn"
                 onClick={handleSend}
-                disabled={sending() || (!messageInput().trim() && attachments().length === 0) || !walletAddress()}
-                title={t('chat_send')}
+                disabled={sending() || (!messageInput().trim() && attachments().length === 0) || !walletAddress() || !channelRecordUsable()}
+                title={channelRecordUsable() ? t('chat_send') : t('chat_channel_info_loading')}
               >
                 <svg class="send-btn-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5" /><polyline points="5 12 12 5 19 12" /></svg>
               </button>

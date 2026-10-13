@@ -5,7 +5,7 @@
  * Messages, Bookmarks, Search, Settings.
  */
 
-import { Component, JSX, createResource, createSignal, createEffect, createMemo, untrack, For, Show, onCleanup } from 'solid-js';
+import { Component, JSX, createResource, createSignal, createEffect, createMemo, on, batch, untrack, For, Show, onCleanup } from 'solid-js';
 import {
   DragDropProvider,
   DragDropSensors,
@@ -92,9 +92,10 @@ import { NewsFeedTopics } from './NewsFeedTopics';
 import { confirmDialog, promptDialog } from './Dialogs';
 import { hideConversation, isConversationHidden } from '../lib/dm-hide';
 import { keepMenuInViewport } from '../lib/menu-position';
-import { vaultExportKey } from '../lib/vault';
 import { scopedGet, scopedSet } from '../lib/walletScope';
-import { e2elog } from '../lib/e2eDebug';
+import { sumVisibleUnread } from '../lib/unreadTotals';
+import { isUnreadBaselinePending, clearUnreadBaselinePending } from '../lib/unreadBaseline';
+import { canUseLiveChannelList, createOwnedMemory } from '../lib/sidebarState';
 
 // Re-exported for existing importers (ChannelJoinView, ChannelCreateView) that
 // historically imported these from the Sidebar; the implementation now lives in
@@ -288,21 +289,31 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     return getSetting('defaultFeed') === 'following' ? 'following' : 'global';
   };
 
-  // Remember last route per tab so switching tabs restores the previous view
-  let lastChatRoute = `/chat/${getSetting('lastChannel') || ''}`;
-  let lastFeedRoute = `/news?feed=${
-    getSetting('defaultFeed') === 'following' ? 'following' : 'global'
-  }`;
-  let lastDmRoute = '/dm';
+  // Remember last route per tab so switching tabs restores the previous view.
+  //
+  // These are per-ACCOUNT: `Sidebar` never unmounts on an account switch, so a
+  // plain closure variable carried the previous account's DM peer into the new
+  // account's DMs tab. The memory is now OWNED by a wallet
+  // (lib/sidebarState.ts `createOwnedMemory`): every read and write names the
+  // active wallet and resets it if that isn't the owner, and the wallet effect
+  // below also resets it eagerly — so even a click racing that effect cannot
+  // use another account's route. The Channels tab keeps no closure memory at
+  // all: it reads the account-scoped `lastChannel` setting and only honours it
+  // when that channel is in this account's visible list (see `goChatsTab`).
+  const defaultFeedRoute = () =>
+    `/news?feed=${getSetting('defaultFeed') === 'following' ? 'following' : 'global'}`;
+  const tabMemory = createOwnedMemory(
+    () => ({ feed: defaultFeedRoute(), dm: '/dm' }),
+    untrack(walletAddress),
+  );
+  const activeWallet = () => untrack(walletAddress);
 
   // Track current route changes to update last-per-tab.
   // Only stick on the LIST views (`/news`, `/dm`) — clicking the tab should
   // always return to the feed/list, not to a previously-open detail or
-  // compose screen. (For chat we do stick on the channel because each
-  // channel is its own context the user wants to resume.)
+  // compose screen.
   createEffect(() => {
     const r = route();
-    if (r.view === 'chat' && r.params.channelId) lastChatRoute = `/chat/${r.params.channelId}`;
     if (r.view === 'news') {
       // Preserve the active feed mode so clicking the News tab from
       // Chat/DMs lands back on the same Global/Following view the user
@@ -312,9 +323,11 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       const mode = q === 'following' || q === 'global'
         ? q
         : (getSetting('defaultFeed') === 'following' ? 'following' : 'global');
-      lastFeedRoute = `/news?feed=${mode}`;
+      tabMemory.write(activeWallet(), { feed: `/news?feed=${mode}` });
     }
-    if (r.view === 'dm-conversation' && r.params.address) lastDmRoute = `/dm/${r.params.address}`;
+    if (r.view === 'dm-conversation' && r.params.address) {
+      tabMemory.write(activeWallet(), { dm: `/dm/${r.params.address}` });
+    }
   });
 
   // DM conversations for modern sidebar.
@@ -450,10 +463,20 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   // purely local, synced cross-device via the encrypted SettingsSync blob.
   const handleDmDelete = async () => {
     const ctx = dmContextMenu();
+    const ctxOwner = walletAddress();
     setDmContextMenu(null);
     if (!ctx) return;
     if (!(await confirmDialog(t('dm_delete_confirm')))) return;
+    // The dialog awaited; if the account switched meanwhile, this menu
+    // belonged to the other account — don't hide its peer in this one's list.
+    if (ctxOwner !== walletAddress()) return;
     hideConversation(ctx.address);
+    // A hidden conversation must stop counting toward the DM / tray badge:
+    // clear its unread server-side too (best-effort; it reappears — with a
+    // fresh count — when the peer writes again).
+    getClient().markDmRead(ctx.address)
+      .then(() => { if (ctxOwner === walletAddress()) setDmUnreadTotal((n) => Math.max(0, n - (ctx.unread || 0))); })
+      .catch(() => {});
     if (route().view === 'dm-conversation' && route().params.address === ctx.address) {
       navigate('/dm');
     }
@@ -556,6 +579,21 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     onCleanup(() => document.removeEventListener('click', closeMemberMenu));
   }
 
+  // Account switch: drop everything this component holds for the PREVIOUS
+  // account — tab route memory, fetched private-channel member lists (and
+  // which were expanded), and any open context menu (whose action would
+  // otherwise run against the old account's channel/peer under the new
+  // account's signer). Keyed on `walletAddress` ONLY: a broader dependency
+  // would also wipe this state on unrelated changes.
+  createEffect(on(walletAddress, () => {
+    tabMemory.reset(activeWallet());
+    setChannelMembers({});
+    setExpandedMembers(new Set<number>());
+    setContextMenu(null);
+    setDmContextMenu(null);
+    setMemberMenu(null);
+  }, { defer: true }));
+
   /** Get the current user's role in a channel from the cached member list. */
   const myRoleIn = (channelId: number): string => {
     const members = channelMembers()[channelId];
@@ -646,9 +684,17 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   // `storageInitialized() === false` and seeds any channel_type===2 entry it
   // is handed. See project memory: cross-account private channel leak,
   // 2026-09-04.
+  // Which wallet the CURRENT `allChannels()` value was fetched live for, or
+  // null while it is a cache fallback / in flight. Defence in depth for the
+  // joined-channels sync below: that sync persists into the active account's
+  // storage, so it must only ever run on a list this account's own signer
+  // fetched — never on a value Solid is still showing from the previous
+  // account during a switch, nor on a cached fallback.
+  let liveListOwner: string | null = null;
   const [allChannels, { refetch: refetchChannels, mutate: mutateAllChannels }] = createResource(
     () => [channelVersion(), walletAddress()] as const,
     async ([, wallet]) => {
+      liveListOwner = null;
       try {
         const client = getClient();
         const resp = await client.listChannels(1, 50);
@@ -659,6 +705,7 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         // response as if it belonged to the now-active wallet.
         if (walletAddress() !== wallet) return getCachedChannels();
         setCachedChannels(resp.channels);
+        liveListOwner = wallet;
         return resp.channels;
       } catch {
         // On failure keep showing the cached list rather than emptying the
@@ -694,9 +741,44 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   // Handles first-time migration and auto-adds private channels.
   createEffect(() => {
     const all = allChannels();
-    if (authStatus() === 'ready' && all && all.length > 0) {
+    const me = walletAddress();
+    if (!canUseLiveChannelList({
+      loading: allChannels.loading, liveOwner: liveListOwner, wallet: me, authReady: authStatus() === 'ready',
+    })) return;
+    if (all && all.length > 0) {
       syncJoinedWithApi(all);
     }
+  });
+
+  // Fresh-account unread baseline (see lib/unreadBaseline.ts): a brand-new
+  // wallet has never read the default channel, so the node reports it fully
+  // unread. Once THIS wallet's first live list is in, mark the default channel
+  // read and clear the flag. Same live-ownership gate as the sync above.
+  let baselineInFlight: string | null = null;
+  createEffect(() => {
+    const all = allChannels();
+    const me = walletAddress();
+    if (!me || !canUseLiveChannelList({
+      loading: allChannels.loading, liveOwner: liveListOwner, wallet: me, authReady: authStatus() === 'ready',
+    })) return;
+    if (baselineInFlight === me || !isUnreadBaselinePending(me)) return;
+    const def = (all ?? []).find((ch) => ch.slug === DEFAULT_CHANNEL_SLUG);
+    if (!def) return; // retried on the next live list
+    baselineInFlight = me;
+    getClient().markChannelRead(def.channel_id)
+      .then(() => {
+        clearUnreadBaselinePending(me);
+        if (walletAddress() !== me) return;
+        setUnreadCounts((prev) => {
+          const key = String(def.channel_id);
+          if (!(key in prev)) return prev;
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
+      })
+      .catch(() => { /* flag stays set; retried on a later live list */ })
+      .finally(() => { if (baselineInFlight === me) baselineInFlight = null; });
   });
 
   // Filter: show only joined channels + default "ogmara" channel.
@@ -711,6 +793,24 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       ch.slug === DEFAULT_CHANNEL_SLUG || joined.has(ch.channel_id),
     );
   });
+
+  // Channel ids actually rendered in the sidebar — the only channels whose
+  // unread counts the user can see or clear. The node reports counts for every
+  // readable public channel (see lib/unreadTotals.ts); badges sum only these.
+  const visibleChannelIds = createMemo(
+    () => new Set(channels().map((ch) => String(ch.channel_id))) as ReadonlySet<string>,
+  );
+  const visibleChannelUnread = createMemo(() => sumVisibleUnread(unreadCounts(), visibleChannelIds()));
+
+  /** Channels tab: reopen this account's last channel, but only if it is one
+   *  of the channels this account's sidebar actually lists. `lastChannel` is
+   *  account-scoped, yet can name a channel the account merely viewed (or one
+   *  it has since left) — never navigate the user into a channel the sidebar
+   *  doesn't show. Otherwise behave as with no memory: just switch the tab. */
+  const goChatsTab = () => {
+    const last = getSetting('lastChannel');
+    if (last && visibleChannelIds().has(String(last))) go(`/chat/${last}`);
+  };
 
   // --- Channel organization (groups + custom ordering) ---
   // Resolved, ordered sidebar layout. Reacts to both the channel list and the
@@ -735,16 +835,12 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
   // stops working for every account after the first one switched to in a
   // session.
   let orgPulledFor: string | null = null;
+  // downloadChannelOrg captures the account and exports ITS key itself; it
+  // must not be handed a key exported here first (mid-switch that key can
+  // already belong to the next account while every account check still names
+  // this one — see settings-sync.ts `keyForCaptured`).
   const pullSyncedObjects = () => {
-    // TEMP DIAGNOSTIC (remove once the 2026-09-05 cross-account join report is
-    // root-caused) — never log the key itself, only identity/timing.
-    e2elog('Sidebar: pullSyncedObjects invoked', { walletAtCallTime: walletAddress() });
-    vaultExportKey()
-      .then((key) => {
-        e2elog('Sidebar: vaultExportKey resolved for pullSyncedObjects', { walletAtResolveTime: walletAddress(), gotKey: !!key });
-        if (key) downloadChannelOrg(key).catch(() => {});
-      })
-      .catch(() => {});
+    downloadChannelOrg().catch(() => {});
   };
   createEffect(() => {
     const addr = walletAddress();
@@ -1008,23 +1104,23 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
         refetchChannels(),
       ]);
       if (walletAddress() !== polledFor) return;
-      setUnreadCounts(unread.unread ?? {});
-      setMentionCounts(unread.mentions ?? {});
       const dmCounts = dmUnread.unread ?? {};
       const dmTotal = Object.values(dmCounts).reduce((a: number, b: number) => a + b, 0);
-      setDmUnreadTotal(dmTotal);
+      const notifCount = (notifResp as any).notifications?.length ?? 0;
+      // Batched so the reactive tray-badge writer below sees one consistent
+      // total per poll instead of three intermediate ones.
+      batch(() => {
+        setUnreadCounts(unread.unread ?? {});
+        setMentionCounts(unread.mentions ?? {});
+        setDmUnreadTotal(dmTotal);
+        setNotifUnread(notifCount);
+      });
       // Keep the DM conversation list fresh while sitting on the DMs tab — the
       // resource otherwise only refetches on tab change / mark-read, so a brand-new
       // incoming conversation wouldn't appear until you navigated away and back.
       if (activeTab() === 'dms') refetchDmConvs();
-      const notifCount = (notifResp as any).notifications?.length ?? 0;
-      setNotifUnread(notifCount);
-
-      // Desktop tray badge — sum of channel + DM + notification unreads.
-      const channelTotal = Object.values(unread.unread ?? {}).reduce(
-        (a: number, b: number) => a + b, 0,
-      );
-      updateTrayBadge(channelTotal + dmTotal + notifCount);
+      // The tray badge is NOT written here — see the single reactive writer
+      // below, which also limits channel unreads to the visible channels.
     } catch { /* ignore */ }
   };
   createEffect(() => {
@@ -1045,13 +1141,20 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     setMentionCounts({});
     setDmUnreadTotal(0);
     setNotifUnread(0);
-    updateTrayBadge(0);
     if (authStatus() === 'ready' && wallet) {
       pollData();
       pollTimer = setInterval(pollData, 12000);
     }
   });
   onCleanup(() => { if (pollTimer) clearInterval(pollTimer); });
+
+  // Desktop tray badge — the ONE writer. Reactive, so every change (poll,
+  // mark-read, join/leave, account switch, sign-out) updates it immediately,
+  // and it counts only channels the sidebar shows plus DMs and notifications.
+  createEffect(() => {
+    const ready = authStatus() === 'ready' && !!walletAddress();
+    updateTrayBadge(ready ? visibleChannelUnread() + dmUnreadTotal() + notifUnread() : 0);
+  });
 
   // Live: a new incoming DM should surface a brand-new conversation in the list
   // immediately (not only after the 12s poll or a tab switch).
@@ -1228,11 +1331,11 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       {/* Tab bar — pill buttons with accent-bg tint on active */}
       <div style="display:flex; gap:4px; padding:8px 12px; border-bottom:1px solid var(--color-border)">
         <button style={`flex:1; padding:8px 10px; font-size:var(--font-size-sm); font-weight:600; border-radius:9999px; transition:background 0.15s, color 0.15s; text-align:center; ${activeTab() === 'chats' ? 'background:var(--color-accent-bg); color:var(--color-accent-primary)' : 'background:transparent; color:var(--color-text-secondary)'}`}
-          onClick={() => { setActiveTab('chats'); if (lastChatRoute && lastChatRoute !== '/chat/') go(lastChatRoute); }}>{t('nav_chat')}</button>
+          onClick={() => { setActiveTab('chats'); goChatsTab(); }}>{t('nav_chat')}</button>
         <button style={`flex:1; padding:8px 10px; font-size:var(--font-size-sm); font-weight:600; border-radius:9999px; transition:background 0.15s, color 0.15s; text-align:center; ${activeTab() === 'feed' ? 'background:var(--color-accent-bg); color:var(--color-accent-primary)' : 'background:transparent; color:var(--color-text-secondary)'}`}
-          onClick={() => { setActiveTab('feed'); go(lastFeedRoute); }}>{t('nav_news')}</button>
+          onClick={() => { setActiveTab('feed'); go(tabMemory.read(activeWallet()).feed); }}>{t('nav_news')}</button>
         <button style={`flex:1; padding:8px 10px; font-size:var(--font-size-sm); font-weight:600; border-radius:9999px; transition:background 0.15s, color 0.15s; text-align:center; ${activeTab() === 'dms' ? 'background:var(--color-accent-bg); color:var(--color-accent-primary)' : 'background:transparent; color:var(--color-text-secondary)'}`}
-          onClick={() => { setActiveTab('dms'); if (lastDmRoute !== '/dm') go(lastDmRoute); }}>{t('nav_dms')}</button>
+          onClick={() => { setActiveTab('dms'); const dm = tabMemory.read(activeWallet()).dm; if (dm !== '/dm') go(dm); }}>{t('nav_dms')}</button>
       </div>
 
       {/* Tab content */}
@@ -1685,9 +1788,9 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
           >
             <span class={`collapse-arrow ${channelsOpen() ? 'open' : ''}`}>▸</span>
             <h3 class="sidebar-heading">{t('sidebar_channels')}</h3>
-            <Show when={!channelsOpen() && Object.values(unreadCounts()).reduce((a, b) => a + b, 0) > 0}>
+            <Show when={!channelsOpen() && visibleChannelUnread() > 0}>
               <span class="unread-badge">
-                {Object.values(unreadCounts()).reduce((a, b) => a + b, 0)}
+                {visibleChannelUnread()}
               </span>
             </Show>
           </button>

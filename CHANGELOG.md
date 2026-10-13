@@ -5,6 +5,173 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.82.0] - 2026-10-12
+
+### Security
+
+- **Opening a channel no longer joins it unless it is verifiably an encrypted
+  PUBLIC channel.** The auto-join in the chat view was gated on the
+  fail-closed `isEncrypted()`, which reports "encrypted" while the channel
+  record is still loading or after its fetch failed. Any channel opened in
+  that window — including another account's private channel reached through
+  a stale route after an account switch — got a real `joinChannel` call, which
+  the node accepted, producing server-side membership and a key cover. The
+  decision now goes through `shouldAutoJoinEncryptedChannel` (a resolved,
+  non-`restricted`, non-private record with `encryption_enabled === true`),
+  and joins at most once per account per channel per session
+  (`lib/autoJoin.ts`, reset on every account switch, re-armed on failure).
+  `resolveIsEncrypted` itself is unchanged: encrypt-before-upload stays
+  fail-closed.
+- **Account switch no longer carries the previous account's channel / DM
+  route.** The sidebar's per-tab route memory lived in closure variables that
+  survived the switch, so the Channels / DMs tabs reopened the other account's
+  last channel or DM peer. The Channels tab now uses the account-scoped
+  `lastChannel` only when that channel is in the account's visible list; DM
+  and feed memory are owned per wallet and reset on switch (and re-checked at
+  click time). The same reset drops fetched member lists and any open context
+  menu. On an in-place switch between two accounts (including the
+  disconnect hand-over to another held account), a per-account detail route
+  — `/chat/:id`, `/chat/:id/settings`, `/dm/:peer` — is replaced by its
+  neutral list route (`/chat` resolves to the new account's own
+  `lastChannel`, `/dm`); the first login of a session does not navigate, so
+  deep links keep working (`lib/routeCarryover.ts`).
+- **Button presses are gated like Send and Edit.** `pressButton` (interactive
+  message buttons) now refuses until the channel record is known for the
+  active account; before, while the record was loading or after a failed
+  fetch, it read default key-policy values and could seed a new channel
+  epoch key or post below the key-epoch floor.
+- **Joining from an invite link can no longer be signed by a different
+  account.** `ChannelJoinView` re-fetches the channel record per account and
+  aborts the join if the account changed while the federate call was in
+  flight. A superseded record fetch (previous account or previous channel)
+  can no longer overwrite the current view's "not found" / cross-node
+  preview state. The encrypted-channel auto-join now checks the active account and
+  invokes the join in the same turn, and refuses if the API client is not
+  signing as that account.
+- **Creating a public channel can no longer be completed as a different
+  account.** If the active account changes while the on-chain registration
+  confirms (up to ~40 s), the L2 `ChannelCreate` is no longer signed by the
+  new account and the channel is not filed into its sidebar; the user is told
+  the registration completed under the previous account (new i18n key
+  `channel_create_interrupted`, all 7 languages). The notice is rendered
+  outside the registration-gated form (an account switch resets the
+  registration state, which used to hide it exactly when it mattered). A
+  switch before anything is signed (private channels) now says nothing was
+  created (`channel_create_interrupted_private`); a switch after the channel
+  was published says it was created under the previous account
+  (`channel_create_interrupted_published`) and files it into that account's
+  joined list (if that list was ever initialised; otherwise its first sync
+  seeds the defaults as usual) — only if that account is still held, since writing a
+  per-account key for a removed account would resurrect it in the vault
+  index (`lib/accountGuard.ts`, `addJoinedChannelFor`).
+- **Settings sync re-checks the account after every await before writing.**
+  `downloadChannelOrg` claimed to re-check after the decrypt but checked
+  before it, so a switch during `crypto.subtle.decrypt` wrote the previous
+  account's channel organisation, hidden DMs and topic follows into the new
+  account's storage and re-uploaded them sealed under the previous account's
+  key. The pull now runs through `lib/orgPull.ts`, which checks after the
+  fetch and after the decrypt; `decryptAndApplySettings`, `downloadSettings`
+  and `uploadSettings` re-check too. All checks compare both `walletAddress()`
+  and the storage scope, AND the account-switch generation.
+- **Settings sync can no longer seal one account's data under another
+  account's key.** Callers (channel organisation, hidden DMs, topic follows,
+  the sidebar's automatic pull, Settings → Sync) exported the wallet key
+  first and settings-sync captured "which account" second. A switch
+  re-points the vault at the next account (`vaultActivate`) several awaits
+  before `walletAddress()` and the storage scope move, so an upload already
+  in flight could hold account B's key while every check still said A — and
+  upload A's data encrypted under B's key as A (including the empty-node
+  seeding upload), leaving A's synced copy undecryptable on every device.
+  `uploadSettings`, `downloadSettings` and `downloadChannelOrg` now capture
+  the account and switch generation first, export the key themselves, and
+  require that the key derives to the captured wallet and no switch has
+  started (`lib/accountKey.ts`); no caller passes a key any more.
+- **Key-recovery backup key is bound to the account it was derived for.**
+  A backup-key derivation in flight for one account was handed to any later
+  caller (`if (bkInflight) return bkInflight`) and survived a session clear,
+  and the derivation signed with whatever signer the vault held at that
+  moment. On a switch, the new account's restore could receive the previous
+  account's key, fail to decrypt, mark restore terminal and let the pending
+  backup overwrite its remote vault with a partial keyring. Backup keys are
+  now tagged with their wallet and derived with `signMessageAs` (refuses if
+  the active signer is any other account), in-flight derivations are only
+  shared with the same wallet and are abandoned on session clear, restore
+  refuses a key for another wallet, a decrypt failure after a switch or with
+  such a key is no longer terminal, a restore from before a session clear
+  can't overwrite the next account's restore state, and publish only seals
+  and sends while wallet, generation and key all still match
+  (`lib/keyVaultCore.ts`).
+- **Edits are never sent into an encrypted channel.** Edits are plaintext and
+  only offered on non-encrypted channels; `handleEdit` now re-checks that at
+  send time and leaves edit mode (keeping the typed text) if the channel
+  turned out to be encrypted.
+- **Disconnecting / removing an account now also deletes its cached
+  channel list and DM peer list.** The Sidebar's `channelsCache:<node>:<addr>`
+  and `dmConvsCache:<node>:<addr>` keys use a single `:` and were missed by
+  the per-account wipe, leaving the private channel list and DM peers on disk.
+- **The chat view refetches the channel record on account switch.** Its
+  resource was keyed on `authStatus()`, which stays `ready` across a switch,
+  so the previous account's member-level record of a private channel was
+  trusted as the new account's.
+- **`lastChannel` and mark-read are only written once the channel record is
+  known for the active account**, so a carried-over or inaccessible channel is
+  no longer persisted as the new account's last channel nor marked read under
+  its signer.
+- **Joined-channel sync only runs on a list fetched live for the active
+  wallet** (not on a cached fallback or a value still displayed from the
+  previous account), as defence in depth for the 2026-09-04 cross-account
+  private-channel leak.
+- **Dependency (runtime, Rust):** `rustls` 0.23.37 → 0.23.45 (and
+  `rustls-webpki` 0.103.13 → 0.103.15) via `cargo update`, fixing
+  RUSTSEC-2026-0285 (TLS 1.3 handshake messages accepted across encryption
+  level boundaries). Shipped code (TLS in the Tauri HTTP stack).
+- **Dependency (lockfile only, Rust):** `quinn-proto` 0.11.15 → 0.11.19 via
+  `cargo update -p quinn-proto`, clearing RUSTSEC-2026-0338/0339/0340/0341/0342
+  (remote-triggerable panics and memory-exhaustion guards in QUIC). The crate
+  is present in `Cargo.lock` but not compiled for any target
+  (`cargo tree -i quinn-proto --target all` is empty), so it was not reachable
+  in shipped code; bumped to keep `cargo audit` at 0 vulnerabilities.
+  `cargo check --locked` passes.
+
+### Fixed
+
+- **Tray badge and collapsed Channels badge counted unread messages from
+  every readable public channel** (the node reports up to ~99 for each one
+  never opened), not just the channels in the sidebar. Both now sum only the
+  visible channels (`lib/unreadTotals.ts`); the raw per-channel map is left
+  untouched. The tray badge has a single reactive writer, so it updates
+  immediately on mark-read, join/leave, account switch and sign-out instead
+  of on the next 12 s poll.
+- **A brand-new wallet opened with ~99 unread** for the default channel it had
+  never read. Wallets created via onboarding or Add Account → Create (not
+  imports) now mark the default channel read once their first live channel
+  list arrives (`lib/unreadBaseline.ts`).
+- **Sending, editing or pressing a message button is blocked until the
+  channel record has resolved** for
+  the active account (send button disabled, Enter shows "Channel info is still
+  loading — try again in a moment."; new i18n key `chat_channel_info_loading`
+  in all 7 languages). A failed record fetch is retried a few times, bounded,
+  so a transient error does not leave the composer stuck.
+- **Deleting (hiding) a DM conversation also marks it read**, so a hidden
+  conversation no longer keeps counting toward the DM and tray badges. This
+  is a server-side read marker: the conversation also shows as read on the
+  account's other devices.
+- Settings → Sync shows a translated message (new key
+  `settings_sync_unavailable`, all 7 languages) instead of a hard-coded
+  English "No key available" when an upload can't run for the account.
+- **A failed tray-icon repaint is retried** on the next update instead of
+  suppressing that count until it changes.
+- Version numbers re-synced: `package.json`, `package-lock.json`,
+  `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml` / `Cargo.lock` had
+  drifted (1.81.1 / 1.81.0 / 1.80.0 / 1.76.2); all are now 1.82.0.
+
+### Removed
+
+- Temporary cross-account-join diagnostics (member-list and cover-target
+  address logging in `channelCrypto.ts`, sync-pull tracing in the sidebar).
+  The long-standing E2E trace remains, and is now cleared on every account
+  switch so one account's trace is never visible from another's session.
+
 ## [1.81.1] - 2026-10-06
 
 ### Fixed

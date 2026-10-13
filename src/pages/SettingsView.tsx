@@ -28,7 +28,6 @@ import { authStatus, walletAddress } from '../lib/auth';
 import { navigate } from '../lib/router';
 import { getClient } from '../lib/api';
 import { uploadSettings, downloadSettings } from '../lib/settings-sync';
-import { vaultExportKey } from '../lib/vault';
 import { isLockEnabled, hasPinSetup, removePin, verifyPin, getLockTimeout, setLockTimeout } from '../lib/appLock';
 import { vaultDecryptAllToRaw, vaultIsEncrypted } from '../lib/vault';
 import { enableNotifications, disableNotifications } from '../lib/push';
@@ -428,10 +427,9 @@ export const SettingsView: Component = () => {
               onClick={async () => {
                 setSyncStatus('');
                 try {
-                  const key = await vaultExportKey();
-                  if (!key) { setSyncStatus('No key available'); return; }
-                  await uploadSettings(key);
-                  setSyncStatus(t('settings_sync_success'));
+                  // Exports the active account's key itself (settings-sync.ts).
+                  const ok = await uploadSettings();
+                  setSyncStatus(ok ? t('settings_sync_success') : t('settings_sync_unavailable'));
                 } catch (e: any) {
                   setSyncStatus(e?.message || 'Sync failed');
                 }
@@ -444,9 +442,8 @@ export const SettingsView: Component = () => {
               onClick={async () => {
                 setSyncStatus('');
                 try {
-                  const key = await vaultExportKey();
-                  if (!key) { setSyncStatus('No key available'); return; }
-                  const ok = await downloadSettings(key);
+                  // Exports the active account's key itself (settings-sync.ts).
+                  const ok = await downloadSettings();
                   if (ok) {
                     setSyncStatus(t('settings_sync_success'));
                     setThemeState(getTheme());

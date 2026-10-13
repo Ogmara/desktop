@@ -14,6 +14,7 @@ import { t } from '../i18n/init';
 import { navigate, goBack } from '../lib/router';
 import { vaultAddAccount } from '../lib/vault';
 import { switchAccount } from '../lib/auth';
+import { markUnreadBaselinePending } from '../lib/unreadBaseline';
 
 /** Generate a 32-byte private key as hex. */
 function randomKeyHex(): string {
@@ -27,11 +28,15 @@ export function AddAccountView() {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal('');
 
-  async function add(hex: string) {
+  /** `fresh` is true ONLY for a key generated right here: an imported key has
+   *  real history whose unread state must not be touched (unreadBaseline.ts). */
+  async function add(hex: string, fresh: boolean) {
     setBusy(true);
     setError('');
     try {
       const addr = await vaultAddAccount(hex);
+      // Before the switch, so the Sidebar sees it on the first live list.
+      if (fresh) markUnreadBaselinePending(addr);
       // Switch only after the slot is written AND verified by `vaultAddAccount`.
       await switchAccount(addr);
       navigate('/chat');
@@ -43,7 +48,7 @@ export function AddAccountView() {
   }
 
   async function onCreate() {
-    await add(randomKeyHex());
+    await add(randomKeyHex(), true);
   }
 
   async function onImport() {
@@ -52,7 +57,7 @@ export function AddAccountView() {
       setError(t('wallet_invalid_key'));
       return;
     }
-    await add(hex);
+    await add(hex, false);
     setImportKey('');
   }
 

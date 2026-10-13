@@ -120,12 +120,6 @@ async function getChannelTargets(channelId: number): Promise<Target[]> {
     if (resp.members.length < PAGE) break;
     if (page === 50) e2elog('channel targets: member pagination cap hit (>10k)', { channelId });
   }
-  // TEMP DIAGNOSTIC (remove once the 2026-09-05 cross-account join report is
-  // root-caused): the server's REAL member list for this channel, straight
-  // from getChannelMembers() — if an address that was never invited shows up
-  // here, the bug is server-side (CHANNEL_MEMBERS itself), not in how the
-  // client wraps/covers keys to whatever this list contains.
-  e2elog('channelCrypto: getChannelTargets member list', { channelId, addresses: members.map((m) => m.address) });
   const raw: Target[] = [];
   for (const m of members) {
     let keys: { device_id: string; enc_pub: string; created_at?: number }[] = [];
@@ -242,11 +236,7 @@ export async function coverChannelMembers(channelId: number): Promise<void> {
     const missing = targets.filter((t) => !done.has(targetKey(t)));
     if (missing.length > 0) {
       await wrapKeyToMembers(ctx, channelId, scope, scopeHex, entry.key, entry.epoch, missing);
-      // TEMP DIAGNOSTIC: addresses added, not just a count — see the
-      // 2026-09-05 cross-account join investigation.
-      e2elog('channel cover: wrapped to new devices', {
-        channelId, count: missing.length, targets: missing.map((t) => t.target),
-      });
+      e2elog('channel cover: wrapped to new devices', { channelId, count: missing.length });
     }
   } catch (e) {
     lastCoverMs.set(channelId, 0);

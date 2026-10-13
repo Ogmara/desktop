@@ -12,7 +12,8 @@
 
 import { createSignal } from 'solid-js';
 import { DEFAULT_CHANNEL_SLUG } from './channel-org';
-import { scopedGet, scopedSet, registerWalletSwitchReset } from './walletScope';
+import { scopedGet, scopedSet, registerWalletSwitchReset, getWalletScope, SEP } from './walletScope';
+import { mergeJoinedSlot } from './joinedSlot';
 
 const STORAGE_KEY = 'ogmara_joined_channels';
 
@@ -46,6 +47,30 @@ export function addJoinedChannel(channelId: number): void {
   if (ids.has(channelId)) return;
   ids.add(channelId);
   persistJoined(ids);
+}
+
+/**
+ * Add `channelId` to a SPECIFIC account's joined set, whether or not it is the
+ * active one — for a flow that finished after the user switched away from the
+ * account it ran for (e.g. channel creation). Writes the active account
+ * through the signal as usual; any other account by read-merge-write of its
+ * own `<key>::<address>` slot, never touching the active account's state.
+ *
+ * An account whose joined set was never initialised is left untouched (see
+ * `mergeJoinedSlot`) so its first sync still seeds the defaults.
+ *
+ * The caller MUST have verified `address` is still a held account: a
+ * `<base>::<address>` key is what the vault index's recovery scan reads, so
+ * writing one for a removed account would resurrect it.
+ */
+export function addJoinedChannelFor(address: string, channelId: number): void {
+  if (!address) return;
+  if (address === getWalletScope()) { addJoinedChannel(channelId); return; }
+  const key = `${STORAGE_KEY}${SEP}${address}`;
+  try {
+    const next = mergeJoinedSlot(localStorage.getItem(key), channelId);
+    if (next !== null) localStorage.setItem(key, next);
+  } catch { /* best-effort */ }
 }
 
 /** Add several channel ids at once (one persist). No-op if all already present. */

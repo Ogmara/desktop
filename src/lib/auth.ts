@@ -30,6 +30,7 @@ import {
   bumpSwitchGeneration,
 } from './walletScope';
 import { vaultMigrationsReady } from './vaultMigration';
+import { markUnreadBaselinePending } from './unreadBaseline';
 
 export type AuthStatus = 'none' | 'loading' | 'locked' | 'ready';
 export type WalletSource = 'builtin' | null;
@@ -139,6 +140,9 @@ export async function connectWithKey(hexKey: string): Promise<string> {
 /** Generate a new wallet and connect. */
 export async function generateWallet(): Promise<string> {
   const address = await vaultGenerate();
+  // Brand-new wallet: start its default channel read (see unreadBaseline.ts).
+  // Set before the scope flip so the Sidebar sees it on the first live list.
+  markUnreadBaselinePending(address);
   const signer = vaultGetSigner()!;
   getClient().withSigner(signer);
   setWalletAddress(address);

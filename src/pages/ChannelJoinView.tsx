@@ -32,15 +32,24 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
 
   const channelIdNum = () => parseInt(props.channelId, 10);
 
+  // Wallet-keyed: an account switch keeps this view mounted, and the record a
+  // node returns for a private channel depends on who asks (member vs the
+  // `restricted` placeholder), so the previous account's view must not be
+  // reused for the next one.
   const [channel] = createResource(
-    () => props.channelId,
-    async (id) => {
+    () => ({ id: props.channelId, wallet: walletAddress() }),
+    async ({ id, wallet }) => {
       setNotFound(false);
       setCrossNode(null);
       const cid = parseInt(id, 10);
+      // The fetcher body outlives a wallet or channel change (Solid only drops
+      // the stale RESULT); never let a superseded run write the side signals
+      // the CURRENT account's / channel's view reads.
+      const stale = () => walletAddress() !== wallet || props.channelId !== id;
       try {
         return await getClient().getChannelDetail(cid);
       } catch {
+        if (stale()) return null;
         // Not on the current node. If the link carries a `?node=` host hint we
         // don't currently use, fetch a PREVIEW from there so the user sees the
         // channel before deciding to switch nodes.
@@ -50,13 +59,14 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
         if (hint && validateNodeUrl(hint) && hint !== cur) {
           try {
             const detail = await new OgmaraClient({ nodeUrl: hint }).getChannelDetail(cid);
+            if (stale()) return null;
             setCrossNode({ host: hint, detail });
             return null;
           } catch {
             // host unreachable or channel really gone — fall through to not-found
           }
         }
-        setNotFound(true);
+        if (!stale()) setNotFound(true);
         return null;
       }
     },
@@ -69,14 +79,19 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
   const handleFederateAndJoin = async () => {
     const cn = crossNode();
     if (!cn) return;
-    if (!walletAddress()) { navigate('/wallet'); return; }
+    const me = walletAddress();
+    if (!me) { navigate('/wallet'); return; }
     setJoining(true);
     setError('');
     try {
       const client = getClient();
       await client.federateChannel(channelIdNum(), cn.host);
+      // The account may have switched while federating: the shared client
+      // would then sign the join as the NEW account. Abort silently.
+      if (walletAddress() !== me) return;
       // Announce membership to the host + other members (gossips; best-effort).
       try { await client.joinChannel(channelIdNum()); } catch { /* membership also recorded locally by federate */ }
+      if (walletAddress() !== me) return;
       addJoinedChannel(channelIdNum());
       window.dispatchEvent(new Event('ogmara:channels-changed'));
       navigate(`/chat/${channelIdNum()}`);
@@ -98,7 +113,8 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
     try {
       // Authenticated users: send join envelope so the node tracks membership.
       // For public channels this is best-effort — the channel is readable without it.
-      if (walletAddress()) {
+      const me = walletAddress();
+      if (me) {
         const client = getClient();
         // If the channel is private and the link carries a `?node=` host hint,
         // (re-)federate so this node refreshes the channel metadata (e.g. a logo
@@ -107,6 +123,9 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
         const hint = hintRaw ? decodeURIComponent(hintRaw) : '';
         if (isPrivate() && hint && validateNodeUrl(hint) && hint !== getCurrentNodeUrl()) {
           try { await client.federateChannel(channelIdNum(), hint); } catch { /* best-effort refresh */ }
+          // Switched accounts while federating: the join would be signed by
+          // the new account. Abort silently.
+          if (walletAddress() !== me) return;
         }
         try {
           await client.joinChannel(channelIdNum());
@@ -114,6 +133,7 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
           // Non-critical for public channels — user can still read messages
           if (isPrivate()) throw new Error('Failed to join private channel');
         }
+        if (walletAddress() !== me) return;
       }
       // Add to local sidebar and navigate
       addJoinedChannel(channelIdNum());

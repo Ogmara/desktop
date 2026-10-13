@@ -55,3 +55,80 @@ test('refreshing with a stale-but-plaintext-looking payload still fails closed',
   // stale payload looks.
   assert.equal(resolveIsEncrypted('refreshing', { channel_type: PUBLIC, encryption_enabled: false }, PRIVATE), true);
 });
+
+// ---------------------------------------------------------------------------
+// Side-effect gating (desktop 1.82.0). `resolveIsEncrypted` fails CLOSED, which
+// is right for confidentiality and was WRONG when reused to gate auto-join: it
+// joined any channel whose record was still loading or failed to fetch. The
+// two functions below demand positive evidence instead.
+// ---------------------------------------------------------------------------
+import { isChannelRecordUsable, shouldAutoJoinEncryptedChannel } from './channelEncryption.ts';
+
+const ENC_PUBLIC = { channel_type: PUBLIC, encryption_enabled: true };
+const PLAIN_PUBLIC = { channel_type: PUBLIC, encryption_enabled: false };
+const PRIV = { channel_type: PRIVATE, encryption_enabled: true };
+
+test('isChannelRecordUsable: only a resolved, present, non-restricted record is usable', () => {
+  for (const st of ['unresolved', 'pending', 'refreshing', 'errored'] as const) {
+    assert.equal(isChannelRecordUsable(st, ENC_PUBLIC), false, st);
+  }
+  assert.equal(isChannelRecordUsable('ready', null), false, 'ready-null (failed fetch)');
+  assert.equal(isChannelRecordUsable('ready', undefined), false, 'ready-undefined');
+  assert.equal(isChannelRecordUsable('ready', PRIV, true), false, 'restricted non-member view');
+  assert.equal(isChannelRecordUsable('ready', ENC_PUBLIC), true);
+  assert.equal(isChannelRecordUsable('ready', PLAIN_PUBLIC, false), true);
+  assert.equal(isChannelRecordUsable('ready', PRIV, null), true, 'member view of a private channel');
+});
+
+test('isChannelRecordUsable: a record without a numeric channel_type is not usable', () => {
+  assert.equal(isChannelRecordUsable('ready', {}), false);
+  assert.equal(isChannelRecordUsable('ready', { encryption_enabled: true }), false);
+  assert.equal(isChannelRecordUsable('ready', { channel_type: null, encryption_enabled: true }), false);
+  assert.equal(isChannelRecordUsable('ready', { channel_type: '0' as unknown as number }), false);
+  assert.equal(isChannelRecordUsable('ready', { channel_type: 0 }), true);
+});
+
+test('shouldAutoJoinEncryptedChannel: never joins without a known record', () => {
+  for (const st of ['unresolved', 'pending', 'refreshing', 'errored'] as const) {
+    assert.equal(shouldAutoJoinEncryptedChannel(st, ENC_PUBLIC, PRIVATE), false, st);
+    assert.equal(shouldAutoJoinEncryptedChannel(st, undefined, PRIVATE), false, `${st}/undefined`);
+  }
+  // The reported bug: record fetch failed (null) → isEncrypted() said true →
+  // the effect joined. Must be false now.
+  assert.equal(shouldAutoJoinEncryptedChannel('ready', null, PRIVATE), false);
+});
+
+test('shouldAutoJoinEncryptedChannel: stale refreshing payload is not trusted', () => {
+  assert.equal(shouldAutoJoinEncryptedChannel('refreshing', ENC_PUBLIC, PRIVATE), false);
+});
+
+test('shouldAutoJoinEncryptedChannel: private channels are never auto-joined', () => {
+  assert.equal(shouldAutoJoinEncryptedChannel('ready', PRIV, PRIVATE), false);
+  assert.equal(shouldAutoJoinEncryptedChannel('ready', PRIV, PRIVATE, true), false, 'restricted');
+  assert.equal(shouldAutoJoinEncryptedChannel('ready', { channel_type: PRIVATE }, PRIVATE), false);
+});
+
+test('shouldAutoJoinEncryptedChannel: restricted placeholder is never joined, whatever it claims', () => {
+  assert.equal(shouldAutoJoinEncryptedChannel('ready', ENC_PUBLIC, PRIVATE, true), false);
+});
+
+test('shouldAutoJoinEncryptedChannel: plaintext public channels need no join', () => {
+  assert.equal(shouldAutoJoinEncryptedChannel('ready', PLAIN_PUBLIC, PRIVATE), false);
+  assert.equal(shouldAutoJoinEncryptedChannel('ready', { channel_type: PUBLIC }, PRIVATE), false);
+  assert.equal(shouldAutoJoinEncryptedChannel('ready', { channel_type: PUBLIC, encryption_enabled: null }, PRIVATE), false);
+});
+
+test('shouldAutoJoinEncryptedChannel: a missing channel_type is not evidence of "public"', () => {
+  assert.equal(shouldAutoJoinEncryptedChannel('ready', { encryption_enabled: true }, PRIVATE), false);
+});
+
+test('shouldAutoJoinEncryptedChannel: resolved encrypted public (and ReadPublic) channel joins', () => {
+  assert.equal(shouldAutoJoinEncryptedChannel('ready', ENC_PUBLIC, PRIVATE), true);
+  assert.equal(shouldAutoJoinEncryptedChannel('ready', ENC_PUBLIC, PRIVATE, false), true);
+  assert.equal(shouldAutoJoinEncryptedChannel('ready', { channel_type: 1, encryption_enabled: true }, PRIVATE), true);
+});
+
+test('resolveIsEncrypted is unchanged: still fail-closed where auto-join now says no', () => {
+  assert.equal(resolveIsEncrypted('ready', null, PRIVATE), true);
+  assert.equal(resolveIsEncrypted('pending', undefined, PRIVATE), true);
+});

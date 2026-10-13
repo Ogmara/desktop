@@ -785,6 +785,23 @@ export async function signMessage(message: string): Promise<string> {
   return bytesToHex(sigBytes);
 }
 
+/**
+ * Like {@link signMessage}, but ONLY as `address`: throws if the vault's
+ * active signer is any other account. During an account switch the vault
+ * re-points its signer (`vaultActivate`) before `walletAddress()` flips, so a
+ * plain `signMessage` started "for" the old account can sign as the new one —
+ * which, for a key-derivation signature, yields the other account's key.
+ * The signer is resolved and checked synchronously, before the first await.
+ */
+export async function signMessageAs(address: string, message: string): Promise<string> {
+  const signer = requireSigner();
+  if (!address || signer.address !== address) {
+    throw new Error('Active signer is not the requested account');
+  }
+  const sigBytes = await signer.signKleverMessage(new TextEncoder().encode(message));
+  return bytesToHex(sigBytes);
+}
+
 // --- Account & Token Queries ---
 
 /** Token balance entry from the Klever API. */

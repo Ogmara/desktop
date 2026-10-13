@@ -14,6 +14,8 @@
  * only controls whether steps ALSO mirror to the console live.
  */
 
+import { registerWalletSwitchReset } from './walletScope';
+
 export interface TraceEvent {
   /** epoch ms */
   t: number;
@@ -61,6 +63,11 @@ export function clearE2ETrace(): void {
   traceBuf.length = 0;
   seq = 0;
 }
+
+// The trace carries per-account metadata (addresses, channel ids, device ids).
+// Drop it on every account switch so one account's trail is never readable
+// from — or mixed into a report captured under — another account's session.
+registerWalletSwitchReset(clearE2ETrace);
 
 function hhmmss(t: number): string {
   try {

@@ -12,6 +12,40 @@ import { getChannelOrg, applyRemoteOrg } from './channel-org';
 import { addJoinedChannels } from './joined-channels';
 import { getHiddenDms, applyRemoteHiddenDms } from './dm-hide';
 import { getTopicGroups, applyRemoteTopicGroups } from './topic-groups';
+import { getWalletScope, currentSwitchGeneration } from './walletScope';
+import { stillSameAccount } from './accountGuard';
+import { runChannelOrgPull } from './orgPull';
+import { exportKeyForCaptured, type CapturedAccount } from './accountKey';
+import { vaultExportKey } from './vault';
+import { WalletSigner } from '@ogmara/sdk';
+
+/** Capture "which account is this for" — BEFORE exporting any key. */
+function captureAccount(): CapturedAccount {
+  return { wallet: walletAddress(), gen: currentSwitchGeneration() };
+}
+
+/** Whether `cap` is still the active account on BOTH "who's active" signals
+ *  — `walletAddress()` (auth) and the storage scope every write goes through,
+ *  which flip at different points of a switch — AND no switch has STARTED
+ *  since capture. The generation is bumped first thing in a switch, before
+ *  `vaultActivate()` re-points `vaultExportKey()` at the next account while
+ *  the other two signals still name the old one. */
+function stillFor(cap: CapturedAccount): boolean {
+  return currentSwitchGeneration() === cap.gen
+    && stillSameAccount(cap.wallet, walletAddress(), getWalletScope());
+}
+
+/** The captured account's own wallet key, exported AFTER capture and proven
+ *  to derive to that wallet (see accountKey.ts), or null. Settings-sync never
+ *  takes a key from its callers: a key exported before the account was
+ *  captured is exactly how one account's data got sealed under another's. */
+function keyForCaptured(cap: CapturedAccount): Promise<string | null> {
+  return exportKeyForCaptured(cap, {
+    still: stillFor,
+    exportKey: vaultExportKey,
+    deriveAddress: async (hex) => (await WalletSigner.fromHex(hex)).address,
+  });
+}
 
 /** JSON-encoded settings keys synced across devices (read/write via getSetting/setSetting). */
 const SYNC_KEYS = ['lang', 'notificationSound', 'compactLayout', 'fontSize'] as const;
@@ -126,24 +160,27 @@ export async function encryptSettings(hexKey: string): Promise<{ encrypted_setti
 }
 
 /** Decrypt settings blob and apply to local storage. */
-export async function decryptAndApplySettings(
+async function decryptAndApplySettings(
   hexKey: string,
   encryptedSettings: Uint8Array,
   nonce: Uint8Array,
+  forWallet: CapturedAccount,
 ): Promise<void> {
   // Two awaits below precede every write, and the writes go through the SCOPED
   // setters plus `applyRemote*`, then trigger a re-upload. A switch inside that
   // window would file one account's settings under another's namespace and
-  // push them to the node.
-  const forWallet = walletAddress();
+  // push them to the node. `forWallet` was captured by the caller BEFORE the
+  // key was exported (see keyForCaptured).
   const key = await deriveKey(hexKey);
+  if (!stillFor(forWallet)) return;
   const plaintext = await crypto.subtle.decrypt(
     // audit 2026-06-07 B4.1: ArrayBuffer-backed view — TS5.9 rejects Uint8Array<ArrayBufferLike>
     { name: 'AES-GCM', iv: nonce.buffer.slice(nonce.byteOffset, nonce.byteOffset + nonce.byteLength) as ArrayBuffer },
     key,
     encryptedSettings.buffer.slice(encryptedSettings.byteOffset, encryptedSettings.byteOffset + encryptedSettings.byteLength) as ArrayBuffer,
   );
-  if (walletAddress() !== forWallet) return;
+  // Re-checked AFTER the decrypt await — the last await before any write.
+  if (!stillFor(forWallet)) return;
   let settings: Record<string, unknown>;
   try {
     settings = JSON.parse(new TextDecoder().decode(plaintext));
@@ -189,7 +226,7 @@ export async function decryptAndApplySettings(
   // This device's object settings are newer than the node's → seed it (and, via
   // its re-gossip, the mesh). See downloadChannelOrg for the rationale.
   if (syncedContentTimestamp() > remoteContentTimestamp(settings)) {
-    void uploadSettings(hexKey);
+    void uploadSettings(forWallet);
   }
 }
 
@@ -201,40 +238,51 @@ function isValidRawSyncValue(key: string, value: string): boolean {
   return false;
 }
 
-/** Upload current settings to L2 node. */
-export async function uploadSettings(hexKey: string): Promise<void> {
-  // `hexKey` arrives from a debounced timer, so the account may already have
-  // changed by the time this runs — and `encryptSettings` reads the CURRENT
-  // account's settings. Sealing this account's data under that account's key
-  // and uploading it under that account's auth is how two accounts' data get
-  // merged on the server.
-  const forWallet = walletAddress();
+/** Upload current settings to L2 node. Resolves `true` when uploaded.
+ *
+ *  Exports the key ITSELF, after capturing the account (callers used to pass a
+ *  key exported first — mid-switch that could already be the NEXT account's
+ *  key while every account check still named the old one). `cap` is passed
+ *  only by the download paths, which already captured before their own key
+ *  export; it must never be captured after a key was exported. */
+export async function uploadSettings(cap: CapturedAccount = captureAccount()): Promise<boolean> {
+  // The account may change at any await below — and `encryptSettings` reads
+  // the CURRENT account's settings. Sealing one account's data under another
+  // account's key, or uploading it under the other's auth, is how two
+  // accounts' data get merged on the server.
+  const forWallet = cap;
+  const hexKey = await keyForCaptured(forWallet);
+  if (!hexKey || !stillFor(forWallet)) return false;
   const data = await encryptSettings(hexKey);
-  if (walletAddress() !== forWallet) return;
+  if (!stillFor(forWallet)) return false;
   const client = getClient();
   await client.syncSettings(data);
+  return true;
 }
 
-/** Download and apply settings from L2 node. */
-export async function downloadSettings(hexKey: string): Promise<boolean> {
+/** Download and apply settings from L2 node. Exports the key itself (see
+ *  `uploadSettings`). Resolves `false` when nothing was applied. */
+export async function downloadSettings(): Promise<boolean> {
+  // Which account this pull belongs to — captured before the key export.
+  // Applying it after a switch would write one account's pinned/muted channels
+  // and news positions into another's namespace.
+  const forWallet = captureAccount();
+  const hexKey = await keyForCaptured(forWallet);
+  if (!hexKey || !stillFor(forWallet)) return false;
   const client = getClient();
-  // Which account this pull belongs to. Applying it after a switch would write
-  // one account's pinned/muted channels and news positions into another's
-  // namespace.
-  const forWallet = walletAddress();
   const resp = await client.getSettings();
-  if (!resp || walletAddress() !== forWallet) return false;
-  // The sibling `downloadChannelOrg` re-checks after the decrypt too:
+  if (!resp || !stillFor(forWallet)) return false;
   // `decryptAndApplySettings` awaits `deriveKey` and `crypto.subtle.decrypt`
   // before writing pinned/muted channels and news positions through the SCOPED
-  // setters — and then re-uploads. A switch inside that window writes one
-  // account's settings into another's namespace and pushes them to the node.
+  // setters — and then re-uploads — so it re-checks the account itself after
+  // each of those awaits.
   await decryptAndApplySettings(
     hexKey,
     new Uint8Array(resp.encrypted_settings),
     new Uint8Array(resp.nonce),
+    forWallet,
   );
-  return true;
+  return stillFor(forWallet);
 }
 
 /**
@@ -244,57 +292,31 @@ export async function downloadSettings(hexKey: string): Promise<boolean> {
  * ordering, and hidden conversations without overriding this device's other
  * prefs. Best-effort: swallows errors and returns false on any failure.
  */
-export async function downloadChannelOrg(hexKey: string): Promise<boolean> {
-  try {
-    // The fetch and the decrypt below are both awaits, and an account switch
-    // can land in that window — applying afterwards would write THIS account's
-    // channel organisation and hidden DMs into the OTHER account's namespace,
-    // then upload them under that account's key, linking the two accounts'
-    // interest graphs on the server.
-    const forWallet = walletAddress();
-    const resp = await getClient().getSettings();
-    if (walletAddress() !== forWallet) return false;
-    if (!resp) {
-      // Fresh node with nothing for this wallet. If THIS device holds real
-      // synced state, seed the node once — it then gossips it to the mesh so
-      // every node converges. Safe: the upload carries the content's own
-      // `updated_at`, so a node that already has a newer copy will LWW-drop it.
-      if (syncedContentTimestamp() > 0) void uploadSettings(hexKey);
-      return false;
-    }
-    const key = await deriveKey(hexKey);
-    // Re-checked after the decrypt, immediately before the first write.
-    if (walletAddress() !== forWallet) return false;
-    const plaintext = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: new Uint8Array(resp.nonce) },
-      key,
-      new Uint8Array(resp.encrypted_settings),
-    );
-    const settings = JSON.parse(new TextDecoder().decode(plaintext));
-    let applied = false;
-    const org = settings?.[CHANNEL_ORG_KEY];
-    if (org && typeof org === 'object') {
-      const placedIds = applyRemoteOrg(org);
-      if (placedIds.length) addJoinedChannels(placedIds);
-      applied = true;
-    }
-    const hidden = settings?.[HIDDEN_DMS_KEY];
-    if (hidden && typeof hidden === 'object') {
-      applyRemoteHiddenDms(hidden);
-      applied = true;
-    }
-    const topics = settings?.[TOPIC_GROUPS_KEY];
-    if (topics && typeof topics === 'object') {
-      applyRemoteTopicGroups(topics);
-      applied = true;
-    }
-    // This device's copy is strictly newer than the node's → push it up once so
-    // this node — and, via its re-gossip, every other node — converges to it.
-    if (syncedContentTimestamp() > remoteContentTimestamp(settings)) {
-      void uploadSettings(hexKey);
-    }
-    return applied;
-  } catch {
-    return false;
-  }
+export async function downloadChannelOrg(): Promise<boolean> {
+  // Captured FIRST — before the key export inside the pull (see
+  // keyForCaptured). The key export, the fetch and the decrypt are all
+  // awaits an account switch can land in; `runChannelOrgPull` (orgPull.ts)
+  // re-checks the account after EACH of them, before any write or upload.
+  const forWallet = captureAccount();
+  return runChannelOrgPull({
+    sameAccount: () => stillFor(forWallet),
+    getKey: () => keyForCaptured(forWallet),
+    fetch: () => getClient().getSettings(),
+    decrypt: async (resp, hexKey) => {
+      const key = await deriveKey(hexKey);
+      const plaintext = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: new Uint8Array(resp.nonce) },
+        key,
+        new Uint8Array(resp.encrypted_settings),
+      );
+      return JSON.parse(new TextDecoder().decode(plaintext));
+    },
+    applyOrg: (org) => applyRemoteOrg(org),
+    addJoined: (ids) => addJoinedChannels(ids),
+    applyHidden: (hidden) => applyRemoteHiddenDms(hidden),
+    applyTopics: (topics) => applyRemoteTopicGroups(topics),
+    localTimestamp: syncedContentTimestamp,
+    remoteTimestamp: remoteContentTimestamp,
+    upload: () => { void uploadSettings(forWallet); },
+  });
 }

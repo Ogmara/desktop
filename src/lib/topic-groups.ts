@@ -272,12 +272,12 @@ function scheduleUpload(): void {
   uploadTimer = setTimeout(async () => {
     uploadTimer = null;
     try {
-      const [{ vaultExportKey }, { uploadSettings }] = await Promise.all([
-        import('./vault'),
-        import('./settings-sync'),
-      ]);
-      const key = await vaultExportKey();
-      if (key) await uploadSettings(key);
+      // Dynamic import breaks the static cycle (settings-sync imports us back).
+      // No key is exported here: uploadSettings captures the account FIRST and
+      // exports that account's key itself — a key exported before the capture
+      // can already be the next account's mid-switch (settings-sync.ts).
+      const { uploadSettings } = await import('./settings-sync');
+      await uploadSettings();
     } catch {
       /* best-effort; local copy already persisted */
     }

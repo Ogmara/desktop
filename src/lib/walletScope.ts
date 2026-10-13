@@ -183,6 +183,10 @@ export function scopedRemove(base: string): void {
   }
 }
 
+/** Prefixes of the Sidebar's `<prefix><nodeUrl>:<address>` list caches
+ *  (`channelsCacheKey()` / `dmCacheKey()` in Sidebar.tsx). Keep in sync. */
+export const LEGACY_LIST_CACHE_PREFIXES = ['channelsCache:', 'dmConvsCache:'] as const;
+
 /**
  * Delete every key belonging to `address` (defaults to the active wallet).
  *
@@ -196,13 +200,21 @@ export function wipeWalletScope(address?: string | null): void {
   const target = address ?? activeWallet;
   if (!target) return;
   const suffix = `${SEP}${target}`;
+  // The Sidebar's per-(node, wallet) list caches predate this module and are
+  // keyed `<prefix><nodeUrl>:<address>` — a SINGLE ':' — so the `::` suffix
+  // match alone missed them, leaving the account's private-channel list and
+  // DM peer list on disk after a disconnect. Not renamed (existing caches
+  // would be orphaned); matched here instead.
+  const cacheSuffix = `:${target}`;
+  const isLegacyListCache = (k: string): boolean =>
+    LEGACY_LIST_CACHE_PREFIXES.some((p) => k.startsWith(p)) && k.endsWith(cacheSuffix);
   try {
     // Collect first: removing while iterating localStorage's live index skips
     // entries, which would leave some of the account's data behind.
     const mine: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.endsWith(suffix)) mine.push(k);
+      if (k && (k.endsWith(suffix) || isLegacyListCache(k))) mine.push(k);
     }
     for (const k of mine) localStorage.removeItem(k);
   } catch {

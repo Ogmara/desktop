@@ -15,6 +15,9 @@ import { authStatus, walletAddress, getSigner, isRegistered } from '../lib/auth'
 import { navigate, goBack } from '../lib/router';
 import { kleverAvailable, createChannelOnChain, getChannelIdFromTx } from '../lib/klever';
 import { addJoinedChannel } from '../components/Sidebar';
+import { addJoinedChannelFor } from '../lib/joined-channels';
+import { vaultListAccounts } from '../lib/vault';
+import { stillSameAccount } from '../lib/accountGuard';
 
 export const ChannelCreateView: Component = () => {
   const [slug, setSlug] = createSignal('');
@@ -26,11 +29,22 @@ export const ChannelCreateView: Component = () => {
   const [error, setError] = createSignal('');
 
   const [status, setStatus] = createSignal('');
+  /** i18n key of an "account switched mid-creation" notice. Rendered OUTSIDE
+   *  the auth/registration-gated form: every account switch resets
+   *  `isRegistered()` to false until re-checked, so a notice inside the form
+   *  would be hidden exactly when the user needs it. */
+  const [interrupted, setInterrupted] = createSignal<string | null>(null);
 
   const handleCreate = async () => {
     const s = slug().trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
     if (!s) { setError('Slug is required'); return; }
-    if (!getSigner() || !walletAddress()) { setError(t('auth_required')); return; }
+    // The account that starts the creation must be the one that signs the L2
+    // envelope and owns the joined-channels entry. The client is SHARED and an
+    // account switch re-points its signer, while the on-chain confirmation
+    // below can take ~40s — see `sameAccount` checks after each await.
+    const me = walletAddress();
+    if (!getSigner() || !me) { setError(t('auth_required')); return; }
+    const sameAccount = () => stillSameAccount(me, walletAddress(), getClient().address);
 
     const isPrivate = channelType() === 2;
 
@@ -42,6 +56,7 @@ export const ChannelCreateView: Component = () => {
 
     setSubmitting(true);
     setError('');
+    setInterrupted(null);
 
     try {
       const client = getClient();
@@ -54,8 +69,21 @@ export const ChannelCreateView: Component = () => {
 
         setStatus('Waiting for confirmation...');
         channelId = await getChannelIdFromTx(txHash, s);
+        // Switched accounts during the on-chain step: the on-chain registration
+        // is done, but the L2 ChannelCreate must NOT be signed by the other
+        // account. Stop and tell the user where the channel went.
+        if (!sameAccount()) {
+          setInterrupted('channel_create_interrupted');
+          return;
+        }
       }
       // Private: channelId stays undefined — createChannel derives it.
+      // (Only reachable for a private channel: the public path has no await
+      // since the check above.) Nothing has been signed or paid for yet.
+      if (!sameAccount()) {
+        setInterrupted('channel_create_interrupted_private');
+        return;
+      }
 
       // Publish L2 ChannelCreate envelope with the assigned/derived channel_id
       setStatus(isPrivate ? 'Creating private channel...' : 'Publishing channel to L2 network...');
@@ -72,6 +100,21 @@ export const ChannelCreateView: Component = () => {
         encryptionEnabled: true,
       });
 
+      // createChannel signed as `me` (checked synchronously above, the SDK
+      // binds the signer at call time); don't file it under a different
+      // account that became active while it was publishing — but tell the
+      // user: the channel now exists under the PREVIOUS account, outside its
+      // joined list.
+      if (!sameAccount()) {
+        // Still file it into the CREATING account's joined set (it created and
+        // owns the channel) — but only if that account is still held: writing
+        // a `::<address>` key for a removed account would resurrect it through
+        // the vault index's recovery scan.
+        const held = await vaultListAccounts().catch(() => []);
+        if (held.some((e) => e.a === me)) addJoinedChannelFor(me, resp.channel_id);
+        setInterrupted('channel_create_interrupted_published');
+        return;
+      }
       addJoinedChannel(resp.channel_id);
       window.dispatchEvent(new Event('ogmara:channels-changed'));
       navigate(`/chat/${resp.channel_id}`);
@@ -89,6 +132,10 @@ export const ChannelCreateView: Component = () => {
         <button class="create-back" onClick={() => goBack()}>← {t('nav_back')}</button>
         <h2>{t('channel_create')}</h2>
       </div>
+
+      <Show when={interrupted()}>
+        {(key) => <div class="create-error" role="alert">{t(key())}</div>}
+      </Show>
 
       <Show when={authStatus() !== 'ready'}>
         <div class="create-auth-prompt">

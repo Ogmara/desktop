@@ -21,6 +21,8 @@
 
 import { createSignal } from 'solid-js';
 import { getSetting } from './settings';
+import { registerWalletSwitchReset, getWalletScope } from './walletScope';
+import { routeAfterAccountChange } from './routeCarryover';
 
 export type ViewName =
   | 'chat'
@@ -163,6 +165,53 @@ const [route, setRoute] = createSignal<Route>(parseHash(window.location.hash));
 // Listen for hash changes
 window.addEventListener('hashchange', () => {
   setRoute(parseHash(window.location.hash));
+});
+
+function sameRecord(a: Record<string, string>, b: Record<string, string>): boolean {
+  const ka = Object.keys(a);
+  if (ka.length !== Object.keys(b).length) return false;
+  return ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && a[k] === b[k]);
+}
+
+// A bare `#/chat` resolves to the ACTIVE account's `lastChannel` (a per-account
+// setting) at parse time. Without a re-parse on switch, the route signal kept
+// the PREVIOUS account's last channel until the next hashchange, rendering —
+// and acting on — a channel that belongs to the other account. Only replace the
+// route when it actually differs, so an unchanged route does not re-run every
+// route-keyed effect in the app.
+//
+// Deferred to a microtask: this reset fires from inside `setWalletScope()`,
+// BEFORE `switchAccountInner` has attached the new signer and flipped
+// `walletAddress()`. Re-rendering views synchronously there would run their
+// effects against a half-switched session. The microtask runs after that
+// synchronous block, and re-reads the hash and scope at run time, so a second
+// switch in between still lands on the right account's route.
+//
+// On an in-place switch between two accounts (not the first login — deep
+// links opened before signing in must survive), a per-account DETAIL route
+// (`/chat/:id`, `/chat/:id/settings`, `/dm/:peer`) belongs to the previous
+// account and is replaced by its neutral list route — see routeCarryover.ts.
+// `replaceState` rather than `navigate`: no history entry, no `hashchange`,
+// so this cannot feed back into itself.
+let lastActiveWallet: string | null = null;
+registerWalletSwitchReset(() => {
+  if (typeof window === 'undefined') return;
+  queueMicrotask(() => {
+    const scope = getWalletScope();
+    const prevActive = lastActiveWallet;
+    if (scope) lastActiveWallet = scope;
+    const cur = route();
+    const neutral = routeAfterAccountChange(cur.view, cur.params, prevActive, scope);
+    if (neutral) {
+      try { window.history.replaceState(window.history.state, '', `#${neutral}`); } catch { /* fall through to setRoute */ }
+      setRoute(parseHash(`#${neutral}`));
+      return;
+    }
+    const next = parseHash(window.location.hash);
+    if (next.view !== cur.view || !sameRecord(next.params, cur.params) || !sameRecord(next.query, cur.query)) {
+      setRoute(next);
+    }
+  });
 });
 
 export { route };
