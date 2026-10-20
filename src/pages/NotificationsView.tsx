@@ -1,5 +1,6 @@
 /**
- * NotificationsView — user notifications (mentions, replies, follows, DMs).
+ * NotificationsView — user notifications (mentions, replies, follows, DMs,
+ * channel invites).
  */
 
 import { Component, createResource, createSignal, For, Show, onCleanup } from 'solid-js';
@@ -7,6 +8,7 @@ import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { authStatus } from '../lib/auth';
 import { navigate } from '../lib/router';
+import { joinRouteForInviteNotification } from '../lib/privateInvite';
 import type { Notification } from '@ogmara/sdk';
 
 const NOTIFICATION_ICONS: Record<string, string> = {
@@ -14,6 +16,7 @@ const NOTIFICATION_ICONS: Record<string, string> = {
   reply: '↩',
   follow: '👤',
   dm: '💬',
+  channel_invite: '✉',
 };
 
 export const NotificationsView: Component = () => {
@@ -57,6 +60,14 @@ export const NotificationsView: Component = () => {
       case 'dm':
         navigate(`/dm/${notif.from}`);
         break;
+      case 'channel_invite': {
+        // Join page (+ anchor-node host hint). The invite envelope is never put
+        // in the URL; the join page looks it up with findPendingInvite.
+        // Navigation only — nothing is signed here.
+        const r = joinRouteForInviteNotification(notif);
+        if (r) navigate(r);
+        break;
+      }
     }
   };
 

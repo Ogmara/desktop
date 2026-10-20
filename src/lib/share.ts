@@ -49,11 +49,12 @@ export function buildChatShareUrl(channelId: number | string, msgIdHex: string):
 }
 
 /**
- * Build a channel invite/join deep link. For a PRIVATE channel, pass the host
- * node URL — private channels live only on their host node, so a recipient on a
- * different node needs the hint to find + switch to it (the join view reads `?node`).
- * Public channels are chain-discoverable everywhere, so they omit it. Returns null
- * if `channelId` isn't a positive integer.
+ * Build a bare channel join deep link — Public / ReadPublic channels only.
+ * A Private channel has no bare link (it never granted access, and with the
+ * l2-node 0.140.0+ invite gate it cannot): its only link is the PERSONAL one
+ * from the SDK's `buildPrivateChannelInviteUrl`, made when inviting a specific
+ * address (spec 06 §6.5). `hostNodeUrl` is an optional `?node=` hint, unused by
+ * current callers. Returns null if `channelId` isn't a positive integer.
  */
 export function buildChannelInviteUrl(
   channelId: number | string,

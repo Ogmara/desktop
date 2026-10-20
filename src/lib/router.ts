@@ -23,6 +23,7 @@ import { createSignal } from 'solid-js';
 import { getSetting } from './settings';
 import { registerWalletSwitchReset, getWalletScope } from './walletScope';
 import { routeAfterAccountChange } from './routeCarryover';
+import { splitHashRoute } from './hashQuery';
 
 export type ViewName =
   | 'chat'
@@ -55,18 +56,10 @@ export interface Route {
 function parseHash(hash: string): Route {
   // Remove leading # and /
   const raw = hash.replace(/^#\/?/, '');
-  // Split query string
-  const [path, queryStr] = raw.split('?');
+  // Split the path from the query and decode the query (hashQuery.ts — pure,
+  // so the `inv=` / `node=` carry-through is unit-tested).
+  const { path, query } = splitHashRoute(raw);
   const segments = path.split('/').filter(Boolean);
-
-  // Parse query params
-  const query: Record<string, string> = {};
-  if (queryStr) {
-    for (const pair of queryStr.split('&')) {
-      const [k, v] = pair.split('=');
-      if (k) query[decodeURIComponent(k)] = decodeURIComponent(v || '');
-    }
-  }
 
   // Default first segment honors the user's preferred landing view (Settings).
   // News is the default for new users; users who pick Chat get their last

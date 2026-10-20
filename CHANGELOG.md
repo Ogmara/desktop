@@ -5,6 +5,124 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.83.0] - 2026-10-20
+
+Client side of the private-channel invite gate (l2-node 0.140.0, sdk-js
+0.64.0, spec 05 §8.4, spec 06 §6.5). Requires the local `@ogmara/sdk` 0.64.0.
+
+### Security
+
+- **A Private channel can no longer be joined without the joiner's own signed
+  invite.** The join page used to offer a Join button for every private
+  channel (the node accepted it because its invite check had no writer). It
+  now takes the invite from the personal link's `inv=` parameter or from the
+  wallet's newest `channel_invite` notification (`findPendingInvite`) and
+  sends the SAME bytes to `federateChannel` and `joinChannel`. Without a
+  usable invite there is no Join button at all. Gating fails closed and is
+  floor-aware (`isInviteGatedChannel`): only an explicit Public (0) /
+  ReadPublic (1) type for an id BELOW the private namespace (2^32) takes the
+  permissionless path. A Private, missing or garbled type, a bad id, and a
+  "public" type reported for a private-namespace id — e.g. by a hostile
+  `?node=` host serving the cross-node preview — all get the invite gate, so
+  such a host cannot surface the public cross-node Join for a private channel.
+- **Membership evidence comes from the local node only.** The "already a
+  member — open channel" shortcut accepts the creator / member list of the
+  record served by the user's OWN node, never a cross-node preview from an
+  attacker-choosable `?node=` host; anything else keeps the invite gate.
+- **Channel settings fail closed too:** the bare copy-link is shown only for
+  an explicit Public / ReadPublic type below the private id floor, and only
+  when the loaded record's own `channel_id` is the route's (the record of the
+  previously viewed channel can no longer decide it while the new one loads);
+  every other type gets the invite flow (validity picker + personal link).
+- **The bare "copy invite link" is gone for Private channels.** It never
+  granted access and embedded the host node; the only private link is now a
+  personal invite link bound to one invitee wallet. Public / ReadPublic keep
+  the bare link (shown only once the channel type is known).
+- Account-switch guards (spec 06 §6.10) cover the new flows: join-page data
+  (channel record, member list, pending invite, cross-node preview) is tagged
+  with channel + wallet + link and ignored for any other key; the private join
+  and the invite action capture wallet, switch generation and channel before
+  any await and re-check after every one; the personal link shown after an
+  invite is tagged with wallet + generation + channel and hidden on mismatch.
+- The hash router no longer throws on a malformed percent-escape in a pasted
+  link (it broke every route), and splits on the first `?` / `=` only, so an
+  `inv=` / `node=` value reaches the join page intact.
+- Dependency scan for this release: `npm audit` 0 vulnerabilities;
+  `cargo audit` 0 vulnerabilities (14 pre-existing allowed warnings —
+  unmaintained/unsound/yanked transitive crates of the Tauri/GTK stack,
+  unchanged by this release). No dependency changes.
+
+### Added
+
+- Join page states for Private channels: invite-only notice with the user's
+  own address and a **Copy my address** button; **invite expired on {date}**;
+  **invite is for a different account**; an informational line when the
+  inviter cannot be shown as creator/moderator (the node verifies — never
+  blocks); **Valid until {date}** next to the Join button. A 30-second clock
+  re-evaluates expiry while the page is open, and the click re-checks against
+  the exact time. A node rejection ("invite proof required") falls back to the
+  invite-only notice; so does any HTTP 403 from federate/join on a private
+  channel, so a differently-worded node rejection never shows as a raw API
+  string.
+- An existing member or the creator who opens a private join link gets
+  **You are already a member — open channel** instead of a dead end — on
+  positive evidence only (creator field of the record for this channel, or
+  this node's member list fetched for the active wallet + channel); unknown
+  membership keeps the invite gate. Opening signs nothing.
+- **Creator hosting their own private channel on a fresh home node.** When
+  the channel lives on another node, isn't on the user's node yet, and the
+  cross-node preview names the active wallet as creator (`isPreviewCreator`),
+  the join page offers **You created this channel — host it on this node**:
+  `federateChannel` WITHOUT an invite (the node accepts that only for the
+  verified creator), then the channel opens. Account-switch guards as for
+  every other join. The preview's creator claim only decides whether the
+  action is offered — a false claim earns a node rejection — and is never
+  membership evidence: a node refusal (403 / "invite proof required") falls
+  back to the invite-required state (spec 05 §8.4 item 4) rather than the raw
+  API string, and the action is not offered again. Previously such a creator
+  hit the invite-only notice with no way forward.
+- Rate limits / unavailable nodes (HTTP 429 / 503) on federate or join show a
+  localized "node is busy, try again shortly" (`isTransientFederateError`)
+  instead of the raw API string.
+- Private channel settings: **validity picker** (1 hour / 24 hours / 7 days /
+  14 days, default 7 days, nothing else accepted) for invite-by-address, and
+  after a successful invite a **Copy personal invite link** button (this node
+  as the federation host) with the invite's expiry date.
+- Cross-node private join: the federation host falls back from the `node=`
+  link parameter to the invite's own `anchor_node`; a private channel stays
+  joinable (with an invite) when its host hides the preview from non-members.
+- A tapped `channel_invite` notification opens `#/join/{channel_id}` (plus
+  `?node=<anchor_node>` when the notification names an http(s) anchor node);
+  the join page then finds the invite with `findPendingInvite`. The invite
+  envelope is never put in a route or URL from there. The notification row
+  gets an icon and a label (`notifications_channel_invite`, previously the raw
+  key was shown).
+- `lib/privateInvite.ts` (same API as web 0.83.0: `evaluateInvite`,
+  `resolveJoinInvite`, `isJoinableInvite`, `isInviteProofRejection`,
+  `isPrivateJoinRejection`, `membershipEvidence`, `isMemberState`,
+  `joinRouteForInviteNotification`, `INVITE_TTL_OPTIONS`,
+  `DEFAULT_INVITE_TTL_OPTION_MS`, `inviteTtlFromPicker`,
+  `PRIVATE_CHANNEL_ID_FLOOR`, `isInviteGatedChannel`, `isPreviewCreator`,
+  `isTransientFederateError`; desktop addition
+  `pickFederationHost`), `lib/hashQuery.ts`, with tests (negative controls)
+  and source probes for the component wiring.
+- i18n (all 7 locales): `channel_invite_required`,
+  `channel_invite_required_desc`, `channel_invite_expired`,
+  `channel_invite_wrong_account`, `channel_invite_copy_my_address`,
+  `channel_invite_address_copied`, `channel_invite_copy_personal_link`,
+  `channel_invite_validity`, `channel_invite_valid_until`,
+  `channel_invite_ttl_1h|24h|7d|14d`, `channel_invite_inviter_unverifiable`,
+  `channel_invite_already_member`, `channel_invite_creator_host`,
+  `channel_invite_busy_retry`, `notifications_channel_invite`.
+
+### Changed
+
+- `channel_private_invite_link` reworded in all locales — there is no
+  request-access flow; joining requires a personal invite from a member.
+- Invite errors: an account switch mid-invite is silent; other failures
+  (out-of-range TTL, "creator unknown on this node", node rejection) show the
+  SDK/node message.
+
 ## [1.82.0] - 2026-10-12
 
 ### Security
@@ -121,7 +239,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wallet** (not on a cached fallback or a value still displayed from the
   previous account), as defence in depth for the 2026-09-04 cross-account
   private-channel leak.
-- **Dependency (runtime, Rust):** `rustls` 0.23.37 → 0.23.45 (and
+- **Dependency (runtime, Rust):** `rustls` 0.23.37 → 0.23.46 (RUSTSEC-2026-0285 and RUSTSEC-2026-0346/0347/0348/0349) (and
   `rustls-webpki` 0.103.13 → 0.103.15) via `cargo update`, fixing
   RUSTSEC-2026-0285 (TLS 1.3 handshake messages accepted across encryption
   level boundaries). Shipped code (TLS in the Tauri HTTP stack).
