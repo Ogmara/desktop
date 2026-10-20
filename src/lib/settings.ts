@@ -38,6 +38,13 @@ export interface Settings {
   deviceId: string;
   /** Cached enc-key binding marker "wallet:enc_pub" to avoid re-publishing. */
   encKeyBound: string;
+  /**
+   * Key-vault marker (§2.5): holds the wallet address once this device has
+   * opened or published that wallet's key vault. A later 404 for the vault is
+   * then "the node has no copy", not "empty" — backups pause instead of
+   * overwriting the real vault with a partial keyring. '' = never seen.
+   */
+  keyVaultSeen: string;
   /** Push gateway URL. Empty = auto-derive from nodeUrl (same host, port 41722). */
   pushGatewayUrl: string;
   /** Which view the app opens to after vault unlock — `news` or `chat`. */
@@ -121,6 +128,7 @@ const defaults: Settings = {
   deviceRegistered: '',
   deviceId: '',
   encKeyBound: '',
+  keyVaultSeen: '',
   pushGatewayUrl: '',
   defaultLandingView: 'news',
   currency: 'usd',
@@ -160,6 +168,8 @@ const PER_ACCOUNT: ReadonlySet<keyof Settings> = new Set([
   'deviceRegistered',
   'encKeyBound',
   'deviceId',
+  // Whether this device has seen the account's key vault (keyVault.ts).
+  'keyVaultSeen',
 ] as (keyof Settings)[]);
 
 /** Whether a key is account-scoped rather than install-scoped. */

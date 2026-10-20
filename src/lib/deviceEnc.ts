@@ -23,7 +23,7 @@ import { getItemAsync, setItemAsync, deleteItemAsync } from './secureStore';
 import { getSetting, setSetting } from './settings';
 import { SS, isValidAddress } from './vaultAccounts';
 import { vaultActiveAddress, vaultGetAddress } from './vault';
-import { signMessage } from './klever';
+import { signMessageAs } from './klever';
 import { getClient } from './api';
 import { e2elog, withRetry } from './e2eDebug';
 import { currentSwitchGeneration } from './walletScope';
@@ -188,7 +188,7 @@ async function revokeStaleEncKeys(
         walletSign: sign,
         network,
       });
-      // `sign` calls `signMessage()` live, at whatever moment `buildDeviceEncRevoke`
+      // `sign` calls `signMessageAs()` live, at whatever moment `buildDeviceEncRevoke`
       // invokes it — re-check right before the publish, the actual network write,
       // not just before starting to build this one revoke.
       if (isStale()) return;
@@ -213,7 +213,7 @@ export async function ensureDeviceEncBinding(): Promise<void> {
   // Captured alongside `wallet` — see walletScope.ts's `bumpSwitchGeneration()`
   // doc. `vaultGetAddress()` alone (like `vaultActiveAddress()`) flips to the
   // NEW account the instant `vaultActivate()` returns, well before this
-  // function's `sign` closure — which calls `signMessage()` fresh, live, at
+  // function's `sign` closure — which calls `signMessageAs()` fresh, live, at
   // whatever moment `buildDeviceEncBinding`/`revokeStaleEncKeys` invoke it —
   // would actually sign with the new account's real signer. A switch landing
   // during any of this function's several awaits could otherwise publish an
@@ -253,12 +253,17 @@ export async function ensureDeviceEncBinding(): Promise<void> {
   }
   if (registryOk && getSetting('encKeyBound') === marker) return;
   // Re-checked immediately before the network writes below: everything above
-  // this point only READ state; `signMessage()` (inside `sign`) and the
+  // this point only READ state; `signMessageAs()` (inside `sign`) and the
   // publish are where a stale `wallet`/`kp` would actually reach the network.
   if (stale()) return;
 
-  // signMessage returns 128-char hex; the SDK normalizes it internally.
-  const sign: WalletSignFn = (claim) => signMessage(claim);
+  // signMessageAs returns 128-char hex; the SDK normalizes it internally.
+  // Signs ONLY as `wallet`: if a switch re-pointed the vault signer since the
+  // capture above, it throws instead of producing a binding / revoke that
+  // claims `wallet` but is signed by another account (defence in depth next
+  // to the `stale()` re-checks; the failure is caught by the callers and the
+  // marker stays unset, so the next login retries).
+  const sign: WalletSignFn = (claim) => signMessageAs(wallet, claim);
   const envelope = await buildDeviceEncBinding({
     walletAddress: wallet,
     encPubHex: kp.publicKeyHex,

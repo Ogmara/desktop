@@ -595,5 +595,15 @@
   "bot_badge_tooltip": "Selbst angegeben — nicht von Ogmara verifiziert",
   "bot_commands_label": "Bot-Befehle",
   "message_button_send_failed": "Senden fehlgeschlagen — bitte erneut versuchen",
-  "message_button_sent": "Gesendet:"
+  "message_button_sent": "Gesendet:",
+  "keyvault_blocked_title": "Sicherung der Nachrichtenschlüssel pausiert",
+  "keyvault_unreadable_body": "Die auf dem Node gespeicherte Schlüsselsicherung lässt sich mit dem Schlüssel dieser Wallet nicht öffnen (sie ist eventuell beschädigt oder stammt von einer neueren App-Version). Zu ihrem Schutz werden neue Schlüssel nicht gesichert. Versuche es erneut oder ersetze sie durch die Schlüssel auf diesem Gerät.",
+  "keyvault_missing_body": "Dieser Node hat keine Kopie deiner Schlüsselsicherung, obwohl dieses Gerät schon eine verwendet hat. Zum Schutz des Originals werden neue Schlüssel nicht gesichert. Verbinde dich mit einem anderen Node und versuche es erneut, oder ersetze sie durch die Schlüssel auf diesem Gerät.",
+  "keyvault_retry": "Erneut versuchen",
+  "keyvault_replace": "Sicherung ersetzen",
+  "keyvault_replace_confirm": "Die Schlüsselsicherung auf dem Node durch die Schlüssel auf diesem Gerät ersetzen? Schlüssel, die nur in der alten Sicherung existieren, gehen endgültig verloren, und ältere Nachrichten bleiben auf deinen anderen Geräten eventuell unlesbar.",
+  "keyvault_replaced": "Sicherung ersetzt. Neue Nachrichtenschlüssel werden wieder gesichert.",
+  "keyvault_replace_failed": "Der Node war nicht erreichbar, um die Sicherung zu ersetzen. Es wird automatisch erneut versucht.",
+  "keyvault_replace_nothing": "Sicherung freigegeben. Auf diesem Gerät gibt es noch keine Schlüssel; die Sicherung wird mit deinem nächsten neuen Schlüssel ersetzt.",
+  "keyvault_dismiss": "Schließen"
 }

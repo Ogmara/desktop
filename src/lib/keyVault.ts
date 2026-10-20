@@ -5,15 +5,26 @@
  * device / reinstall can restore full message history. The node stores the blob
  * opaquely (it never holds the backup key).
  *
- * Flow:
- *  - **Backup:** whenever a content key is cached, {@link scheduleBackup} debounces a
- *    `sealKeyVault` → `syncKeyVault` publish (one LWW record per wallet).
+ * Flow (state machine in lib/keyVaultCore.ts `createVaultController`, same design as
+ * web 0.84.0):
+ *  - **Backup:** whenever a content key is cached, `scheduleBackup` debounces a
+ *    `sealKeyVault` → `syncKeyVault` publish (one LWW record per wallet) — but only
+ *    once restore is `done` for this account, so a publish never overwrites a vault
+ *    this session hasn't read (or confirmed verifiably empty). A key cached during an
+ *    in-flight publish gets one follow-up publish; a failed publish retries with
+ *    backoff (60 s / 5 min / 15 min, at most 3 times).
  *  - **Restore:** a decrypt-miss (key wrapped only to a prior device) triggers a
- *    session-once background pull → `openKeyVault` → merge into the in-memory caches.
+ *    session-once, coalesced background pull → `openKeyVault` → merge into the
+ *    in-memory caches.
+ *  - **Blocked:** a vault our own key can't open, or a 404 for a vault this device has
+ *    seen before (`keyVaultSeen`), pauses backups until the user presses Retry or
+ *    confirms "Replace backup" (`KeyVaultBanner`).
  *
- * The wallet backup key `bk` is derived ONCE per session (a `signMessage` popup) and
- * cached in memory.
+ * The wallet backup key is derived ONCE per session from the built-in vault signer
+ * (silent, no popup) via `signMessageAs(wallet, …)`, which refuses to sign as any
+ * account other than the one the key is being derived for.
  */
+import { createSignal } from 'solid-js';
 import {
   deriveVaultBackupKey,
   sealKeyVault,
@@ -35,8 +46,33 @@ import {
   importChannelKeysFromVault,
 } from './channelCrypto';
 import { e2elog } from './e2eDebug';
-import { currentSwitchGeneration } from './walletScope';
-import { createBackupKeyCache, runRestore, runPublish } from './keyVaultCore';
+import { currentSwitchGeneration, getWalletScope } from './walletScope';
+import { getSetting, setSetting } from './settings';
+import {
+  createBackupKeyCache,
+  createVaultController,
+  type PublishOutcome,
+} from './keyVaultCore';
+
+/** What the user needs to act on, if anything (drives `KeyVaultBanner`). */
+export type KeyVaultIssueKind = 'unreadable' | 'missing';
+export interface KeyVaultIssue {
+  kind: KeyVaultIssueKind;
+  /** The connected wallet the issue is about. */
+  wallet: string;
+}
+
+const [issueRaw, setIssueRaw] = createSignal<KeyVaultIssue | null>(null);
+
+/**
+ * The current key-vault problem for the connected wallet, or null. Reactive
+ * (Solid signal); an issue recorded for another wallet reads as null.
+ */
+export function keyVaultIssue(): KeyVaultIssue | null {
+  const issue = issueRaw();
+  const w = walletAddress();
+  return issue && w && issue.wallet === w ? issue : null;
+}
 
 /** Per-wallet backup-key cache (keyVaultCore.ts): a key is tagged with the
  *  wallet it was derived for, an in-flight derivation is only shared with
@@ -49,20 +85,6 @@ const backupKeys = createBackupKeyCache(
   (e) => e2elog('keyvault: backup-key derivation failed/declined', { err: (e as Error)?.message }),
 );
 
-/** Forget the cached backup key + all session state (call on wallet disconnect/switch).
- *  Cancels any pending backup so a debounced publish can't fire under a NEW wallet,
- *  and abandons any in-flight backup-key derivation. */
-export function clearKeyVaultSession(): void {
-  backupKeys.clear();
-  restoreRun++; // an in-flight restore from before this clear must not write restoreState
-  restoreState = 'idle';
-  pendingBackup = false;
-  if (backupTimer) {
-    clearTimeout(backupTimer);
-    backupTimer = null;
-  }
-}
-
 function currentKeyring(): VaultKeyring {
   return { conv: exportConvKeysForVault(), chan: exportChannelKeysForVault() };
 }
@@ -70,155 +92,92 @@ function currentKeyring(): VaultKeyring {
 const isEmptyKeyring = (kr: VaultKeyring): boolean =>
   Object.keys(kr.conv).length === 0 && Object.keys(kr.chan).length === 0;
 
-// --- backup (debounced) -----------------------------------------------------
+/** `keyVaultSeen` holds the wallet address itself, read only while per-account
+ *  storage points at that wallet (null = can't tell now). */
+function seenMarker(wallet: string): boolean | null {
+  if (getWalletScope() !== wallet) return null;
+  return getSetting('keyVaultSeen') === wallet;
+}
 
-const BACKUP_DEBOUNCE_MS = 4_000;
-let backupTimer: ReturnType<typeof setTimeout> | null = null;
-let pendingBackup = false;
-let publishing = false;
+/** Set the marker — only while per-account storage points at `wallet`, so it
+ *  can never land in another account's namespace. */
+function markSeen(wallet: string): void {
+  if (getWalletScope() !== wallet) return;
+  if (getSetting('keyVaultSeen') !== wallet) setSetting('keyVaultSeen', wallet);
+}
 
-/**
- * Arm a debounced backup. CRITICAL ordering: never publish before the remote vault
- * has been pulled + merged this session, or a fresh device would clobber its own
- * history (LWW) with a partial keyring. While restore is not yet `done`, record the
- * intent and kick restore; the restore completion re-arms the backup.
- */
-function scheduleBackup(): void {
-  if (restoreState !== 'done') {
-    pendingBackup = true;
-    tryRestoreKeyVault();
+// `walletAddress()` (not `vaultActiveAddress()`) + the switch generation: the
+// identity the API client's signer and `signMessageAs` are bound to, and a
+// counter bumped synchronously at the very top of every switch — see
+// walletScope.ts `bumpSwitchGeneration()` for the 2026-09-04 leak this closes.
+const controller = createVaultController({
+  currentWallet: walletAddress,
+  generation: currentSwitchGeneration,
+  ensureBackupKey: () => backupKeys.ensure(walletAddress()),
+  log: e2elog,
+  fetchVault: () => getClient().getKeyVault(), // null only on a true 404
+  open: openKeyVault,
+  importKeys: (keyring) => ({
+    conv: importConvKeysFromVault(keyring.conv),
+    chan: importChannelKeysFromVault(keyring.chan),
+  }),
+  seenMarker,
+  markSeen,
+  snapshot: currentKeyring,
+  isEmpty: isEmptyKeyring,
+  seal: sealKeyVault,
+  publish: async (sealed) => {
+    await getClient().syncKeyVault(sealed);
+    e2elog('keyvault: backup published', { bytes: sealed.encrypted_vault.length });
+  },
+  setTimer: (fn, ms) => setTimeout(fn, ms),
+  clearTimer: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+  onStateChange: () => refreshIssue(),
+});
+
+function refreshIssue(): void {
+  const w = walletAddress();
+  if (!w) {
+    setIssueRaw(null);
     return;
   }
-  if (backupTimer) clearTimeout(backupTimer);
-  backupTimer = setTimeout(() => {
-    backupTimer = null;
-    void publishBackup();
-  }, BACKUP_DEBOUNCE_MS);
+  const st = controller.status();
+  setIssueRaw(st.restore === 'blocked' && st.blockReason ? { kind: st.blockReason, wallet: w } : null);
 }
 
-async function publishBackup(): Promise<void> {
-  if (publishing) return;
-  // Guard a wallet switch between scheduling and now: only seal under the
-  // wallet the keyring + backup key belong to (defence-in-depth alongside the
-  // disconnect timer cancel — never write account A's keys into account B's
-  // vault). The generation check is the tighter one: see `tryRestoreKeyVault()`
-  // for why `walletAddress()` alone still leaves a narrow window; here it would
-  // mean sealing A's keyring but sending under B's already-attached signer —
-  // publishing a backup B can't read AND clobbering B's own real one. The key
-  // must also be the one derived FOR this wallet (runPublish checks its tag).
-  const sealWallet = walletAddress();
-  const sealGeneration = currentSwitchGeneration();
-  const keyring = currentKeyring();
-  publishing = true;
-  try {
-    await runPublish({
-      sealWallet,
-      stale: () => walletAddress() !== sealWallet || currentSwitchGeneration() !== sealGeneration,
-      keyring,
-      isEmpty: isEmptyKeyring,
-      ensureKey: (w) => backupKeys.ensure(w),
-      seal: (key, kr) => sealKeyVault(key, kr),
-      send: async (sealed) => {
-        await getClient().syncKeyVault(sealed);
-        e2elog('keyvault: backup published', {
-          conv: Object.keys(keyring.conv).length,
-          chan: Object.keys(keyring.chan).length,
-          bytes: sealed.encrypted_vault.length,
-        });
-      },
-    });
-  } catch (e) {
-    e2elog('keyvault: backup failed', { err: (e as Error)?.message });
-  } finally {
-    publishing = false;
-  }
+/** Forget the cached backup key + all session state (call on wallet disconnect/switch).
+ *  Cancels any pending backup / backoff retry so a debounced publish can't fire under
+ *  a NEW wallet, and abandons any in-flight backup-key derivation and restore. */
+export function clearKeyVaultSession(): void {
+  backupKeys.clear();
+  controller.clearSession();
+  refreshIssue();
 }
-
-// --- restore (session-once, background) -------------------------------------
-
-let restoreState: 'idle' | 'inflight' | 'done' = 'idle';
-/** Bumped by every session clear; a restore only records its outcome if no
- *  clear happened since it started (else it would overwrite the NEXT
- *  account's `inflight`/`done` state). */
-let restoreRun = 0;
 
 /** Pull + decrypt the vault and merge restored keys into the in-memory caches.
- *  Session-once and idempotent; safe to call from a decrypt-miss render path. A
- *  transient fetch failure resets to `idle` (retried on the next trigger); only a
- *  genuine 404 or an unrecoverable blob is terminal (`done`). */
+ *  Session-once, coalesced and idempotent; safe to call from a decrypt-miss render
+ *  path. A transient failure stays retryable; `blocked` waits for the user. */
 export function tryRestoreKeyVault(): void {
-  if (restoreState !== 'idle') return;
-  restoreState = 'inflight';
-  const myRun = restoreRun;
-  void (async () => {
-    // Which account this restore belongs to. `importConvKeysFromVault` and
-    // `importChannelKeysFromVault` write the SHARED DM/channel key caches, so
-    // applying after a switch would load one account's conversation keys into
-    // the other account's session.
-    //
-    // MUST be `walletAddress()`, not `vaultActiveAddress()`. The two flip at
-    // different points of an account switch (`switchAccountInner` in
-    // auth.ts): `vaultActivate()` moves `vaultActiveAddress()` to the NEW
-    // account immediately, while `walletAddress()` and the API client's
-    // attached signer — the things `ensureBackupKey()` and `getKeyVault()`
-    // actually use — don't flip until teardown finishes, several awaits
-    // later. A restore that starts (e.g. from account A's own decrypt-miss,
-    // or WS traffic still arriving before its socket closes) inside that
-    // window used to capture `forWallet = vaultActiveAddress()` = the NEW
-    // account B while every fetch it performed was still authenticated as
-    // and derived from OLD account A — so it fetched and decrypted A's real
-    // vault successfully, and every "did the wallet change?" recheck below
-    // compared B against B and always passed. The result: A's real DM and
-    // channel content keys got merged into the shared caches while B was
-    // active, and B's UI could then decrypt — and send into — A's private
-    // channels it was never a member of. Gating on `walletAddress()` instead
-    // ties this guard to the same identity the fetch itself is bound to, so
-    // a switch invalidates the restore the instant the signer actually
-    // changes, matching `publishBackup()`'s existing (correct) guard below.
-    //
-    // `walletAddress()` alone still leaves a narrow residual window: it flips
-    // in the SAME statement as the API client's signer, late in the switch,
-    // but `tearDownAccountSession()`'s cache clears (the thing this restore
-    // would be poisoning) complete strictly BEFORE that point — so a restore
-    // resolving in the sliver between "caches cleared" and "walletAddress()
-    // flipped" would still read the OLD wallet and pass. `switchGeneration`
-    // (walletScope.ts) is bumped synchronously at the very TOP of the switch,
-    // before any of that, so it closes the window regardless of exactly when
-    // the async pieces interleave.
-    const forWallet = walletAddress();
-    const forGeneration = currentSwitchGeneration();
-    const stale = () => walletAddress() !== forWallet || currentSwitchGeneration() !== forGeneration;
-    try {
-      // keyVaultCore.ts `runRestore`: also refuses a backup key derived for
-      // any other wallet, and never turns a decrypt failure with such a key
-      // (or after a switch) into terminal `done`.
-      const outcome = await runRestore({
-        forWallet,
-        stale,
-        ensureKey: (w) => backupKeys.ensure(w),
-        fetch: () => getClient().getKeyVault(), // null only on a true 404
-        open: (key, resp) => openKeyVault(key, resp),
-        importKeys: (keyring) => {
-          const conv = importConvKeysFromVault(keyring.conv);
-          const chan = importChannelKeysFromVault(keyring.chan);
-          e2elog('keyvault: restored', { conv, chan });
-        },
-        log: e2elog,
-      });
-      if (myRun === restoreRun) restoreState = outcome;
-    } catch {
-      if (myRun === restoreRun) restoreState = 'idle';
-    } finally {
-      // If a key was cached while restore was in flight, publish now that the
-      // remote keyring is merged (no longer at risk of clobbering it).
-      if (myRun === restoreRun && restoreState === 'done' && pendingBackup) {
-        pendingBackup = false;
-        scheduleBackup();
-      }
-    }
-  })();
+  controller.tryRestore();
+}
+
+/** User Retry (banner): re-check a blocked vault (e.g. after switching node). */
+export function retryKeyVault(): void {
+  controller.retry();
+  refreshIssue();
+}
+
+/** User-confirmed "Replace backup" (banner, behind a confirm): overwrite an
+ *  unreadable / missing remote vault with this device's keyring. Only acts while
+ *  restore is `blocked`, and — when `forWallet` is given — only while that is
+ *  still the connected wallet (the confirmation was for that account). */
+export async function replaceKeyVault(forWallet?: string): Promise<PublishOutcome> {
+  if (forWallet !== undefined && walletAddress() !== forWallet) return 'stale';
+  const out = await controller.replace();
+  refreshIssue();
+  return out;
 }
 
 // Register into the crypto caches at module load (imported for side effects).
-setKeyringChangeListener(scheduleBackup);
+setKeyringChangeListener(() => controller.scheduleBackup());
 setVaultRestoreRequester(tryRestoreKeyVault);

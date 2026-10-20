@@ -595,5 +595,15 @@
   "bot_badge_tooltip": "Self-declared — not verified by Ogmara",
   "bot_commands_label": "Bot commands",
   "message_button_send_failed": "Couldn't send — try again",
-  "message_button_sent": "Sent:"
+  "message_button_sent": "Sent:",
+  "keyvault_blocked_title": "Message-key backup paused",
+  "keyvault_unreadable_body": "The key backup stored on the node can't be opened with this wallet's key (it may be damaged or from a newer app version). To protect it, new keys are not backed up. Press Retry, or replace it with the keys on this device.",
+  "keyvault_missing_body": "This node has no copy of your key backup, although this device has used one before. To protect the original, new keys are not backed up. Connect to another node and press Retry, or replace it with the keys on this device.",
+  "keyvault_retry": "Retry",
+  "keyvault_replace": "Replace backup",
+  "keyvault_replace_confirm": "Replace the key backup on the node with the keys on this device? Keys that exist only in the old backup will be lost for good, and older messages may stay unreadable on your other devices.",
+  "keyvault_replaced": "Backup replaced. New message keys are backed up again.",
+  "keyvault_replace_failed": "Couldn't reach the node to replace the backup. It will be retried automatically.",
+  "keyvault_replace_nothing": "Backup unblocked. There are no keys on this device yet; the backup will be replaced with your next new key.",
+  "keyvault_dismiss": "Dismiss"
 }

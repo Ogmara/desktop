@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 const PER_ACCOUNT = [
   'pinnedChannels', 'mutedChannels', 'mutedUsers', 'lastChannel',
   'newsLastReadGlobal', 'newsLastReadFollowing', 'newsLastViewedAt',
-  'deviceRegistered', 'encKeyBound', 'deviceId',
+  'deviceRegistered', 'encKeyBound', 'deviceId', 'keyVaultSeen',
 ];
 
 /** Keys that belong to the install and MUST stay global. */

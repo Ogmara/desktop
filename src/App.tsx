@@ -68,6 +68,7 @@ import { NoNodeLandingPage } from './components/NoNodeLandingPage';
 import { activeNodeUrl } from './lib/api';
 import { ImageLightbox } from './components/ImageLightbox';
 import { DialogHost } from './components/Dialogs';
+import { KeyVaultBanner } from './components/KeyVaultBanner';
 import { route, navigate, goBack } from './lib/router';
 
 type AppState = 'loading' | 'locked' | 'unlocked';
@@ -340,6 +341,10 @@ export const App: Component = () => {
               {t('store_poisoned_warning')}
             </div>
           </Show>
+
+          {/* Message-key backups paused to protect the node's key vault
+              (unreadable / missing copy): Retry or Replace backup. */}
+          <KeyVaultBanner />
 
           {/* Network activity indicator — animates when API calls are in flight,
               shows a "connecting…" label after 1.2s of slow loading. */}

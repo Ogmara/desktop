@@ -595,5 +595,15 @@
   "bot_badge_tooltip": "Autodeclarado — no verificado por Ogmara",
   "bot_commands_label": "Comandos del bot",
   "message_button_send_failed": "No se pudo enviar — inténtalo de nuevo",
-  "message_button_sent": "Enviado:"
+  "message_button_sent": "Enviado:",
+  "keyvault_blocked_title": "Copia de seguridad de claves en pausa",
+  "keyvault_unreadable_body": "La copia de seguridad de claves guardada en el nodo no se puede abrir con la clave de esta billetera (puede estar dañada o ser de una versión más reciente de la app). Para protegerla, las claves nuevas no se respaldan. Pulsa Reintentar o reemplázala con las claves de este dispositivo.",
+  "keyvault_missing_body": "Este nodo no tiene una copia de tu copia de seguridad de claves, aunque este dispositivo ya ha usado una. Para proteger la original, las claves nuevas no se respaldan. Conéctate a otro nodo y pulsa Reintentar, o reemplázala con las claves de este dispositivo.",
+  "keyvault_retry": "Reintentar",
+  "keyvault_replace": "Reemplazar copia",
+  "keyvault_replace_confirm": "¿Reemplazar la copia de seguridad de claves del nodo con las claves de este dispositivo? Las claves que solo existen en la copia anterior se perderán para siempre, y los mensajes antiguos podrían seguir ilegibles en tus otros dispositivos.",
+  "keyvault_replaced": "Copia reemplazada. Las nuevas claves de mensajes vuelven a respaldarse.",
+  "keyvault_replace_failed": "No se pudo contactar con el nodo para reemplazar la copia. Se reintentará automáticamente.",
+  "keyvault_replace_nothing": "Copia desbloqueada. Aún no hay claves en este dispositivo; la copia se reemplazará con tu próxima clave nueva.",
+  "keyvault_dismiss": "Cerrar"
 }

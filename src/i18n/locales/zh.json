@@ -595,5 +595,15 @@
   "bot_badge_tooltip": "账户自行声明 — 未经 Ogmara 验证",
   "bot_commands_label": "机器人命令",
   "message_button_send_failed": "发送失败 — 请重试",
-  "message_button_sent": "已发送:"
+  "message_button_sent": "已发送:",
+  "keyvault_blocked_title": "消息密钥备份已暂停",
+  "keyvault_unreadable_body": "节点上存储的密钥备份无法用此钱包的密钥打开(可能已损坏,或来自更新版本的应用)。为保护该备份,新密钥暂不备份。请重试,或用此设备上的密钥替换它。",
+  "keyvault_missing_body": "此设备之前使用过密钥备份,但该节点上没有它的副本。为保护原始备份,新密钥暂不备份。请连接到其他节点后重试,或用此设备上的密钥替换它。",
+  "keyvault_retry": "重试",
+  "keyvault_replace": "替换备份",
+  "keyvault_replace_confirm": "要用此设备上的密钥替换节点上的密钥备份吗?仅存在于旧备份中的密钥将永久丢失,你的其他设备上的旧消息可能仍无法读取。",
+  "keyvault_replaced": "备份已替换。新的消息密钥将重新开始备份。",
+  "keyvault_replace_failed": "无法连接节点以替换备份。将自动重试。",
+  "keyvault_replace_nothing": "备份已解除阻止。此设备上还没有密钥；备份将在您的下一个新密钥生成时被替换。",
+  "keyvault_dismiss": "关闭"
 }

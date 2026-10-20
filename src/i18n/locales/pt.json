@@ -595,5 +595,15 @@
   "bot_badge_tooltip": "Autodeclarado — não verificado pela Ogmara",
   "bot_commands_label": "Comandos do bot",
   "message_button_send_failed": "Não foi possível enviar — tente novamente",
-  "message_button_sent": "Enviado:"
+  "message_button_sent": "Enviado:",
+  "keyvault_blocked_title": "Backup das chaves de mensagens pausado",
+  "keyvault_unreadable_body": "O backup de chaves armazenado no nó não pode ser aberto com a chave desta carteira (pode estar danificado ou ser de uma versão mais nova do app). Para protegê-lo, novas chaves não são salvas. Tente novamente ou substitua-o pelas chaves deste dispositivo.",
+  "keyvault_missing_body": "Este nó não tem uma cópia do seu backup de chaves, embora este dispositivo já tenha usado um. Para proteger o original, novas chaves não são salvas. Conecte-se a outro nó e tente novamente, ou substitua-o pelas chaves deste dispositivo.",
+  "keyvault_retry": "Tentar novamente",
+  "keyvault_replace": "Substituir backup",
+  "keyvault_replace_confirm": "Substituir o backup de chaves no nó pelas chaves deste dispositivo? Chaves que existem apenas no backup antigo serão perdidas para sempre, e mensagens antigas podem continuar ilegíveis nos seus outros dispositivos.",
+  "keyvault_replaced": "Backup substituído. Novas chaves de mensagens voltam a ser salvas.",
+  "keyvault_replace_failed": "Não foi possível contatar o nó para substituir o backup. Uma nova tentativa será feita automaticamente.",
+  "keyvault_replace_nothing": "Backup desbloqueado. Ainda não há chaves neste dispositivo; o backup será substituído com a sua próxima chave nova.",
+  "keyvault_dismiss": "Fechar"
 }
