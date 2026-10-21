@@ -5,6 +5,18 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.84.1] - 2026-10-21
+
+### Security
+
+- **Dependency (runtime, Rust):** `rustls-webpki` 0.103.15 → 0.103.16
+  (RUSTSEC-2026-0382), `webpki-root-certs` 1.0.6 → 1.0.10
+  (RUSTSEC-2026-0383) and `webpki-roots` 1.0.6 → 1.0.10 (RUSTSEC-2026-0381)
+  via `cargo update` (lockfile only). Shipped code: TLS certificate
+  verification in the Tauri HTTP stack. `cargo audit` reports 0
+  vulnerabilities (only the existing unmaintained-crate warnings remain);
+  `cargo check --locked` passes. No frontend change.
+
 ## [1.84.0] - 2026-10-20
 
 Key-vault data-loss fixes (spec 01 §2.5, spec 05 §8.5), same design as web
