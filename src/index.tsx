@@ -8,6 +8,7 @@ import { setContractAddress, setKleverNetwork } from './lib/klever';
 import { getClient, bootstrapNodeSelection } from './lib/api';
 import { getSetting } from './lib/settings';
 import { installNetworkActivityTracker } from './lib/network-activity';
+import { isNoRedirect } from './lib/epochPeers';
 // Side-effect import: registers the E2E key-recovery vault (P3) backup/restore hooks
 // into the DM + channel key caches.
 import './lib/keyVault';
@@ -58,10 +59,12 @@ if ((window as any).__TAURI_INTERNALS__) {
           for (const p of parts) { body.set(p, offset); offset += p.length; }
           const headers = { ...(init.headers as Record<string, string> || {}) };
           headers['Content-Type'] = `multipart/form-data; boundary=${boundary}`;
-          return (tauriFetch as any)(input, { ...init, body, headers });
+          return (tauriFetch as any)(input, { ...init, body, headers, ...(isNoRedirect(url) ? { maxRedirections: 0 } : {}) });
         })();
       }
-      return (tauriFetch as any)(input, init);
+      // Peer nodes queried for split detection get signed requests: never let
+      // them redirect those to another host (plugin-http follows redirects by default).
+      return (tauriFetch as any)(input, isNoRedirect(url) ? { ...init, maxRedirections: 0 } : init);
     }
     // Use native browser fetch for local/internal requests
     return originalFetch(input, init);

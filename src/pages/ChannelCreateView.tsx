@@ -18,6 +18,9 @@ import { addJoinedChannel } from '../components/Sidebar';
 import { addJoinedChannelFor } from '../lib/joined-channels';
 import { vaultListAccounts } from '../lib/vault';
 import { stillSameAccount } from '../lib/accountGuard';
+import { savePinIfAbsent } from '../lib/privateCover';
+import { scopedGetFor, scopedSetFor, scopedRemoveFor } from '../lib/walletScope';
+import { isPublicRangeChannelId } from '../lib/channelEncryption';
 
 export const ChannelCreateView: Component = () => {
   const [slug, setSlug] = createSignal('');
@@ -116,6 +119,23 @@ export const ChannelCreateView: Component = () => {
         return;
       }
       addJoinedChannel(resp.channel_id);
+      // Only for an id in the PRIVATE range (>= the floor): the SDK returns the
+      // node's `channel_id` (it cannot hand back the locally derived id yet),
+      // so a hostile node answering with some other channel's id must at
+      // least not be able to make us pin ourselves on a public-range channel.
+      if (isPrivate && me && Number.isSafeInteger(resp.channel_id) && !isPublicRangeChannelId(resp.channel_id)) {
+        // Verify-before-cover root of trust (desktop 1.85.0, spec 05 §8.4
+        // item 5): pin ourselves as this channel's creator from first contact,
+        // so a node can never later serve a different ChannelCreate for it.
+        // Best-effort — without it the derived create establishes the same
+        // pin on the first cover. Written under the CREATING account only,
+        // and only while it is still the active one.
+        const createdId = resp.channel_id;
+        void client.getNetwork().then((network) => {
+          if (!sameAccount()) return;
+          savePinIfAbsent({ get: scopedGetFor, set: scopedSetFor, remove: scopedRemoveFor }, me, network, createdId, me);
+        }).catch(() => { /* no network binding: the first cover pins instead */ });
+      }
       window.dispatchEvent(new Event('ogmara:channels-changed'));
       navigate(`/chat/${resp.channel_id}`);
     } catch (e: any) {

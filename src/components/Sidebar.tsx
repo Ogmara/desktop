@@ -52,7 +52,7 @@ function getCachedDmConvs(): any[] {
 function setCachedDmConvs(convs: any[]): void {
   try { localStorage.setItem(dmCacheKey(), JSON.stringify(convs)); } catch { /* quota/private mode — ignore */ }
 }
-import { coverChannelMembers, rotateChannelKey } from '../lib/channelCrypto';
+import { coverChannelMembers, rotateChannelKey, resumePendingEpochKeys } from '../lib/channelCrypto';
 import { authStatus, walletAddress } from '../lib/auth';
 import { navigate, route } from '../lib/router';
 import { getSetting, setSetting } from '../lib/settings';
@@ -1144,6 +1144,9 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
     if (authStatus() === 'ready' && wallet) {
       pollData();
       pollTimer = setInterval(pollData, 12000);
+      // Resume channel key epochs a previous session left unfinished (the
+      // persisted epoch NUMBER, never a key) for channels still joined.
+      void resumePendingEpochKeys((id) => untrack(() => joinedSignal()).has(id));
     }
   });
   onCleanup(() => { if (pollTimer) clearInterval(pollTimer); });
@@ -1191,15 +1194,26 @@ export const Sidebar: Component<{ onNavigate?: () => void }> = (props) => {
       if (currentChannelId() === ev.channel_id) navigate('/news');
       return;
     }
+    // Verify-before-cover (protocol §3.9.2) type hint from the sidebar's
+    // list: undefined when the channel isn't in it (cover deferred below the
+    // private id floor; a private-range id is always verified regardless).
+    const coverHint = (): boolean | undefined => {
+      const ch = untrack(() => channels()).find((c) => c.channel_id === ev.channel_id);
+      return typeof ch?.channel_type === 'number' ? ch.channel_type === 2 : undefined;
+    };
     if (ev.action === 'join' && !isMe && joinedSignal().has(ev.channel_id)) {
-      void coverChannelMembers(ev.channel_id);
+      // A member-change event: one immediate (bounded) pass, not throttled.
+      void coverChannelMembers(ev.channel_id, coverHint(), { immediate: true });
     }
     // P2d: a removal raised the channel's key-epoch floor — re-key to it (wrapping
     // a fresh key to the remaining members only) so the removed member can't read
-    // future messages. Any remaining member may rotate; FWW converges. Runs app-wide
+    // future messages. Any remaining member may rotate; the node arbitrates. Runs app-wide
     // (even if I'm not viewing the channel) so rotation isn't deferred to a mod's view.
     if ((ev.action === 'kick' || ev.action === 'ban' || ev.action === 'leave')
         && !isMe && ev.key_epoch_floor && joinedSignal().has(ev.channel_id)) {
+      // Node-arbitrated epoch (SDK establishEpochKey): concurrent rotators
+      // converge on the node's one winner. A no-op for public-range channels
+      // without a creator pin (id-floor rule).
       void rotateChannelKey(ev.channel_id, ev.key_epoch_floor);
     }
   });

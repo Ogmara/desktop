@@ -16,6 +16,7 @@ import {
   generateDeviceEncKeypair,
   encPublicKeyHex,
   buildDeviceEncBinding,
+  verifyEncKeyBinding,
   buildDeviceEncRevoke,
   type WalletSignFn,
 } from '@ogmara/sdk';
@@ -25,8 +26,15 @@ import { SS, isValidAddress } from './vaultAccounts';
 import { vaultActiveAddress, vaultGetAddress } from './vault';
 import { signMessageAs } from './klever';
 import { getClient } from './api';
-import { e2elog, withRetry } from './e2eDebug';
-import { currentSwitchGeneration } from './walletScope';
+import { e2elog, withRetry, isRateLimit } from './e2eDebug';
+import { currentSwitchGeneration, scopedGetFor, scopedSetFor, scopedRemoveFor } from './walletScope';
+import {
+  nodeKeepsBindings, rebindAllowed, noteRebindAttempt, clearRebindBackoff, revocableEncRows,
+} from './epochKeys';
+import type { WalletStore } from './privateCover';
+
+/** Per-wallet storage for the re-bind backoff, always addressed by the CAPTURED wallet. */
+const walletStore: WalletStore = { get: scopedGetFor, set: scopedSetFor, remove: scopedRemoveFor };
 
 const ENC_PRIV_KEY = 'ogmara.vault.enc_private_key';
 
@@ -156,7 +164,11 @@ export async function claimDeviceIdentityOnce(addr: string): Promise<void> {
 
 /**
  * Revoke any of MY OWN previously-published enc keys for `deviceId` whose
- * `enc_pub` differs from my current one. The node keys `device_enc_keys` by
+ * `enc_pub` differs from my current one — only rows whose wallet binding
+ * VERIFIES for this device id (`revocableEncRows`): a node can serve any row
+ * it likes, and must never be able to make this device revoke another
+ * device's key (or a row the node minted). Unbound (pre-0.142) rows are
+ * therefore left alone; covers already refuse them. The node keys `device_enc_keys` by
  * `enc_pub` (not device_id), so a regenerated enc key would otherwise leave the
  * stale enc_pub *active* — and since `channel_keys` envelopes are keyed by
  * `device_id` (first-write-wins), a sender wrapping to BOTH enc_pubs of one
@@ -174,12 +186,9 @@ async function revokeStaleEncKeys(
   try {
     const { keys } = await getClient().getEncKeys(wallet);
     if (isStale()) return;
-    const did = deviceId.toLowerCase();
-    const cur = currentEncPub.toLowerCase();
-    const stale = keys.filter(
-      (k) => (k.device_id ?? '').toLowerCase() === did && (k.enc_pub ?? '').toLowerCase() !== cur,
-    );
     const network = await getClient().getNetwork();
+    if (isStale()) return;
+    const stale = await revocableEncRows(keys, wallet, deviceId, currentEncPub, network, verifyEncKeyBinding);
     for (const k of stale) {
       if (isStale()) return;
       const revoke = await buildDeviceEncRevoke({
@@ -239,18 +248,69 @@ export async function ensureDeviceEncBinding(): Promise<void> {
   // diverged from our current local enc_pub (the "can't decrypt" cause). Confirm
   // the node actually has THIS device_id bound to our CURRENT enc_pub; only skip
   // when the registry agrees AND the marker is set.
+  //
+  // desktop 1.85.0 — RE-BIND: "has our enc_pub" is no longer enough. Members
+  // of private channels wrap only to rows whose wallet binding VERIFIES
+  // (verify-before-cover refuses `unbound` rows, which any node can mint). A
+  // row bound before l2-node 0.142.0 is served `bound: false` (no signature
+  // kept), so it would never receive a private channel key again. Require a
+  // row for THIS device + CURRENT enc_pub whose binding verifies; otherwise
+  // re-publish the binding (same enc_pub, newer signed ts — the node replaces
+  // the row and keeps the signature). Signed locally by the built-in wallet
+  // (no prompt, same signer as the first bind); every existing stale()
+  // re-check below still guards it.
   let registryOk = false;
+  let registryBound = false;
   try {
     const { keys } = await getClient().getEncKeys(wallet);
-    const mine = keys.find((k) => (k.device_id ?? '').toLowerCase() === deviceId.toLowerCase());
-    registryOk = !!mine && (mine.enc_pub ?? '').toLowerCase() === kp.publicKeyHex.toLowerCase();
+    if (stale()) return;
+    const did = deviceId.toLowerCase();
+    const cur = kp.publicKeyHex.toLowerCase();
+    const mine = keys.filter((k) => (k.device_id ?? '').toLowerCase() === did);
+    const exact = mine.find((k) => (k.enc_pub ?? '').toLowerCase() === cur);
+    registryOk = !!exact;
+    if (exact) {
+      const network = await getClient().getNetwork();
+      if (stale()) return;
+      registryBound = (await verifyEncKeyBinding(exact, wallet, network)).status === 'bound';
+    }
     e2elog('binding check', {
-      wallet, deviceId, localEncPub: kp.publicKeyHex,
-      registryEncPub: mine?.enc_pub ?? null, registryOk, markerSet: getSetting('encKeyBound') === marker,
+      deviceId, localEncPub: kp.publicKeyHex,
+      registryEncPub: mine[0]?.enc_pub ?? null, registryOk, registryBound,
+      markerSet: getSetting('encKeyBound') === marker,
     });
   } catch {
     if (getSetting('encKeyBound') === marker) return;
   }
+  // Re-bind of a row the node serves unbound — bounded (desktop 1.85.0):
+  // never against a node that does not keep binding signatures (< 0.142.0:
+  // every row is served unbound there, a re-bind could never stick and would
+  // only burn the DeviceEnc budget of 10/h per wallet), and otherwise at most
+  // once per backoff window (1 h → 4 h → 24 h; 1 h after a 429) per
+  // (wallet, device, enc_pub).
+  let rebinding = false;
+  if (registryOk && !registryBound) {
+    let health = null;
+    try {
+      health = await getClient().health();
+    } catch {
+      health = null;
+    }
+    if (stale()) return;
+    if (!nodeKeepsBindings(health)) {
+      e2elog('binding check: node keeps no binding signatures — no re-bind', { deviceId });
+      if (getSetting('encKeyBound') !== marker) setSetting('encKeyBound', marker);
+      return;
+    }
+    if (!rebindAllowed(walletStore, wallet, deviceId, kp.publicKeyHex, Date.now(), true)) {
+      e2elog('binding check: re-bind backing off', { deviceId });
+      return;
+    }
+    e2elog('binding check: own enc key not wallet-bound — re-binding', { deviceId });
+    rebinding = true;
+  }
+  if (registryOk && registryBound) clearRebindBackoff(walletStore, wallet);
+  registryOk = registryOk && registryBound;
   if (registryOk && getSetting('encKeyBound') === marker) return;
   // Re-checked immediately before the network writes below: everything above
   // this point only READ state; `signMessageAs()` (inside `sign`) and the
@@ -272,7 +332,13 @@ export async function ensureDeviceEncBinding(): Promise<void> {
     network: await getClient().getNetwork(),
   });
   if (stale()) return;
-  await withRetry(() => getClient().publishEncKeyEnvelope(wallet, envelope), 'publish binding');
+  if (rebinding) noteRebindAttempt(walletStore, wallet, deviceId, kp.publicKeyHex, Date.now(), false);
+  try {
+    await withRetry(() => getClient().publishEncKeyEnvelope(wallet, envelope), 'publish binding');
+  } catch (e) {
+    if (rebinding && isRateLimit(e)) noteRebindAttempt(walletStore, wallet, deviceId, kp.publicKeyHex, Date.now(), true);
+    throw e;
+  }
   e2elog('published binding', { deviceId, encPub: kp.publicKeyHex });
   // Retire any stale enc_pub for this device AFTER the new key is registered, so
   // there is never a window with zero active keys for the device.

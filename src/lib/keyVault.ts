@@ -30,6 +30,7 @@ import {
   sealKeyVault,
   openKeyVault,
   VAULT_SIGN_CLAIM,
+  ChannelKeyringError,
   type VaultKeyring,
 } from '@ogmara/sdk';
 import { getClient } from './api';
@@ -42,24 +43,38 @@ import {
   importConvKeysFromVault,
 } from './dmCrypto';
 import {
-  exportChannelKeysForVault,
+  prepareChannelExport,
+  commitChannelExport,
+  channelKeyringEmpty,
   importChannelKeysFromVault,
+  planChannelKeyPrune,
+  applyChannelKeyPrune,
 } from './channelCrypto';
+import type { PruneLevel, PrunePlan } from './channelKeyStore';
 import { e2elog } from './e2eDebug';
 import { currentSwitchGeneration, getWalletScope } from './walletScope';
 import { getSetting, setSetting } from './settings';
 import {
   createBackupKeyCache,
   createVaultController,
+  createTwoStepSnapshot,
+  guardedForStamp,
+  type PauseReason,
   type PublishOutcome,
 } from './keyVaultCore';
 
-/** What the user needs to act on, if anything (drives `KeyVaultBanner`). */
-export type KeyVaultIssueKind = 'unreadable' | 'missing';
+/**
+ * What the user needs to act on, if anything (drives `KeyVaultBanner`):
+ * `unreadable` / `missing` — restore is blocked; `paused` — the channel
+ * keyring refused to export, so NOTHING is being backed up (see `pause`).
+ */
+export type KeyVaultIssueKind = 'unreadable' | 'missing' | 'paused';
 export interface KeyVaultIssue {
   kind: KeyVaultIssueKind;
   /** The connected wallet the issue is about. */
   wallet: string;
+  /** Why backups are paused (only for `paused`). */
+  pause?: PauseReason;
 }
 
 const [issueRaw, setIssueRaw] = createSignal<KeyVaultIssue | null>(null);
@@ -85,8 +100,24 @@ const backupKeys = createBackupKeyCache(
   (e) => e2elog('keyvault: backup-key derivation failed/declined', { err: (e as Error)?.message }),
 );
 
-function currentKeyring(): VaultKeyring {
-  return { conv: exportConvKeysForVault(), chan: exportChannelKeysForVault() };
+/**
+ * The keyring to seal, for the account `generation` captured by the run —
+ * step 1 of the TWO-STEP channel export (nothing is marked persisted until
+ * `commit` after the node accepted it, with the generation it was prepared
+ * for). Throws when the channel keyring refuses to export
+ * (`ChannelKeyringError` `vault_too_large` / `opaque_overflow` / `stale`):
+ * the controller then reports the backup as PAUSED (or stale), never as done.
+ */
+const twoStep = createTwoStepSnapshot(prepareChannelExport, commitChannelExport, exportConvKeysForVault);
+
+/** Map a refused export to the controller's pause reason. */
+function snapshotRefusal(e: unknown): PauseReason | 'stale' {
+  if (e instanceof ChannelKeyringError) {
+    if (e.code === 'stale') return 'stale';
+    if (e.code === 'vault_too_large') return 'too_large';
+    if (e.code === 'opaque_overflow') return 'overflow';
+  }
+  return 'error';
 }
 
 const isEmptyKeyring = (kr: VaultKeyring): boolean =>
@@ -117,13 +148,16 @@ const controller = createVaultController({
   log: e2elog,
   fetchVault: () => getClient().getKeyVault(), // null only on a true 404
   open: openKeyVault,
-  importKeys: (keyring) => ({
+  importKeys: (keyring, generation) => ({
     conv: importConvKeysFromVault(keyring.conv),
-    chan: importChannelKeysFromVault(keyring.chan),
+    chan: importChannelKeysFromVault(keyring.chan, generation),
   }),
   seenMarker,
   markSeen,
-  snapshot: currentKeyring,
+  snapshot: (generation) => twoStep.snapshot(generation),
+  snapshotRefusal,
+  commit: (kr) => twoStep.commit(kr),
+  quickEmpty: () => Object.keys(exportConvKeysForVault()).length === 0 && channelKeyringEmpty(),
   isEmpty: isEmptyKeyring,
   seal: sealKeyVault,
   publish: async (sealed) => {
@@ -142,7 +176,11 @@ function refreshIssue(): void {
     return;
   }
   const st = controller.status();
-  setIssueRaw(st.restore === 'blocked' && st.blockReason ? { kind: st.blockReason, wallet: w } : null);
+  if (st.restore === 'blocked' && st.blockReason) setIssueRaw({ kind: st.blockReason, wallet: w });
+  else if (st.paused) {
+    e2elog('keyvault: backup PAUSED — keys are not being backed up', { reason: st.paused });
+    setIssueRaw({ kind: 'paused', wallet: w, pause: st.paused });
+  } else setIssueRaw(null);
 }
 
 /** Forget the cached backup key + all session state (call on wallet disconnect/switch).
@@ -167,13 +205,64 @@ export function retryKeyVault(): void {
   refreshIssue();
 }
 
+/**
+ * The next prune step to offer while backups are paused as too large — a DRY
+ * RUN (nothing changes), least risky level first from `from` on — for the
+ * connected account, or null (nothing removable, signed out, mid-switch).
+ * The banner shows its per-class counts in the confirmation.
+ */
+export function previewKeyVaultPrune(from?: PruneLevel): PrunePlan | null {
+  if (!walletAddress()) return null;
+  try {
+    return planChannelKeyPrune(currentSwitchGeneration(), from);
+  } catch {
+    return null; // stale: the account changed
+  }
+}
+
+/**
+ * Apply a USER-CONFIRMED prune plan (whose dry run the confirm showed) — only
+ * while `forWallet` / `forGeneration` (captured BEFORE the confirmation) are
+ * still the active account — then retry the backup. The keyring remembers the
+ * pruned keys for the session, so re-merging the remote before the seal does
+ * not bring them back. Returns how many keys were removed, `'changed'` when a
+ * fresh dry run would remove more than the confirmation showed (nothing
+ * removed), or null when the account changed.
+ */
+export function pruneAndRetryBackup(forWallet: string, forGeneration: number, plan: PrunePlan): number | 'changed' | null {
+  let n: number | 'changed' | null;
+  try {
+    n = guardedForStamp(
+      { currentWallet: walletAddress, generation: currentSwitchGeneration },
+      { wallet: forWallet, generation: forGeneration },
+      () => applyChannelKeyPrune(plan, forGeneration),
+    );
+  } catch {
+    return null; // stale
+  }
+  if (n === null) return null;
+  if (n === 'changed') return n; // more to remove than the user confirmed: show the new counts
+  e2elog('keyvault: user pruned channel keys', { level: plan.level, removed: n });
+  controller.retry();
+  refreshIssue();
+  return n;
+}
+
+/** The account-switch generation now (captured by the banner before a confirmation). */
+export function keyVaultGeneration(): number {
+  return currentSwitchGeneration();
+}
+
 /** User-confirmed "Replace backup" (banner, behind a confirm): overwrite an
  *  unreadable / missing remote vault with this device's keyring. Only acts while
  *  restore is `blocked`, and — when `forWallet` is given — only while that is
  *  still the connected wallet (the confirmation was for that account). */
-export async function replaceKeyVault(forWallet?: string): Promise<PublishOutcome> {
+export async function replaceKeyVault(forWallet?: string, forGeneration?: number): Promise<PublishOutcome> {
   if (forWallet !== undefined && walletAddress() !== forWallet) return 'stale';
-  const out = await controller.replace();
+  if (forGeneration !== undefined && currentSwitchGeneration() !== forGeneration) return 'stale';
+  const out = await controller.replace(
+    forWallet !== undefined && forGeneration !== undefined ? { wallet: forWallet, generation: forGeneration } : undefined,
+  );
   refreshIssue();
   return out;
 }

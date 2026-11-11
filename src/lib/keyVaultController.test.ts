@@ -331,7 +331,7 @@ for (const kind of ['wrong-key blob', 'unsupported format_version'] as const) {
     const before = h.w.remote.get(A);
     h.addKey('dm');
     await settle();
-    assert.deepEqual(h.ctl.status(), { restore: 'blocked', blockReason: 'unreadable', pendingBackup: true, publishing: false, failStreak: 0 });
+    assert.deepEqual(h.ctl.status(), { restore: 'blocked', blockReason: 'unreadable', pendingBackup: true, publishing: false, failStreak: 0, paused: null });
     for (let i = 0; i < 5; i++) h.addKey(`dm${i}`);
     h.ctl.tryRestore();
     await h.clock.advance(3_600_000);
@@ -521,7 +521,7 @@ test('a publish requested during restore waits for it, then ONE publish with the
   h.addKey('new2');
   await settle();
   await h.clock.advance(3_600_000);
-  assert.equal(h.w.fetchCalls, 1);
+  assert.equal(h.w.fetchCalls, 2, 'one restore + the re-read right before the seal (desktop 1.85.0)');
   assert.equal(h.w.publishes.length, 1);
   assert.deepEqual(h.w.publishes[0].keys, ['new', 'new2', 'x', 'y']);
 });
@@ -532,7 +532,7 @@ test('backupNow during an in-flight restore: one fetch, published keyring is a s
   h.w.local.conv['new'] = k(3);
   h.ctl.tryRestore();
   assert.equal(await h.ctl.backupNow(), 'published');
-  assert.equal(h.w.fetchCalls, 1);
+  assert.equal(h.w.fetchCalls, 2, 'one restore + the re-read right before the seal');
   assert.deepEqual(h.w.publishes.map((p) => p.keys), [['new', 'x', 'y']]);
 });
 
@@ -588,13 +588,13 @@ test('A -> B -> A without a session clear: generation change voids the "done" st
   h.addKey('dm');
   await settle();
   await h.clock.advance(4_000);
-  assert.equal(h.w.fetchCalls, 1);
+  assert.equal(h.w.fetchCalls, 2, 'restore + re-read before the seal');
   h.w.wallet = B; h.w.gen++;
   h.w.wallet = A; h.w.gen++;
   assert.equal(h.ctl.status().restore, 'idle');
   h.addKey('dm2');
   await settle();
-  assert.equal(h.w.fetchCalls, 2, 'restored again for the new generation');
+  assert.equal(h.w.fetchCalls, 3, 'restored again for the new generation');
 });
 
 test('a debounce armed for A that fires after the account changed derives nothing and sends nothing', async () => {
@@ -774,4 +774,97 @@ test('backupNow waiting behind a flight re-checks the gate before starting its o
   assert.equal(h.w.ensureCalls, ensureBefore, 'controller gate: no second run started');
   assert.equal(h.w.sendAttempts, 1);
   assert.equal(h.ctl.status().pendingBackup, false, 'nothing re-armed into the cleared session');
+});
+
+// --- desktop 1.85.0: re-read + merge the remote before EVERY seal; paused backups ---------------
+
+test('another device backs up a key AFTER our restore: our next backup merges it, never overwrites it', async () => {
+  const h = world();
+  h.seedRemote(A, { 'x': 1 });
+  h.addKey('mine');
+  await settle();
+  await h.clock.advance(3_600_000);
+  assert.deepEqual(h.w.publishes.map((p) => p.keys), [['mine', 'x']]);
+  // Another device of A publishes a vault with a key we never saw.
+  h.seedRemote(A, { 'x': 1, 'mine': 7, 'other-device': 9 });
+  h.addKey('mine2');
+  await h.clock.advance(3_600_000);
+  assert.deepEqual(h.w.publishes.at(-1)!.keys, ['mine', 'mine2', 'other-device', 'x']);
+});
+
+test('a remote that turned unreadable since the restore is never overwritten by a backup', async () => {
+  const h = world();
+  h.seedRemote(A, { 'x': 1 });
+  h.addKey('mine');
+  await settle();
+  await h.clock.advance(3_600_000);
+  const n = h.w.publishes.length;
+  h.seedRemote(A, { 'x': 1 }, KEY[B]); // now sealed under another key
+  const before = h.w.remote.get(A);
+  h.addKey('mine2');
+  await h.clock.advance(3_600_000);
+  assert.equal(h.w.publishes.length, n, 'no publish over a remote we cannot read');
+  assert.equal(h.w.remote.get(A), before);
+});
+
+test('a keyring that refuses to export -> paused (status + reason), nothing sent; Retry tries again', async () => {
+  const h = world();
+  let refuse = true;
+  const big = Object.assign(new Error('too big'), { code: 'vault_too_large' });
+  const ctl = createVaultController({
+    currentWallet: () => h.w.wallet, generation: () => h.w.gen, log: () => {},
+    ensureBackupKey: async () => ({ wallet: A, key: KEY[A] }),
+    fetchVault: async () => null, open: openKeyVault, importKeys: () => ({}),
+    seenMarker: () => false, markSeen: () => {},
+    snapshot: (): VaultKeyring => { if (refuse) throw big; return { conv: { a: k(1) }, chan: {} }; },
+    snapshotRefusal: (e) => ((e as { code?: string }).code === 'vault_too_large' ? 'too_large' : 'error'),
+    isEmpty: () => false, seal: sealKeyVault,
+    publish: async () => { h.w.sendAttempts++; },
+    setTimer: h.clock.set, clearTimer: h.clock.clear,
+  });
+  assert.equal(await ctl.backupNow(), 'paused');
+  assert.equal(ctl.status().paused, 'too_large');
+  assert.equal(h.w.sendAttempts, 0, 'never treated as backed up');
+  refuse = false;
+  ctl.retry();
+  assert.equal(ctl.status().paused, null);
+  await h.clock.advance(3_600_000);
+  assert.equal(h.w.sendAttempts, 1);
+  // Another account never sees A's pause.
+  refuse = true;
+  assert.equal(await ctl.backupNow(), 'paused');
+  h.w.wallet = B; h.w.gen++;
+  assert.equal(ctl.status().paused, null);
+});
+
+test('a remote that DISAPPEARS (404) after our restore, with the marker set -> blocked:missing, nothing published, no backoff; Replace publishes', async () => {
+  const h = world();
+  h.seedRemote(A, { 'x': 1 });
+  h.addKey('mine');
+  await settle();
+  await h.clock.advance(3_600_000);
+  const n = h.w.publishes.length;
+  assert.equal(h.w.marker.get(A), A, 'this device has seen the vault');
+  h.w.remote.delete(A); // the node lost its copy (or we switched to a node without one)
+  h.addKey('mine2');
+  await h.clock.advance(3_600_000);
+  assert.equal(h.w.publishes.length, n, 'never a fresh vault over one that exists elsewhere');
+  const st = h.ctl.status();
+  assert.deepEqual([st.restore, st.blockReason, st.pendingBackup, st.failStreak], ['blocked', 'missing', true, 0]);
+  assert.equal(await h.ctl.replace({ wallet: A, generation: h.w.gen + 1 }), 'stale', 'a confirm for another generation does nothing');
+  assert.equal(await h.ctl.replace({ wallet: A, generation: h.w.gen }), 'published');
+  assert.equal(h.w.publishes.length, n + 1);
+});
+
+test('a remote that turned UNREADABLE after our restore -> blocked:unreadable (banner), no backoff loop', async () => {
+  const h = world();
+  h.seedRemote(A, { 'x': 1 });
+  h.addKey('mine');
+  await settle();
+  await h.clock.advance(3_600_000);
+  h.seedRemote(A, { 'x': 1 }, KEY[B]);
+  h.addKey('mine2');
+  await h.clock.advance(3_600_000);
+  const st = h.ctl.status();
+  assert.deepEqual([st.restore, st.blockReason, st.failStreak], ['blocked', 'unreadable', 0]);
 });

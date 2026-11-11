@@ -11,40 +11,42 @@ import { resolveIsEncrypted } from './channelEncryption.ts';
 
 const PRIVATE = 2;
 const PUBLIC = 0;
+/** A public-range channel id (below the private id floor). */
+const PUB_ID = 7;
 
 test('unresolved channel state fails closed (encrypted) even with no channel data', () => {
-  assert.equal(resolveIsEncrypted('unresolved', undefined, PRIVATE), true);
-  assert.equal(resolveIsEncrypted('pending', undefined, PRIVATE), true);
-  assert.equal(resolveIsEncrypted('refreshing', undefined, PRIVATE), true);
+  assert.equal(resolveIsEncrypted('unresolved', undefined, PRIVATE, PUB_ID), true);
+  assert.equal(resolveIsEncrypted('pending', undefined, PRIVATE, PUB_ID), true);
+  assert.equal(resolveIsEncrypted('refreshing', undefined, PRIVATE, PUB_ID), true);
 });
 
 test('errored fetch fails closed (encrypted)', () => {
-  assert.equal(resolveIsEncrypted('errored', undefined, PRIVATE), true);
-  assert.equal(resolveIsEncrypted('errored', { channel_type: PUBLIC }, PRIVATE), true);
+  assert.equal(resolveIsEncrypted('errored', undefined, PRIVATE, PUB_ID), true);
+  assert.equal(resolveIsEncrypted('errored', { channel_type: PUBLIC }, PRIVATE, PUB_ID), true);
 });
 
 test('ready but null channel record fails closed (encrypted)', () => {
-  assert.equal(resolveIsEncrypted('ready', null, PRIVATE), true);
+  assert.equal(resolveIsEncrypted('ready', null, PRIVATE, PUB_ID), true);
 });
 
 test('the exact reported bug: attach mid-load on a private channel must stay encrypted', () => {
   // Before the fix this returned false because `channel` was undefined while
   // `state` was still 'pending' — the media upload picked plaintext.
-  assert.equal(resolveIsEncrypted('pending', undefined, PRIVATE), true);
+  assert.equal(resolveIsEncrypted('pending', undefined, PRIVATE, PUB_ID), true);
 });
 
 test('ready + private channel type -> encrypted, regardless of encryption_enabled', () => {
-  assert.equal(resolveIsEncrypted('ready', { channel_type: PRIVATE }, PRIVATE), true);
-  assert.equal(resolveIsEncrypted('ready', { channel_type: PRIVATE, encryption_enabled: false }, PRIVATE), true);
+  assert.equal(resolveIsEncrypted('ready', { channel_type: PRIVATE }, PRIVATE, PUB_ID), true);
+  assert.equal(resolveIsEncrypted('ready', { channel_type: PRIVATE, encryption_enabled: false }, PRIVATE, PUB_ID), true);
 });
 
 test('ready + public channel with encryption_enabled -> encrypted', () => {
-  assert.equal(resolveIsEncrypted('ready', { channel_type: PUBLIC, encryption_enabled: true }, PRIVATE), true);
+  assert.equal(resolveIsEncrypted('ready', { channel_type: PUBLIC, encryption_enabled: true }, PRIVATE, PUB_ID), true);
 });
 
 test('ready + public legacy channel (no flag) -> plaintext ONLY when definitively resolved', () => {
-  assert.equal(resolveIsEncrypted('ready', { channel_type: PUBLIC, encryption_enabled: false }, PRIVATE), false);
-  assert.equal(resolveIsEncrypted('ready', { channel_type: PUBLIC }, PRIVATE), false);
+  assert.equal(resolveIsEncrypted('ready', { channel_type: PUBLIC, encryption_enabled: false }, PRIVATE, PUB_ID), false);
+  assert.equal(resolveIsEncrypted('ready', { channel_type: PUBLIC }, PRIVATE, PUB_ID), false);
 });
 
 test('refreshing with a stale-but-plaintext-looking payload still fails closed', () => {
@@ -53,7 +55,7 @@ test('refreshing with a stale-but-plaintext-looking payload still fails closed',
   // `undefined`. A future refactor might be tempted to trust that non-null
   // data; `state !== 'ready'` must win regardless of how definitive the
   // stale payload looks.
-  assert.equal(resolveIsEncrypted('refreshing', { channel_type: PUBLIC, encryption_enabled: false }, PRIVATE), true);
+  assert.equal(resolveIsEncrypted('refreshing', { channel_type: PUBLIC, encryption_enabled: false }, PRIVATE, PUB_ID), true);
 });
 
 // ---------------------------------------------------------------------------
@@ -129,6 +131,17 @@ test('shouldAutoJoinEncryptedChannel: resolved encrypted public (and ReadPublic)
 });
 
 test('resolveIsEncrypted is unchanged: still fail-closed where auto-join now says no', () => {
-  assert.equal(resolveIsEncrypted('ready', null, PRIVATE), true);
-  assert.equal(resolveIsEncrypted('pending', undefined, PRIVATE), true);
+  assert.equal(resolveIsEncrypted('ready', null, PRIVATE, PUB_ID), true);
+  assert.equal(resolveIsEncrypted('pending', undefined, PRIVATE, PUB_ID), true);
+});
+
+// ---------------------------------------------------------------------------
+// Private id floor (desktop 1.85.0): a hostile node reporting a private-range
+// channel as public / unencrypted must never get a plaintext send.
+test('private-range channel id is always encrypted, whatever the node-served record says', () => {
+  const FLOOR = 2 ** 32;
+  for (const id of [FLOOR, FLOOR + 1, Number.MAX_SAFE_INTEGER, 0, -1, 1.5, NaN, null, undefined]) {
+    assert.equal(resolveIsEncrypted('ready', { channel_type: PUBLIC, encryption_enabled: false }, PRIVATE, id as number), true, String(id));
+  }
+  assert.equal(resolveIsEncrypted('ready', { channel_type: PUBLIC, encryption_enabled: false }, PRIVATE, FLOOR - 1), false);
 });

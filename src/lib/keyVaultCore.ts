@@ -71,8 +71,11 @@ export interface RestoreDeps<Resp, Keyring> extends VaultCoreDeps {
   fetchVault(): Promise<Resp | null>;
   /** Decrypt (throws on auth failure / corrupt blob / unsupported format). */
   open(key: Uint8Array, resp: Resp): Keyring;
-  /** Merge into the in-memory key caches. */
-  importKeys(keyring: Keyring): Record<string, unknown>;
+  /**
+   * Merge into the in-memory key caches, for the account `generation` captured
+   * at the start of the run (a keyring may throw for an outdated one).
+   */
+  importKeys(keyring: Keyring, generation: number): Record<string, unknown>;
   /**
    * Whether this device has ever opened or published `wallet`'s vault
    * (`keyVaultSeen`). `null` = can't tell right now (storage not pointed at
@@ -83,9 +86,43 @@ export interface RestoreDeps<Resp, Keyring> extends VaultCoreDeps {
   markSeen(wallet: string): void;
 }
 
-export interface PublishDeps<Sealed, Keyring> extends VaultCoreDeps {
-  /** Snapshot of the current keyring (taken synchronously at start). */
-  snapshot(): Keyring;
+export interface PublishDeps<Sealed, Keyring, Resp = unknown> extends VaultCoreDeps {
+  /**
+   * GET the remote vault (`null` only on a true 404). Re-read before EVERY
+   * seal: the vault is one last-write-wins record, so sealing without merging
+   * the remote first would overwrite keys another device added since.
+   */
+  fetchVault(): Promise<Resp | null>;
+  /** Decrypt (throws on auth failure / corrupt blob / unsupported format). */
+  open(key: Uint8Array, resp: Resp): Keyring;
+  /** Merge into the in-memory key caches for the captured `generation`. */
+  importKeys(keyring: Keyring, generation: number): Record<string, unknown>;
+  /**
+   * `keyVaultSeen` for `wallet` (see `RestoreDeps.seenMarker`): a 404 before
+   * the seal for a wallet whose vault this device has seen is `missing`,
+   * never a first backup; `null` (unreadable now) sends nothing.
+   */
+  seenMarker(wallet: string): boolean | null;
+  /**
+   * Snapshot of the current keyring for the captured `generation`. May THROW
+   * when the keyring refuses to export (too large for the vault, more
+   * uninterpretable entries than it can keep, outdated account): the publish
+   * is then `paused` / `stale`, never treated as backed up.
+   */
+  snapshot(generation: number): Keyring;
+  /**
+   * Why a throwing `snapshot` refused: `'stale'` (outdated account) or a
+   * reason to surface as "backup paused" (default `'error'`).
+   */
+  snapshotRefusal?(e: unknown): PauseReason | 'stale';
+  /**
+   * TWO-STEP export: called with the snapshot ONLY after the node accepted
+   * the sealed vault (keyVault.ts redeems the keyring's `commitExport` token,
+   * marking those keys persisted). A failed / stale publish commits nothing.
+   */
+  commit?(keyring: Keyring): void;
+  /** Cheap emptiness check before deriving a key (no export built). Default: snapshot + `isEmpty`. */
+  quickEmpty?(): boolean;
   isEmpty(keyring: Keyring): boolean;
   seal(key: Uint8Array, keyring: Keyring): Sealed;
   publish(sealed: Sealed): Promise<void>;
@@ -179,7 +216,7 @@ export async function runRestore<Resp, Keyring>(deps: RestoreDeps<Resp, Keyring>
   }
   // No await between this check and the writes.
   if (stale()) return 'stale';
-  const counts = deps.importKeys(keyring);
+  const counts = deps.importKeys(keyring, stamp.generation);
   deps.markSeen(stamp.wallet);
   deps.log('keyvault: restored', counts);
   return 'done';
@@ -193,9 +230,26 @@ export async function runRestore<Resp, Keyring>(deps: RestoreDeps<Resp, Keyring>
  *                    the key was zeroed by a session clear meanwhile
  *  - `blocked`     — publishing is not allowed now (`canPublish()` false)
  *  - `stale`       — the account changed mid-flight; nothing sent
- *  - `failed`      — the node / network refused it
+ *  - `failed`      — the node / network refused it, or the remote vault
+ *                    could not be re-read / merged right before sealing
+ *                    (retried with backoff; never overwritten blind)
+ *  - `unreadable`  — the remote re-read before sealing cannot be opened with
+ *                    our own key: nothing sent, restore BLOCKED (unreadable)
+ *  - `missing`     — the re-read answered 404 although this device has seen
+ *                    this wallet's vault: nothing sent, restore BLOCKED (missing)
+ *  - `paused`      — the keyring refused to export (see {@link PauseReason});
+ *                    nothing sent, surfaced as "backup paused"
  */
-export type PublishOutcome = 'published' | 'empty' | 'unavailable' | 'blocked' | 'stale' | 'failed';
+export type PublishOutcome =
+  'published' | 'empty' | 'unavailable' | 'blocked' | 'stale' | 'failed' | 'paused' | 'unreadable' | 'missing';
+
+/**
+ * Why backups are paused: `too_large` — the keys that must be backed up
+ * exceed the vault budget (SDK `vault_too_large`); `overflow` — the vault
+ * holds more uninterpretable entries than the keyring keeps (SDK
+ * `opaque_overflow`), a backup would shrink it; `error` — any other refusal.
+ */
+export type PauseReason = 'too_large' | 'overflow' | 'error';
 
 /**
  * The i18n key the key-vault banner shows after the user confirmed "Replace
@@ -210,23 +264,119 @@ export function replaceResultMessageKey(out: PublishOutcome): string | null {
     case 'published': return 'keyvault_replaced';
     case 'empty': return 'keyvault_replace_nothing';
     case 'failed': return 'keyvault_replace_failed';
+    // `paused`: the banner shows the paused state itself.
     default: return null;
   }
 }
 
-export async function runPublish<Sealed, Keyring>(deps: PublishDeps<Sealed, Keyring>): Promise<PublishOutcome> {
+/** Snapshot outcome: the keyring, or why it was refused. */
+function trySnapshot<Sealed, Keyring, Resp>(
+  deps: PublishDeps<Sealed, Keyring, Resp>, generation: number,
+): { keyring: Keyring } | { refused: PauseReason | 'stale' } {
+  try {
+    return { keyring: deps.snapshot(generation) };
+  } catch (e) {
+    const refused = deps.snapshotRefusal?.(e) ?? 'error';
+    deps.log('keyvault: backup refused by the keyring', { reason: refused, err: (e as Error)?.message });
+    return { refused };
+  }
+}
+
+/** {@link runPublishDetailed} result. */
+export interface PublishResult {
+  outcome: PublishOutcome;
+  /** Set when `outcome` is `paused`. */
+  pause?: PauseReason;
+}
+
+export async function runPublish<Sealed, Keyring, Resp = unknown>(deps: PublishDeps<Sealed, Keyring, Resp>): Promise<PublishOutcome> {
+  return (await runPublishDetailed(deps)).outcome;
+}
+
+/**
+ * {@link runPublish} with the pause reason. Order (desktop 1.85.0): derive
+ * the backup key → RE-READ the remote vault → open it with our own key and
+ * MERGE it into the keyring → snapshot (two-step export, which may refuse:
+ * `paused`) → seal → publish → commit the snapshot ONLY when published. The remote is re-read before EVERY seal: another device may have
+ * added keys since our restore, and the vault is one last-write-wins record.
+ * A remote that cannot be read or opened now is never overwritten (`failed`,
+ * retried with backoff).
+ */
+export async function runPublishDetailed<Sealed, Keyring, Resp = unknown>(
+  deps: PublishDeps<Sealed, Keyring, Resp>,
+  opts: { replace?: boolean } = {},
+): Promise<PublishResult> {
   const stamp = stampAccount(deps);
-  if (!stamp) return 'unavailable';
-  const keyring = deps.snapshot();
-  if (deps.isEmpty(keyring)) return 'empty';
+  if (!stamp) return { outcome: 'unavailable' };
+  const stale = () => !stampStillCurrent(deps, stamp);
+  // Cheap early check (no key derivation for an empty keyring).
+  if (deps.quickEmpty) {
+    if (deps.quickEmpty()) return { outcome: 'empty' };
+  } else {
+    const first = trySnapshot(deps, stamp.generation);
+    if ('refused' in first) return first.refused === 'stale' ? { outcome: 'stale' } : { outcome: 'paused', pause: first.refused };
+    if (deps.isEmpty(first.keyring)) return { outcome: 'empty' };
+  }
   const owned = await deps.ensureBackupKey();
-  if (!stampStillCurrent(deps, stamp)) return 'stale';
+  if (stale()) return { outcome: 'stale' };
   // Also refuses a key zeroed by a session clear: sealing with zeros would
   // overwrite the remote vault with a blob no device can open.
-  if (!usable(owned, stamp.wallet)) return 'unavailable';
-  // Gate AFTER the last await: the restore state may have changed while the
-  // wallet was signing.
-  if (!deps.canPublish()) return 'blocked';
+  if (!usable(owned, stamp.wallet)) return { outcome: 'unavailable' };
+  if (!deps.canPublish()) return { outcome: 'blocked' };
+
+  // Merge the remote first: never overwrite keys another device backed up.
+  // The user-confirmed "Replace backup" (an UNREADABLE or MISSING remote)
+  // skips the re-read: it would only block again.
+  if (!opts.replace) {
+    let resp: Resp | null;
+    try {
+      resp = await deps.fetchVault();
+    } catch (e) {
+      if (stale()) return { outcome: 'stale' };
+      deps.log('keyvault: re-read before backup failed (will retry)', { err: (e as Error)?.message });
+      return { outcome: 'failed' };
+    }
+    if (stale()) return { outcome: 'stale' };
+    if (!usable(owned, stamp.wallet)) return { outcome: 'unavailable' };
+    if (!resp) {
+      // A 404 is "nothing to merge" ONLY for a wallet this device never saw a
+      // vault for (a first backup). With the marker set the node is missing a
+      // copy that exists elsewhere: publishing would overwrite it everywhere —
+      // same rule as the restore path. Marker unreadable now: retry later.
+      const seen = deps.seenMarker(stamp.wallet);
+      if (seen === null) return { outcome: 'blocked' };
+      if (seen) {
+        deps.log('keyvault: node has no copy of a vault this device has seen (before backup)');
+        return { outcome: 'missing' };
+      }
+    } else {
+      let remote: Keyring;
+      try {
+        remote = deps.open(owned.key, resp);
+      } catch (e) {
+        if (stale()) return { outcome: 'stale' };
+        // Never overwritten by an ordinary backup: blocked like a restore would.
+        deps.log('keyvault: remote vault unreadable under own key before backup', { err: (e as Error)?.message });
+        return { outcome: 'unreadable' };
+      }
+      if (stale()) return { outcome: 'stale' };
+      try {
+        deps.importKeys(remote, stamp.generation);
+      } catch (e) {
+        if (stale()) return { outcome: 'stale' };
+        deps.log('keyvault: merging the remote before backup failed — not overwritten', { err: (e as Error)?.message });
+        return { outcome: 'failed' };
+      }
+    }
+  }
+
+  // Gate AFTER the last await: the restore state may have changed meanwhile.
+  if (stale()) return { outcome: 'stale' };
+  if (!deps.canPublish()) return { outcome: 'blocked' };
+  const snap = trySnapshot(deps, stamp.generation);
+  if ('refused' in snap) return snap.refused === 'stale' ? { outcome: 'stale' } : { outcome: 'paused', pause: snap.refused };
+  const keyring = snap.keyring;
+  if (deps.isEmpty(keyring)) return { outcome: 'empty' };
   // No await between these checks and sealing; `publish` is handed the blob
   // synchronously, so it signs under the account checked here.
   const sealed = deps.seal(owned.key, keyring);
@@ -234,10 +384,12 @@ export async function runPublish<Sealed, Keyring>(deps: PublishDeps<Sealed, Keyr
     await deps.publish(sealed);
   } catch (e) {
     deps.log('keyvault: backup failed', { err: (e as Error)?.message });
-    return 'failed';
+    return { outcome: 'failed' };
   }
+  // Only what the node accepted is committed (the keyring re-checks the generation).
+  deps.commit?.(keyring);
   if (stampStillCurrent(deps, stamp)) deps.markSeen(stamp.wallet);
-  return 'published';
+  return { outcome: 'published' };
 }
 
 // --- backup key ---------------------------------------------------------------
@@ -328,7 +480,10 @@ export type BackupNowResult =
   | 'blocked'
   | 'stale'
   | 'failed'
-  | 'unavailable';
+  | 'unavailable'
+  | 'paused'
+  | 'unreadable'
+  | 'missing';
 
 /** Default debounce between a keyring change and its publish. */
 export const BACKUP_DEBOUNCE_MS = 4_000;
@@ -337,10 +492,10 @@ export const FAIL_BACKOFF_MS: readonly number[] = [60_000, 300_000, 900_000];
 
 export interface VaultControllerDeps<Resp, Sealed, Keyring>
   extends RestoreDeps<Resp, Keyring>,
-    Omit<PublishDeps<Sealed, Keyring>, 'canPublish'> {
+    Omit<PublishDeps<Sealed, Keyring, Resp>, 'canPublish' | 'fetchVault' | 'open' | 'importKeys' | 'seenMarker' | 'markSeen'> {
   setTimer(fn: () => void, ms: number): unknown;
   clearTimer(handle: unknown): void;
-  /** Called whenever the restore state / block reason changes. */
+  /** Called whenever the restore state / block reason / pause reason changes. */
   onStateChange?(): void;
   debounceMs?: number;
   failBackoffMs?: readonly number[];
@@ -352,6 +507,12 @@ export interface VaultStatus {
   pendingBackup: boolean;
   publishing: boolean;
   failStreak: number;
+  /**
+   * Backups are PAUSED for the active account: the keyring refused to export
+   * (see {@link PauseReason}). Never treated as backed up; cleared by a
+   * successful publish, {@link VaultController.retry} or a session clear.
+   */
+  paused: PauseReason | null;
 }
 
 export interface VaultController {
@@ -368,8 +529,8 @@ export interface VaultController {
    * remote for the current account and publish now. Refused ('blocked') in any
    * other state, so it can never skip a restore that hasn't run.
    */
-  replace(): Promise<PublishOutcome>;
-  /** User Retry: leave `blocked` and run restore again. */
+  replace(forStamp?: AccountStamp): Promise<PublishOutcome>;
+  /** User Retry: leave `blocked` and run restore again; or retry a `paused` backup. */
   retry(): void;
   /** Wallet disconnect / switch: forget everything about the session. */
   clearSession(): void;
@@ -409,8 +570,19 @@ export function createVaultController<Resp, Sealed, Keyring>(
   /** Account that asked for a publish while one was in flight. */
   let publishAgain: AccountStamp | null = null;
   let failStreak = 0;
+  /** Why backups are paused, and for which account (another account's pause reads as none). */
+  let paused: { reason: PauseReason; stamp: AccountStamp } | null = null;
 
   const changed = () => deps.onStateChange?.();
+
+  const setPaused = (p: { reason: PauseReason; stamp: AccountStamp } | null) => {
+    const differs = (paused?.reason ?? null) !== (p?.reason ?? null);
+    paused = p;
+    if (differs) changed();
+  };
+  /** The pause as it applies to the account active NOW. */
+  const effectivePause = (): PauseReason | null =>
+    paused && stampStillCurrent(deps, paused.stamp) ? paused.reason : null;
 
   const setState = (s: RestoreState, reason: BlockReason | null, stamp: AccountStamp | null) => {
     const differs = s !== restoreState || reason !== blockReason;
@@ -514,16 +686,28 @@ export function createVaultController<Resp, Sealed, Keyring>(
   }
 
   /** Run one publish (caller guarantees none is in flight) and do the bookkeeping. */
-  function startPublish(): Promise<PublishOutcome> {
+  function startPublish(opts: { replace?: boolean } = {}): Promise<PublishOutcome> {
+    const stamp = stampAccount(deps);
     const p = (async (): Promise<PublishOutcome> => {
-      let outcome: PublishOutcome;
+      let res: PublishResult;
       try {
-        outcome = await runPublish({ ...deps, canPublish });
+        res = await runPublishDetailed({ ...deps, canPublish }, opts);
       } catch (e) {
         deps.log('keyvault: backup failed', { err: (e as Error)?.message });
-        outcome = 'failed';
+        res = { outcome: 'failed' };
       }
-      return outcome;
+      // Recorded before `publishing` clears, for the account that ran it.
+      if (res.outcome === 'paused' && stamp && stampStillCurrent(deps, stamp)) {
+        setPaused({ reason: res.pause ?? 'error', stamp });
+      }
+      // The remote became unreadable / missing since our restore: block like a
+      // restore would (banner: Retry / Replace); the backup intent is kept.
+      if ((res.outcome === 'unreadable' || res.outcome === 'missing') && stamp && stampStillCurrent(deps, stamp)
+          && effectiveState() === 'done') {
+        setState('blocked', res.outcome, stamp);
+        pendingBackup = true;
+      }
+      return res.outcome;
     })();
     publishing = p;
     void p.then((outcome) => {
@@ -537,6 +721,11 @@ export function createVaultController<Resp, Sealed, Keyring>(
     if (outcome === 'published') {
       failStreak = 0;
       cancelRetryTimer();
+      setPaused(null);
+    } else if (outcome === 'paused') {
+      // No automatic retry loop: the next key change, the user's Retry or a
+      // confirmed prune tries again. The intent to back up is kept.
+      pendingBackup = true;
     } else if (outcome === 'failed') {
       if (failStreak < backoff.length && retryTimer === null) {
         const delay = backoff[failStreak];
@@ -569,7 +758,7 @@ export function createVaultController<Resp, Sealed, Keyring>(
   }
 
   /** Wait for any in-flight publish, then run exactly one. */
-  async function publishNow(): Promise<PublishOutcome> {
+  async function publishNow(opts: { replace?: boolean } = {}): Promise<PublishOutcome> {
     const stamp = stampAccount(deps);
     while (publishing) {
       await publishing.catch(() => undefined);
@@ -579,7 +768,7 @@ export function createVaultController<Resp, Sealed, Keyring>(
     if (!stamp || !stampStillCurrent(deps, stamp)) return 'stale';
     if (!canPublish()) return 'blocked';
     cancelBackupTimer();
-    return startPublish();
+    return startPublish(opts);
   }
 
   async function backupNow(): Promise<BackupNowResult> {
@@ -594,19 +783,27 @@ export function createVaultController<Resp, Sealed, Keyring>(
     }
   }
 
-  async function replace(): Promise<PublishOutcome> {
-    const stamp = stampAccount(deps);
-    if (!stamp || effectiveState() !== 'blocked') return 'blocked';
+  async function replace(forStamp?: AccountStamp): Promise<PublishOutcome> {
+    const stamp = forStamp ?? stampAccount(deps);
+    if (!stamp) return 'blocked';
+    // The confirmation was given for `stamp`'s account and generation; never act for another.
+    if (!stampStillCurrent(deps, stamp)) return 'stale';
+    if (effectiveState() !== 'blocked') return 'blocked';
     deps.log('keyvault: user confirmed replacing the remote vault', { reason: blockReason });
     setState('done', null, stamp);
     pendingBackup = false;
-    return publishNow();
+    return publishNow({ replace: true });
   }
 
   function retry(): void {
     const s = effectiveState();
     if (s === 'blocked') setState('idle', null, null);
     if (s !== 'done') void ensureRestored();
+    else if (effectivePause()) {
+      // A paused backup: try again (it pauses again if nothing changed).
+      setPaused(null);
+      scheduleBackup();
+    }
   }
 
   function clearSession(): void {
@@ -617,6 +814,7 @@ export function createVaultController<Resp, Sealed, Keyring>(
     failStreak = 0;
     cancelBackupTimer();
     cancelRetryTimer();
+    setPaused(null);
     setState('idle', null, null);
   }
 
@@ -634,6 +832,47 @@ export function createVaultController<Resp, Sealed, Keyring>(
       pendingBackup,
       publishing: publishing !== null,
       failStreak,
+      paused: effectivePause(),
     }),
   };
+}
+
+// --- two-step channel export + user-confirmed prune (pure, wired by keyVault.ts) ---
+
+/**
+ * Pairs each sealed snapshot with the channel-export commit token it was
+ * PREPARED with: `snapshot(generation)` prepares (side-effect free) and
+ * `commit(snapshot)` redeems that snapshot's token with the generation it was
+ * prepared for — never the current one — exactly once. A snapshot never
+ * committed (failed / stale publish) leaves the keyring as it was.
+ */
+export function createTwoStepSnapshot<Chan, Token>(
+  prepare: (generation: number) => { chan: Chan; token: Token },
+  commitChan: (token: Token, generation: number) => void,
+  conv: () => Record<string, Uint8Array>,
+): { snapshot(generation: number): { conv: Record<string, Uint8Array>; chan: Chan }; commit(kr: object): void } {
+  const pending = new WeakMap<object, { token: Token; generation: number }>();
+  return {
+    snapshot(generation) {
+      const p = prepare(generation);
+      const kr = { conv: conv(), chan: p.chan };
+      pending.set(kr, { token: p.token, generation });
+      return kr;
+    },
+    commit(kr) {
+      const c = pending.get(kr);
+      if (!c) return;
+      pending.delete(kr);
+      commitChan(c.token, c.generation);
+    },
+  };
+}
+
+/**
+ * Run a user-confirmed destructive step (a prune) only while `forStamp` —
+ * captured BEFORE the confirmation — is still the active account AND switch
+ * generation; null otherwise (nothing done).
+ */
+export function guardedForStamp<T>(deps: AccountDeps, forStamp: AccountStamp, run: () => T): T | null {
+  return stampStillCurrent(deps, forStamp) ? run() : null;
 }

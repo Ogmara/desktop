@@ -300,6 +300,34 @@ export function runWalletScopeMigrationOnce(): void {
   }
 }
 
+/**
+ * Write into a SPECIFIC account's namespace, regardless of the active scope.
+ *
+ * For async flows that captured their account before awaiting: by the time
+ * they write, `scopedSet()` may already point at the NEXT account (the scope
+ * flips mid-switch). Writing under the captured address keeps the data with
+ * the account it belongs to — callers must still re-check that the account
+ * is current before acting on what they write.
+ */
+export function scopedSetFor(address: string, base: string, value: string): void {
+  if (!address) return;
+  try {
+    localStorage.setItem(`${base}${SEP}${address}`, value);
+  } catch {
+    /* quota or private-mode failure must not break the app */
+  }
+}
+
+/** Remove one key from a SPECIFIC account's namespace (see {@link scopedSetFor}). */
+export function scopedRemoveFor(address: string, base: string): void {
+  if (!address) return;
+  try {
+    localStorage.removeItem(`${base}${SEP}${address}`);
+  } catch {
+    /* best-effort */
+  }
+}
+
 /** Read another account's namespace without switching scope. */
 export function scopedGetFor(address: string, base: string): string | null {
   if (!address) return null;

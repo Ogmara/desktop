@@ -9,6 +9,11 @@
  *    Backups wait. Retry re-reads the node's vault (e.g. after switching
  *    node); "Replace backup" (behind a confirm) overwrites the node's vault
  *    with this device's keys, which can lose keys only the old backup had.
+ *  - `paused`: the channel keyring refused to export (desktop 1.85.0, SDK
+ *    `ChannelKeyring`), so NOTHING new is backed up — never shown as backed
+ *    up. `too_large`: the user may free space one ladder step per click,
+ *    least risky first (see `handlePrune`), each a dry run whose counts the
+ *    confirm shows; the backup is then retried. Retry tries again.
  *
  * The confirm is the app's own `confirmDialog` — `window.confirm` is broken
  * in the Tauri webview (see components/Dialogs.tsx).
@@ -17,7 +22,9 @@
 import { Component, Show, createSignal, createEffect } from 'solid-js';
 import { t } from '../i18n/init';
 import { authStatus } from '../lib/auth';
-import { keyVaultIssue, retryKeyVault, replaceKeyVault } from '../lib/keyVault';
+import {
+  keyVaultIssue, retryKeyVault, replaceKeyVault, previewKeyVaultPrune, pruneAndRetryBackup, keyVaultGeneration,
+} from '../lib/keyVault';
 import { replaceResultMessageKey } from '../lib/keyVaultCore';
 import { confirmDialog } from './Dialogs';
 
@@ -29,7 +36,7 @@ export const KeyVaultBanner: Component = () => {
   let lastKey = '';
   createEffect(() => {
     const issue = keyVaultIssue();
-    const key = issue ? `${issue.kind}:${issue.wallet}` : '';
+    const key = issue ? `${issue.kind}:${issue.pause ?? ''}:${issue.wallet}` : '';
     if (key !== lastKey) {
       setDismissed(false);
       if (key) setResultMsg('');
@@ -42,7 +49,70 @@ export const KeyVaultBanner: Component = () => {
   const body = () => {
     const issue = keyVaultIssue();
     if (!issue) return '';
+    if (issue.kind === 'paused') {
+      return issue.pause === 'too_large' ? t('keyvault_paused_too_large_body')
+        : issue.pause === 'overflow' ? t('keyvault_paused_overflow_body') : t('keyvault_paused_error_body');
+    }
     return issue.kind === 'unreadable' ? t('keyvault_unreadable_body') : t('keyvault_missing_body');
+  };
+
+  const isPaused = () => keyVaultIssue()?.kind === 'paused';
+  const canPrune = () => keyVaultIssue()?.pause === 'too_large';
+
+  /**
+   * The user-confirmed prune ladder (one level per click, least risky first):
+   * node-served keys → the most-flooded channel's member wraps → restored
+   * alternates (warns that some may be the user's own outranked keys) →
+   * restored primary-name keys (last resort, two confirmations). Each step is
+   * a dry run whose per-class counts the confirm shows, then the prune and a
+   * backup retry.
+   */
+  const handlePrune = async () => {
+    if (busy()) return;
+    // Captured before any modal wait: the prune runs only for THIS account and generation.
+    const issue = keyVaultIssue();
+    if (!issue || issue.pause !== 'too_large') return;
+    const gen = keyVaultGeneration();
+    setResultMsg('');
+    // Busy for the whole dialog: no double click, no second confirm in parallel.
+    setBusy(true);
+    try {
+      // At most a few rounds: keys arriving while a dialog is open re-show it with the new counts.
+      for (let round = 0; round < 3; round++) {
+        const plan = previewKeyVaultPrune();
+        if (!plan) {
+          setResultMsg(t('keyvault_prune_nothing'));
+          return;
+        }
+        const kb = (bytes: number) => Math.max(1, Math.round(bytes / 1024));
+        const cls = plan.result.byClass;
+        let ok = false;
+        switch (plan.level) {
+          case 'nodeServed':
+            ok = await confirmDialog(t('keyvault_prune_confirm', { count: cls.nodeServed.count, kb: kb(cls.nodeServed.bytes) }));
+            break;
+          case 'memberWraps':
+            ok = await confirmDialog(t('keyvault_prune_members_confirm', { count: cls.memberWraps.count, kb: kb(cls.memberWraps.bytes) }));
+            break;
+          case 'restoredAlternates':
+            ok = await confirmDialog(t('keyvault_prune_alternates_confirm', {
+              count: cls.restoredAlternates.count, kb: kb(cls.restoredAlternates.bytes), atRisk: cls.ownAlternatesAtRisk.count,
+            }));
+            break;
+          case 'restoredPrimaries':
+            ok = await confirmDialog(t('keyvault_prune_primaries_confirm', { count: cls.restoredPrimaries.count, kb: kb(cls.restoredPrimaries.bytes) }))
+              && await confirmDialog(t('keyvault_prune_primaries_confirm2', { count: cls.restoredPrimaries.count }));
+            break;
+        }
+        if (!ok) return;
+        const n = pruneAndRetryBackup(issue.wallet, gen, plan);
+        if (n === 'changed') continue;
+        if (n !== null) setResultMsg(n > 0 ? t('keyvault_pruned', { count: n }) : t('keyvault_prune_nothing'));
+        return;
+      }
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleRetry = () => {
@@ -55,11 +125,12 @@ export const KeyVaultBanner: Component = () => {
     // unbounded) wait so a switch while the dialog is open can't redirect it.
     const issue = keyVaultIssue();
     if (!issue) return;
+    const gen = keyVaultGeneration();
     if (!(await confirmDialog(t('keyvault_replace_confirm')))) return;
     setBusy(true);
     setResultMsg('');
     try {
-      const out = await replaceKeyVault(issue.wallet);
+      const out = await replaceKeyVault(issue.wallet, gen);
       // 'empty' unblocked backups but published nothing: never claim "replaced".
       const msgKey = replaceResultMessageKey(out);
       if (msgKey) setResultMsg(t(msgKey));
@@ -80,14 +151,21 @@ export const KeyVaultBanner: Component = () => {
             <button type="button" class="keyvault-banner-btn" onClick={handleRetry} disabled={busy()}>
               {t('keyvault_retry')}
             </button>
-            <button
-              type="button"
-              class="keyvault-banner-btn-secondary"
-              onClick={handleReplace}
-              disabled={busy()}
-            >
-              {t('keyvault_replace')}
-            </button>
+            <Show when={canPrune()}>
+              <button type="button" class="keyvault-banner-btn-secondary" onClick={handlePrune} disabled={busy()}>
+                {t('keyvault_prune')}
+              </button>
+            </Show>
+            <Show when={!isPaused()}>
+              <button
+                type="button"
+                class="keyvault-banner-btn-secondary"
+                onClick={handleReplace}
+                disabled={busy()}
+              >
+                {t('keyvault_replace')}
+              </button>
+            </Show>
             <button
               type="button"
               class="keyvault-banner-dismiss"

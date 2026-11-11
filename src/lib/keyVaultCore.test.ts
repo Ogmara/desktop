@@ -14,6 +14,9 @@ import {
   createBackupKeyCache,
   runRestore,
   runPublish,
+  runPublishDetailed,
+  createTwoStepSnapshot,
+  guardedForStamp,
   usable,
   replaceResultMessageKey,
   type OwnedKey,
@@ -373,7 +376,7 @@ test('keyVault.ts: derivation signs strictly as the requested wallet; clear aban
   assert.match(src, /function seenMarker\(wallet: string\): boolean \| null \{\s*\n\s*if \(getWalletScope\(\) !== wallet\) return null;/);
   assert.match(src, /function markSeen\(wallet: string\): void \{\s*\n\s*if \(getWalletScope\(\) !== wallet\) return;/);
   // Replace only for the account the user confirmed it for.
-  assert.match(src, /export async function replaceKeyVault\(forWallet\?: string\): Promise<PublishOutcome> \{\s*\n\s*if \(forWallet !== undefined && walletAddress\(\) !== forWallet\) return 'stale';/);
+  assert.match(src, /export async function replaceKeyVault\(forWallet\?: string, forGeneration\?: number\): Promise<PublishOutcome> \{\s*\n\s*if \(forWallet !== undefined && walletAddress\(\) !== forWallet\) return 'stale';\s*\n\s*if \(forGeneration !== undefined && currentSwitchGeneration\(\) !== forGeneration\) return 'stale';/);
 });
 
 test('deviceEnc.ts: the enc-key binding signs strictly as the captured wallet', () => {
@@ -423,4 +426,180 @@ test('N1: the banner routes the Replace outcome through replaceResultMessageKey'
   assert.match(src, /const msgKey = replaceResultMessageKey\(out\);/);
   assert.doesNotMatch(src, /out === 'empty'/);
   assert.doesNotMatch(src, /t\('keyvault_replaced'\)/);
+});
+
+// --- desktop 1.85.0: re-read + merge before every seal ------------------------------------
+
+test('publish: the remote is re-read, opened and MERGED before the seal; the snapshot is committed only after publish', async () => {
+  const h = harness();
+  const order: string[] = [];
+  const base = { ...h.deps };
+  h.deps.fetchVault = async () => { order.push('fetch'); return base.fetchVault(); };
+  h.deps.importKeys = (kr: Keyring, gen: number) => { order.push(`import@${gen}`); return base.importKeys(kr); };
+  h.deps.publish = async (b: unknown) => { order.push('publish'); await base.publish(b); };
+  Object.assign(h.deps, {
+    quickEmpty: () => { order.push('quickEmpty'); return false; },
+    commit: () => { order.push('commit'); },
+  });
+  h.deps.snapshot = () => { order.push('snapshot'); return { conv: { mine: 1 } }; };
+  assert.equal(await runPublish(h.deps), 'published');
+  assert.deepEqual(order, ['quickEmpty', 'fetch', 'import@1', 'snapshot', 'publish', 'commit']);
+});
+
+test('publish: a failed or stale publish commits NOTHING (two-step export)', async () => {
+  let commits = 0;
+  const h = harness();
+  Object.assign(h.deps, { commit: () => { commits++; } });
+  h.deps.publish = async () => { throw new Error('API error (503)'); };
+  assert.equal(await runPublish(h.deps), 'failed');
+  const h2 = harness();
+  Object.assign(h2.deps, { commit: () => { commits++; } });
+  h2.deps.snapshot = () => { h2.s.gen++; return { conv: { mine: 1 } }; }; // account changes while preparing
+  assert.equal(await runPublish(h2.deps), 'stale');
+  assert.equal(commits, 0);
+});
+
+test('publish: a remote that cannot be opened now is never overwritten (unreadable), unless the user confirmed Replace', async () => {
+  const h = harness({ decryptFails: true });
+  assert.equal(await runPublish(h.deps), 'unreadable');
+  assert.deepEqual(h.sent, []);
+  assert.equal((await runPublishDetailed(h.deps, { replace: true })).outcome, 'published');
+  assert.equal(h.sent.length, 1);
+});
+
+test('publish: a re-read that fails transiently -> failed, nothing sealed', async () => {
+  const h = harness();
+  h.deps.fetchVault = async () => { throw new Error('API error (502)'); };
+  assert.equal(await runPublish(h.deps), 'failed');
+  assert.deepEqual(h.sealed, []);
+});
+
+test('publish: a snapshot the keyring refuses -> paused with its reason (or stale), nothing sent', async () => {
+  const h = harness();
+  h.deps.snapshot = () => { throw Object.assign(new Error('x'), { code: 'vault_too_large' }); };
+  (h.deps as Record<string, unknown>).snapshotRefusal = (e: { code?: string }) => (e.code === 'vault_too_large' ? 'too_large' : 'error');
+  assert.deepEqual(await runPublishDetailed(h.deps), { outcome: 'paused', pause: 'too_large' });
+  (h.deps as Record<string, unknown>).snapshotRefusal = () => 'stale';
+  assert.deepEqual(await runPublishDetailed(h.deps), { outcome: 'stale' });
+  assert.deepEqual(h.sent, []);
+});
+
+test('keyVault.ts: two-step export with the captured generation; refusals map to "paused"; prune via the SDK ladder only', () => {
+  const src = readFileSync(new URL('./keyVault.ts', import.meta.url), 'utf8');
+  assert.match(src, /createTwoStepSnapshot\(prepareChannelExport, commitChannelExport, exportConvKeysForVault\)/);
+  assert.match(src, /commit: \(kr\) => twoStep\.commit\(kr\),/);
+  assert.doesNotMatch(src, /afterMerge|pruneConsent|reapplyConfirmedPrune/, 'the SDK remembers pruned keys');
+  assert.match(src, /chan: importChannelKeysFromVault\(keyring\.chan, generation\)/);
+  assert.match(src, /if \(e\.code === 'vault_too_large'\) return 'too_large';/);
+  assert.match(src, /if \(e\.code === 'opaque_overflow'\) return 'overflow';/);
+});
+
+test('every paused / prune-ladder message exists in all 7 locales', () => {
+  const keys = [
+    'keyvault_paused_too_large_body', 'keyvault_paused_overflow_body', 'keyvault_paused_error_body',
+    'keyvault_prune', 'keyvault_prune_confirm', 'keyvault_prune_nothing', 'keyvault_pruned',
+    'keyvault_prune_members_confirm', 'keyvault_prune_alternates_confirm',
+    'keyvault_prune_primaries_confirm', 'keyvault_prune_primaries_confirm2',
+  ];
+  for (const lang of ['en', 'de', 'es', 'pt', 'ja', 'ru', 'zh']) {
+    const loc = JSON.parse(readFileSync(new URL(`../i18n/locales/${lang}.json`, import.meta.url), 'utf8')) as Record<string, string>;
+    for (const k of keys) assert.ok(typeof loc[k] === 'string' && loc[k].length > 0, `${lang}: ${k}`);
+  }
+  const banner = readFileSync(new URL('../components/KeyVaultBanner.tsx', import.meta.url), 'utf8');
+  for (const k of keys.slice(3)) assert.ok(banner.includes(`'${k}'`), `banner uses ${k}`);
+});
+
+// --- audit r101: 404 before the seal, merge failures, post-merge gate, pure helpers ---------
+
+test('publish: 404 before the seal for a wallet whose vault this device SAW -> missing, nothing sent', async () => {
+  const h = harness({ remote: false });
+  h.deps.seenMarker = () => true;
+  assert.equal(await runPublish(h.deps), 'missing');
+  assert.deepEqual(h.sent, []);
+  assert.deepEqual(h.sealed, []);
+});
+
+test('publish: 404 + NO marker -> first-ever backup is published', async () => {
+  const h = harness({ remote: false });
+  h.deps.seenMarker = () => false;
+  assert.equal(await runPublish(h.deps), 'published');
+  assert.equal(h.sent.length, 1);
+});
+
+test('publish: 404 + marker UNREADABLE now -> nothing sent (blocked, retried later)', async () => {
+  const h = harness({ remote: false });
+  h.deps.seenMarker = () => null;
+  assert.equal(await runPublish(h.deps), 'blocked');
+  assert.deepEqual(h.sent, []);
+});
+
+test('publish: user-confirmed Replace skips the re-read (404 + marker -> published)', async () => {
+  const h = harness({ remote: false });
+  h.deps.seenMarker = () => true;
+  let fetched = 0;
+  const f = h.deps.fetchVault;
+  h.deps.fetchVault = async () => { fetched++; return f(); };
+  assert.equal((await runPublishDetailed(h.deps, { replace: true })).outcome, 'published');
+  assert.equal(fetched, 0);
+});
+
+test('negative control: the pre-fix publish (404 treated as "nothing to merge") overwrites a vault this device saw', async () => {
+  const h = harness({ remote: false });
+  h.deps.seenMarker = () => true;
+  const preFix = async () => {
+    const owned = await h.deps.ensureBackupKey();
+    const resp = await h.deps.fetchVault();
+    if (resp) h.deps.importKeys(h.deps.open(owned!.key, resp));
+    await h.deps.publish(h.deps.seal(owned!.key, h.deps.snapshot()));
+  };
+  await preFix();
+  assert.equal(h.sent.length, 1, 'the bug: a vault that exists elsewhere is replaced');
+});
+
+test('publish: a merge that FAILS before the seal -> failed, nothing sealed or sent', async () => {
+  const h = harness();
+  h.deps.importKeys = () => { throw new Error('merge failed'); };
+  assert.equal(await runPublish(h.deps), 'failed');
+  assert.deepEqual(h.sealed, []);
+  assert.deepEqual(h.sent, []);
+});
+
+test('publish: canPublish() is re-checked AFTER the merge (restore state changed during the re-read)', async () => {
+  const h = harness();
+  let allowed = true;
+  h.deps.canPublish = () => allowed;
+  const f = h.deps.fetchVault;
+  h.deps.fetchVault = async () => { const r = await f(); allowed = false; return r; };
+  assert.equal(await runPublish(h.deps), 'blocked');
+  assert.deepEqual(h.sealed, []);
+});
+
+test('two-step snapshot: commit redeems the token with the PREPARED generation, once; an uncommitted snapshot commits nothing', () => {
+  const commits: Array<[string, number]> = [];
+  let n = 0;
+  const ts = createTwoStepSnapshot(
+    (gen) => ({ chan: { g: gen }, token: `t${++n}` }),
+    (token, gen) => { commits.push([token, gen]); },
+    () => ({}),
+  );
+  const a = ts.snapshot(5);
+  const b = ts.snapshot(6); // a failed publish: never committed
+  ts.commit(a);
+  ts.commit(a);
+  assert.deepEqual(commits, [['t1', 5]], 'prepared generation, exactly once');
+  void b;
+  ts.commit({});
+  assert.equal(commits.length, 1);
+});
+
+test('guardedForStamp: a confirmed prune runs only for the account AND generation captured before the confirm', () => {
+  const s = { wallet: A as string | null, gen: 3 };
+  const deps = { currentWallet: () => s.wallet, generation: () => s.gen };
+  let runs = 0;
+  assert.equal(guardedForStamp(deps, { wallet: A, generation: 3 }, () => ++runs), 1);
+  s.gen = 4; // A -> B -> A while the dialog was open
+  assert.equal(guardedForStamp(deps, { wallet: A, generation: 3 }, () => ++runs), null);
+  s.gen = 3; s.wallet = B;
+  assert.equal(guardedForStamp(deps, { wallet: A, generation: 3 }, () => ++runs), null);
+  assert.equal(runs, 1);
 });

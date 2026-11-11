@@ -13,9 +13,9 @@ import { authStatus, getSigner, walletAddress, isRegistered } from '../lib/auth'
 // (avoids the duplicate-messages bug fixed in v1.15.1).
 import { onWsEvent, wsSubscribeChannels, wsUnsubscribeChannels, wsConnected } from '../lib/ws';
 import { canPost, CHANNEL_TYPE_READ_PUBLIC, CHANNEL_TYPE_PRIVATE } from '@ogmara/sdk';
-import { resolveIsEncrypted, isChannelRecordUsable, shouldAutoJoinEncryptedChannel } from '../lib/channelEncryption';
+import { resolveIsEncrypted, isChannelRecordUsable, shouldAutoJoinEncryptedChannel, resolveIsPrivateForCover } from '../lib/channelEncryption';
 import { ensureEncryptedChannelMembership } from '../lib/autoJoin';
-import { buildEncryptedChannelMsg, decryptChannelMessage, coverChannelMembers, rotateChannelKey } from '../lib/channelCrypto';
+import { buildEncryptedChannelMsg, decryptChannelMessage, coverChannelMembers, rotateChannelKey, channelKeyStatus, channelKeyWaitMessage } from '../lib/channelCrypto';
 import type { DmDisplay } from '../lib/dmCrypto';
 import { MentionPopover } from '../components/MentionPopover';
 import { CommandPopover } from '../components/CommandPopover';
@@ -659,7 +659,13 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   // FAILS CLOSED while `channelInfo` hasn't resolved (see channelEncryption.ts) —
   // never plaintext-upload media just because the channel record isn't in yet.
   const isEncrypted = () =>
-    resolveIsEncrypted(channelInfo.state, channelInfo()?.channel, CHANNEL_TYPE_PRIVATE);
+    resolveIsEncrypted(channelInfo.state, channelInfo()?.channel, CHANNEL_TYPE_PRIVATE, props.channelId);
+  // Verify-before-cover (protocol §3.9.2) channel-type hint: true = verify
+  // each member's signed membership evidence first; false = positively
+  // public; undefined = not known yet (cover deferred). A private-range id
+  // is always true, whatever the node-served record says.
+  const coverHint = () =>
+    resolveIsPrivateForCover(channelInfo.state, channelInfo()?.channel, CHANNEL_TYPE_PRIVATE, props.channelId);
   // Belt-and-suspenders alongside the fail-closed `isEncrypted()` above: hold
   // the attach UI itself disabled until the channel record is in, so a user
   // can't even try to attach during the exact window `isEncrypted()` used to
@@ -766,7 +772,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     const msgs = allMessages(); // track
     // Opportunistically wrap the current channel key to any member device that has
     // joined since (throttled, no-op if I don't hold the key yet).
-    void coverChannelMembers(props.channelId);
+    void coverChannelMembers(props.channelId, untrack(coverHint));
     const cur = untrack(() => chanDisplays());
     for (const msg of msgs) {
       const id = msg.msg_id;
@@ -775,7 +781,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       const existing = cur[id];
       if (existing && existing.kind !== 'waiting' && decodedEditStamp.get(id) === stamp) continue;
       decodedEditStamp.set(id, stamp);
-      decryptChannelMessage(msg.payload, props.channelId)
+      decryptChannelMessage(msg.payload, props.channelId, untrack(coverHint))
         .then((disp) => setChanDisplays((prev) => ({ ...prev, [id]: disp })))
         .catch(() => setChanDisplays((prev) => ({ ...prev, [id]: { kind: 'error' } })));
     }
@@ -804,7 +810,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       for (const id of waitingIds) {
         const msg = msgs.find((m) => m.msg_id === id);
         if (!msg) continue;
-        decryptChannelMessage(msg.payload, cid)
+        decryptChannelMessage(msg.payload, cid, untrack(coverHint))
           .then((disp) => {
             if (disp.kind !== 'waiting') {
               setChanDisplays((prev) => ({ ...prev, [id]: disp }));
@@ -1464,9 +1470,11 @@ export const ChatView: Component<ChatViewProps> = (props) => {
         const media = atts.map((a) => a.descriptor).filter((d): d is NonNullable<typeof d> => !!d);
         const built = await buildEncryptedChannelMsg(props.channelId, canEstablishKey(), text, {
           replyTo: options.replyTo, mentions: options.mentions, media,
-        }, encFloor());
-        if (built === 'waiting') {
-          setSendError(t('channel_waiting_for_key'));
+        }, encFloor(), coverHint());
+        if (typeof built === 'string') {
+          // 'waiting' (no key yet), 'rekeying' (a rotation finishing, ~2 min)
+          // or 'node_problem' (this node cannot establish keys).
+          setSendError(t(channelKeyWaitMessage(built)));
           setTimeout(() => setSendError(null), 6000);
           setSending(false);
           return; // keep the text so the user can retry once the key arrives
@@ -1551,9 +1559,9 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     if (isEncrypted()) {
       const built = await buildEncryptedChannelMsg(origin.channelId, canEstablishKey(), command, {
         replyTo: origin.msgId, mentions: [origin.author], viaButton: true,
-      }, encFloor());
-      if (built === 'waiting') {
-        throw new Error(t('channel_waiting_for_key'));
+      }, encFloor(), coverHint());
+      if (typeof built === 'string') {
+        throw new Error(t(channelKeyWaitMessage(built)));
       }
       await client.sendMessageEnvelope(built);
       return;
@@ -2020,6 +2028,18 @@ export const ChatView: Component<ChatViewProps> = (props) => {
           <div class="send-error-banner" onClick={() => setSendError(null)}>
             {sendError()}
           </div>
+        </Show>
+
+        {/* Channel key state (node-arbitrated epochs): a rotation waits until
+            its epoch is final (~2 min), or this node cannot establish keys. */}
+        <Show when={isEncrypted() && props.channelId ? channelKeyStatus(props.channelId) : null}>
+          {(s) => (
+            <div class="broadcast-banner" role="status" aria-live="polite">
+              <span class="broadcast-banner-text">
+                {t(s() === 'rekeying' ? 'channel_rekeying' : 'channel_key_node_problem')}
+              </span>
+            </div>
+          )}
         </Show>
 
         {/* Broadcast (read-only) channel banner — shown to non-creator/non-mod
