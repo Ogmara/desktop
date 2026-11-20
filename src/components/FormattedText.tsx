@@ -17,6 +17,7 @@ import { EncryptedMedia } from './EncryptedMedia';
 import { openLightbox } from './ImageLightbox';
 import { safeAttachmentName } from '../lib/payload';
 import { openExternal } from '../lib/open-external';
+import { permalinkFromUrl, routeForPermalink } from '../lib/permalinkRoute';
 
 interface Props {
   content: string;
@@ -109,8 +110,19 @@ export const FormattedText: Component<Props> = (props) => {
               // Defense-in-depth: only allow http/https links
               const safe = seg.url.startsWith('http://') || seg.url.startsWith('https://');
               if (!safe) return <span>{seg.display}</span>;
-              // Check if this is an internal app link (same origin or ogmara.org with hash route)
-              const isInternal = (() => {
+              // Share links (permalinks) are parsed by the SDK and opened
+              // in-app via the canonical route rebuilt from the parsed ids —
+              // never from the raw link text (spec 06 §6.5). Desktop passes
+              // no app base: its origin is `tauri://` / `tauri.localhost`,
+              // which no one shares, so only the canonical base (and a
+              // patched SHARE_BASE) are accepted.
+              const permalinkRoute = (() => {
+                const target = permalinkFromUrl(seg.url);
+                return target ? routeForPermalink(target) : null;
+              })();
+              // Any other same-origin / ogmara.org hash route (profile, search…)
+              // stays an in-app link as before.
+              const isInternal = permalinkRoute !== null || (() => {
                 try {
                   const u = new URL(seg.url);
                   const here = window.location;
@@ -125,6 +137,7 @@ export const FormattedText: Component<Props> = (props) => {
                   class="msg-link"
                   onClick={(e) => {
                     e.preventDefault();
+                    if (permalinkRoute) { navigate(permalinkRoute); return; }
                     const hash = new URL(seg.url).hash.replace('#', '');
                     navigate(hash);
                   }}

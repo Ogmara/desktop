@@ -11,7 +11,7 @@ import { t } from '../i18n/init';
 import { getClient } from '../lib/api';
 import { avatarUrl } from '../lib/ownAvatar';
 import { authStatus, getSigner, l2Address, walletAddress, isRegistered } from '../lib/auth';
-import { navigate, goBack, routeParam } from '../lib/router';
+import { navigate, goBack, routeParam, routePermalink } from '../lib/router';
 import { FormattedText } from '../components/FormattedText';
 import { VideoAttachment } from '../components/VideoAttachment';
 import { MediaImage } from '../components/MediaImage';
@@ -32,7 +32,7 @@ import { buildNewsShareUrl, copyToClipboard } from '../lib/share';
 import { MSG_TYPE_NAME } from '@ogmara/sdk';
 
 /** Single comment in the thread. */
-const CommentCard: Component<{ comment: any; onReply: (msgId: string, author: string) => void }> = (props) => {
+const CommentCard: Component<{ comment: any; onReply: (msgId: string, author: string) => void; onShare: (commentId: string) => void }> = (props) => {
   const [profile, setProfile] = createSignal<CachedProfile>({});
 
   createEffect(() => {
@@ -43,7 +43,7 @@ const CommentCard: Component<{ comment: any; onReply: (msgId: string, author: st
   const displayName = () => profile().display_name || truncateAddress(props.comment.author);
 
   return (
-    <div class="comment-card">
+    <div class="comment-card" data-comment-id={ensureHexMsgId(props.comment.msg_id).toLowerCase()}>
       <div class="comment-header">
         <div class="comment-author-row" onClick={() => navigate(`/user/${props.comment.author}`)}>
           <Show when={profile().avatar_cid}>
@@ -118,6 +118,13 @@ const CommentCard: Component<{ comment: any; onReply: (msgId: string, author: st
         >
           ↩ {t('news_reply')}
         </button>
+        <button
+          class="comment-reply-btn"
+          onClick={() => props.onShare(ensureHexMsgId(props.comment.msg_id))}
+          title={t('share_comment_link')}
+        >
+          🔗 {t('share')}
+        </button>
       </div>
     </div>
   );
@@ -159,6 +166,27 @@ export const NewsDetailView: Component = () => {
     }
   });
 
+  // News-comment permalink (`#/news/<post>?c=<comment>`, spec 06 §6.5): once
+  // the post (with its inline comments, capped at 200 by the node) is in,
+  // scroll to and flash the comment. `c` is read only from the SDK-parsed
+  // `route().permalink`; a comment beyond the cap just leaves the post open.
+  let commentLinkDone: string | null = null;
+  createEffect(() => {
+    const p = routePermalink();
+    const data = postData();
+    const target = p && p.kind === 'news' && p.commentId && p.msgId === msgId().toLowerCase() ? p.commentId : null;
+    if (!target) { commentLinkDone = null; return; }
+    if (!data || commentLinkDone === target) return;
+    commentLinkDone = target;
+    setTimeout(() => {
+      const el = document.querySelector(`[data-comment-id="${CSS.escape(target)}"]`) as HTMLElement | null;
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('comment-highlight');
+      setTimeout(() => el.classList.remove('comment-highlight'), 2500);
+    }, 50);
+  });
+
   // Reaction state
   const [reactionCounts, setReactionCounts] = createSignal<Record<string, number>>({});
   createEffect(() => {
@@ -176,10 +204,10 @@ export const NewsDetailView: Component = () => {
   const [shareToast, setShareToast] = createSignal('');
   let shareToastTimer: ReturnType<typeof setTimeout> | null = null;
   onCleanup(() => { if (shareToastTimer) clearTimeout(shareToastTimer); });
-  const handleShare = async () => {
+  const handleShare = async (commentId?: string) => {
     const id = msgId();
     if (!id) return;
-    const url = buildNewsShareUrl(id);
+    const url = buildNewsShareUrl(id, commentId);
     const ok = !!url && await copyToClipboard(url);
     setShareToast(ok ? t('share_link_copied') : t('share_link_failed'));
     if (shareToastTimer) clearTimeout(shareToastTimer);
@@ -571,7 +599,7 @@ export const NewsDetailView: Component = () => {
             </button>
             <button
               class="action-btn"
-              onClick={handleShare}
+              onClick={() => void handleShare()}
               title={t('share_news_link')}
             >
               🔗 {t('share')}
@@ -760,7 +788,7 @@ export const NewsDetailView: Component = () => {
             <div class="comments-list">
               <For each={postData()!.comments}>
                 {(comment) => (
-                  <CommentCard comment={comment} onReply={handleReplyToComment} />
+                  <CommentCard comment={comment} onReply={handleReplyToComment} onShare={(c) => void handleShare(c)} />
                 )}
               </For>
             </div>
@@ -1133,7 +1161,12 @@ export const NewsDetailView: Component = () => {
         }
         .comment-time { font-size: var(--font-size-xs); color: var(--color-text-secondary); }
         .comment-body { line-height: 1.5; font-size: var(--font-size-sm); }
-        .comment-actions { margin-top: var(--spacing-xs); }
+        .comment-actions { margin-top: var(--spacing-xs); display: flex; gap: var(--spacing-sm); }
+        .comment-highlight { animation: comment-flash 2.5s ease-out; }
+        @keyframes comment-flash {
+          0% { background: var(--color-accent-bg, color-mix(in srgb, var(--color-accent-primary) 12%, transparent)); box-shadow: inset 3px 0 0 var(--color-accent-primary); }
+          100% { background: transparent; box-shadow: none; }
+        }
         .comment-reply-btn {
           font-size: var(--font-size-xs);
           color: var(--color-text-secondary);

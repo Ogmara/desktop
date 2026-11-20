@@ -5,6 +5,126 @@ All notable changes to the Ogmara desktop app will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.86.0] - 2026-11-20
+
+Message permalinks (spec 06 §6.5, `docs/planning/message-permalinks-plan.md`),
+ported from web 0.86.0 — same behaviour, same strings. Requires `@ogmara/sdk`
+0.71.0. Jumping to a message needs l2-node 0.150.0+ (`around=` cursor);
+older nodes fall back to the newest page.
+
+### Added
+
+- **One-request jump to a shared message.** Opening `#/chat/<id>?msg=<hex>`
+  issues a single `getChannelMessages(id, { around, limit: 50 })`, centres the
+  target and highlights it (flash plus an accent bar that stays until the
+  user scrolls or taps in the message list or presses a key there, or 10 s). The view then becomes a detached
+  "jump window": scrolling up pages `before` (gated on `has_more_before`,
+  else `has_more`), scrolling down pages `after` (gated on `has_more_after`)
+  until it meets the live tail and merges back into the normal flow. While
+  detached, a "Viewing older messages · Jump to present ↓" banner is shown,
+  live messages are held back (counted on the banner, merged on return) and
+  the poll, read marker, auto-scroll and message-cache write are paused. The
+  rows the view held before the jump (live messages, unconfirmed sends,
+  loaded history) are held back too and restored on return, never dropped;
+  if the live buffer overflows its cap (1000) the newest page is refetched on
+  return. The channel is marked read only once the view rejoins the live end
+  (attach to the tail, jump to present, or a jump that fell back to the
+  newest page). An auth change re-arms the jump — including the session
+  being restored after first render or an unlock, so a permalink jumps as
+  the signed-in user — and every jump response is re-checked against the
+  account that requested it. An in-place switch between two accounts
+  (account switcher / disconnect handover; the view stays mounted) is NOT
+  re-armed: the window, held-back rows, live buffer and notice are dropped
+  and the link is never re-requested as the new account, so a window never
+  mixes rows fetched for two accounts (the router then moves to `/chat`). The banner's "N new" counts only messages that
+  arrived live while detached.
+  Sending from a jump window returns to the present first. Encrypted
+  channels decrypt the replaced window through the existing decrypt path.
+- **Distinct outcomes instead of one "Message not found" toast:**
+  `target_found: false` shows "This message isn't on your current node." with
+  the node picker inline (a switch reloads the webview at the same hash and
+  retries the link on the new node); a node
+  without `around` support lands on the target only if it is in the newest
+  page, else says the node can't jump. A failed request is classified via
+  the channel record (plan §9): "You don't have access to this channel." (with
+  a Join button when the channel is Public / ReadPublic below the private
+  id floor — `isInviteGatedChannel`, fail closed) vs "This channel no longer
+  exists."; anything else says the link couldn't be opened.
+- **News comment links** (`#/news/<post>?c=<comment>`): a Share button on
+  every comment, and opening such a link scrolls to and flashes the comment.
+- **Copy-link toast for private / encrypted channels:** "Link copied — only
+  members can open it" (plan §8.6).
+- `<meta name="referrer" content="no-referrer">` in `index.html` (plan §8.4);
+  Tauri's CSP (`tauri.conf.json`) has no referrer directive, so the meta tag
+  is the policy.
+- `router.ts`: `routePermalink()` and `redirectNow()` (replace the route
+  without a history entry; "Jump to present" drops `?msg=`).
+- New i18n keys in all 7 locales: `share_link_copied_members`,
+  `share_comment_link`, `permalink_jumping`, `permalink_viewing_older`,
+  `permalink_jump_present`, `permalink_jump_present_new`,
+  `permalink_not_on_node`, `permalink_try_other_node`,
+  `permalink_node_outdated`, `permalink_load_failed`, `permalink_no_access`,
+  `permalink_channel_gone`, `permalink_join_channel`.
+- Tests: `lib/share.test.ts`, `lib/permalinkRoute.test.ts`,
+  `lib/jumpWindow.test.ts`; `privateJoinWiring.test.ts` now asserts the join
+  page reads `node` / `inv` only from the parsed permalink.
+
+### Changed
+
+- The poll also drops its result when the account changed while it was in
+  flight, so an in-place account switch cannot land one account's page in
+  the other's view or cache.
+- `lib/share.ts`: `buildChatShareUrl` / `buildNewsShareUrl` (now with an
+  optional comment id) / `buildChannelInviteUrl` are thin wrappers over the
+  SDK's `buildPermalink`; `SHARE_BASE` stays the one constant self-hosters
+  patch, and is accepted on the parse side too (`SHARE_PARSE_OPTIONS`). An
+  invite host hint the shared parser would reject is now dropped instead of
+  emitted; channel ids must be canonical positive integers.
+- Every inbound link goes through the SDK's `parsePermalink`
+  (`lib/permalinkRoute.ts`): the router exposes the parsed target as
+  `Route.permalink` and the chat `?msg=`, news `?c=` and join `?node=` /
+  `inv=` are read only from it, so a malformed or hostile link is ignored
+  silently. Ogmara links inside messages are parsed the same way and opened
+  in-app via the canonical route rebuilt from the parsed ids — on desktop
+  only the canonical base (and a patched `SHARE_BASE`) is accepted, since the
+  app's own origin is `tauri://` / `tauri.localhost`; every other link still
+  opens externally through the xdg-open command. The join page
+  keeps its `validateNodeUrl` gate (via `pickFederationHost`); the old
+  second `decodeURIComponent` of `?node=` is gone, legacy double-encoded
+  hints are resolved by the parser instead.
+- The chat older-page loader also drops a page that resolves after a jump
+  started / ended or after an in-place account switch, and the 15 s poll
+  drops a result that lands after a jump started (it would otherwise append
+  the newest rows to a detached window).
+
+### Security
+
+- `quinn-udp` 0.5.14 → 0.5.16 in `src-tauri/Cargo.lock` (RUSTSEC-2026-0538,
+  receive loop can spin after a truncated datagram). Lockfile-only: the
+  entry sits behind an optional feature (`cargo tree --target all -i
+  quinn-udp` prints nothing), so no shipped build compiles it — fixed anyway
+  so `cargo audit` is clean. `cargo check --locked` passes.
+
+### Known limitations
+
+- On a node that omits `has_more_after`, forward paging from a jump window
+  infers the tail from a short `after` page. A short page that is not really
+  the tail makes the window re-attach early, and the newest page fills in
+  above a gap until the channel is reopened. Nodes 0.150.0+ send the exact
+  flag, so this only affects jumps that land via older nodes' fallback.
+
+### Removed
+
+- The deep-link pagination loop (`MAX_DEEPLINK_PAGINATES`) and the
+  `share_link_unavailable` ("Message not found") string.
+
+### Not ported / not applicable
+
+- Desktop registers no `ogmara://` deep-link handler (no
+  `tauri-plugin-deep-link`), so there is no native inbound path to route
+  through `parsePermalink`; native links are not auto-linked in message text
+  either.
+
 ## [1.85.0] - 2026-10-22
 
 Private-channel "verify before cover" (protocol §3.9.2, spec 05 §8.4 item 5)

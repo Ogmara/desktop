@@ -99,7 +99,10 @@ test('private join maps 429/503 to the localized busy message', () => {
 test('fetched data is tagged and ignored for another channel / wallet / link', () => {
   assert.match(join, /d\.id !== props\.channelId/);
   assert.match(join, /d\.wallet !== \(walletAddress\(\) \?\? null\)/);
-  assert.match(join, /d\.inv !== \(queryParam\('inv'\) \?\? ''\)/);
+  assert.match(join, /d\.inv !== routeInv\(props\.channelId\)/);
+  assert.match(join, /d\.node !== routeNode\(props\.channelId\)/);
+  // `node` / `inv` come only from the SDK-parsed permalink (spec 06 §6.5).
+  assert.doesNotMatch(join, /queryParam\(/);
 });
 
 test('existing member: "open channel" only on positive evidence, signs nothing', () => {

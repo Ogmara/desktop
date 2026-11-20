@@ -6,46 +6,58 @@
  * the client (web, desktop, self-hosted). The receiving app parses the hash
  * route and navigates to the target post / message.
  *
+ * Thin wrappers over the SDK's `buildPermalink` (sdk-js 0.71.0, spec 06 §6.5)
+ * so every client emits byte-identical links; inbound links go through
+ * `parsePermalink` (see `lib/permalinkRoute.ts`).
+ *
  * Desktop note: `window.location.origin` under Tauri resolves to a
  * `tauri://`-style URL that recipients cannot open. Hardcoding the PWA host
  * keeps share-out predictable from any client.
  */
 
-/** Canonical public host for share URLs. */
-const SHARE_BASE = 'https://ogmara.org/app';
+import {
+  buildPermalink,
+  isPermalinkNodeUrl,
+  PERMALINK_BASE,
+  type ParsePermalinkOptions,
+  type PermalinkTarget,
+} from '@ogmara/sdk';
 
-const HEX64 = /^[0-9a-fA-F]{64}$/;
+/** Canonical public host for share URLs. Hardcoded so desktop / self-hosted
+ *  clients don't accidentally emit `tauri://` or local IP URLs that recipients
+ *  can't open. Self-hosters who want share-out to point at their own host
+ *  patch this one constant (spec 06 §6.5); the parse side accepts it too
+ *  (see `SHARE_PARSE_OPTIONS`). */
+const SHARE_BASE: string = 'https://ogmara.org/app';
 
-/** Reject anything that isn't a 64-char lowercase-or-uppercase hex string.
- *  Returns the normalized (lower-cased) hex on success, or null. */
-function sanitizeMsgId(msgId: string): string | null {
-  if (typeof msgId !== 'string') return null;
-  return HEX64.test(msgId) ? msgId.toLowerCase() : null;
+/** `parsePermalink` options matching what this client emits: the canonical
+ *  base is always accepted, plus `SHARE_BASE` if a self-hoster patched it. */
+export const SHARE_PARSE_OPTIONS: ParsePermalinkOptions =
+  SHARE_BASE === PERMALINK_BASE ? {} : { extraBases: [SHARE_BASE] };
+
+/** Positive safe-integer channel id from a number or canonical decimal
+ *  string, else null (the SDK builder takes numbers only). */
+function toChannelId(channelId: number | string): number | null {
+  const n = typeof channelId === 'number' ? channelId : /^[1-9][0-9]{0,15}$/.test(channelId) ? Number(channelId) : NaN;
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
-/** Reject anything that isn't a positive integer channel_id. Returns the
- *  string form on success, or null. */
-function sanitizeChannelId(channelId: number | string): string | null {
-  const s = String(channelId);
-  return /^\d+$/.test(s) ? s : null;
-}
-
-/** Build a deep link to a news post detail page. Returns null if `msgIdHex`
- *  isn't a well-formed 64-char hex string. */
-export function buildNewsShareUrl(msgIdHex: string): string | null {
-  const id = sanitizeMsgId(msgIdHex);
-  if (!id) return null;
-  return `${SHARE_BASE}/#/news/${id}`;
+/** Build a deep link to a news post detail page — or, with `commentIdHex`,
+ *  to one comment under it (`?c=`). Returns null if an id isn't 64-char hex. */
+export function buildNewsShareUrl(msgIdHex: string, commentIdHex?: string): string | null {
+  const target: PermalinkTarget = commentIdHex === undefined
+    ? { kind: 'news', msgId: msgIdHex }
+    : { kind: 'news', msgId: msgIdHex, commentId: commentIdHex };
+  return buildPermalink(target, { base: SHARE_BASE });
 }
 
 /** Build a deep link to a specific chat message inside a channel. Returns
  *  null if `channelId` isn't a positive integer or `msgIdHex` isn't 64-char
  *  hex. */
 export function buildChatShareUrl(channelId: number | string, msgIdHex: string): string | null {
-  const ch = sanitizeChannelId(channelId);
-  const id = sanitizeMsgId(msgIdHex);
-  if (!ch || !id) return null;
-  return `${SHARE_BASE}/#/chat/${ch}?msg=${id}`;
+  const ch = toChannelId(channelId);
+  if (ch === null) return null;
+  return buildPermalink({ kind: 'chat', channelId: ch, msgId: msgIdHex }, { base: SHARE_BASE });
 }
 
 /**
@@ -54,19 +66,18 @@ export function buildChatShareUrl(channelId: number | string, msgIdHex: string):
  * l2-node 0.140.0+ invite gate it cannot): its only link is the PERSONAL one
  * from the SDK's `buildPrivateChannelInviteUrl`, made when inviting a specific
  * address (spec 06 §6.5). `hostNodeUrl` is an optional `?node=` hint, unused by
- * current callers. Returns null if `channelId` isn't a positive integer.
+ * current callers; a host URL the shared parser would reject is dropped (the
+ * link still works without the hint). Returns null if `channelId` isn't a
+ * positive integer.
  */
 export function buildChannelInviteUrl(
   channelId: number | string,
   hostNodeUrl?: string,
 ): string | null {
-  const ch = sanitizeChannelId(channelId);
-  if (!ch) return null;
-  let url = `${SHARE_BASE}/#/join/${ch}`;
-  if (hostNodeUrl && /^https?:\/\//.test(hostNodeUrl)) {
-    url += `?node=${encodeURIComponent(hostNodeUrl)}`;
-  }
-  return url;
+  const ch = toChannelId(channelId);
+  if (ch === null) return null;
+  const node = hostNodeUrl && isPermalinkNodeUrl(hostNodeUrl) ? hostNodeUrl : undefined;
+  return buildPermalink(node ? { kind: 'join', channelId: ch, node } : { kind: 'join', channelId: ch }, { base: SHARE_BASE });
 }
 
 /**

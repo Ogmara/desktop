@@ -3,6 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Share links keep their target in the fragment, which browsers never send;
+       no-referrer also keeps the app URL out of outbound requests (media,
+       avatars, link previews) — message-permalinks plan §8.4. -->
+  <meta name="referrer" content="no-referrer" />
   <title>Ogmara</title>
 </head>
 <body>

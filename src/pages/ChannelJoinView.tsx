@@ -41,7 +41,7 @@ import {
 import { t, currentLanguage } from '../i18n/init';
 import { getClient, getCurrentNodeUrl } from '../lib/api';
 import { authStatus, walletAddress } from '../lib/auth';
-import { navigate, queryParam } from '../lib/router';
+import { navigate, routePermalink } from '../lib/router';
 import { addJoinedChannel } from '../components/Sidebar';
 import { stillSameAccount } from '../lib/accountGuard';
 import { currentSwitchGeneration } from '../lib/walletScope';
@@ -87,11 +87,26 @@ const hostLabel = (url: string): string => {
   try { return new URL(url).hostname; } catch { return url; }
 };
 
-/** The router already percent-decoded once; legacy links double-encode `node=`. */
-const decodeHint = (raw: string): string => {
-  if (!raw) return '';
-  try { return decodeURIComponent(raw); } catch { return raw; }
+/**
+ * The join target parsed from the route by the SDK's `parsePermalink` (router
+ * `Route.permalink`, spec 06 §6.5) — null when the link is malformed or names
+ * another channel, in which case its `node` / `inv` are ignored entirely.
+ */
+const joinPermalink = (channelId: string) => {
+  const p = routePermalink();
+  return p && p.kind === 'join' && String(p.channelId) === channelId ? p : null;
 };
+
+/**
+ * The `?node=` host hint. UNTRUSTED: shape-checked by the parser only — every
+ * use goes through `validateNodeUrl()` (via `pickFederationHost`) before a
+ * fetch. Already decoded by the parser; legacy double-encoded hints are
+ * decoded by `permalinkFromHashRoute`, so no second decode here.
+ */
+const routeNode = (channelId: string): string => joinPermalink(channelId)?.node ?? '';
+
+/** The personal invite link's `inv=` parameter (UNVERIFIED, display/attach only). */
+const routeInv = (channelId: string): string => joinPermalink(channelId)?.inv ?? '';
 
 /** Decode an `inv=` link parameter. UNVERIFIED — display / attach only. */
 const linkCandidate = (raw: string): InviteCandidate | null => {
@@ -121,7 +136,7 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
 
   // Per-(channel, wallet, link) UI state must not outlive its key.
   createEffect(on(
-    () => [props.channelId, walletAddress(), queryParam('inv'), queryParam('node')],
+    () => [props.channelId, walletAddress(), routeInv(props.channelId), routeNode(props.channelId)],
     () => { setError(''); setInviteRejected(false); setAddressCopied(false); },
     { defer: true },
   ));
@@ -134,8 +149,8 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
       id: props.channelId,
       wallet: walletAddress() ?? null,
       ready: authStatus() === 'ready',
-      node: queryParam('node') ?? '',
-      inv: queryParam('inv') ?? '',
+      node: routeNode(props.channelId),
+      inv: routeInv(props.channelId),
     }),
     async ({ id, wallet, ready, node, inv }): Promise<JoinData> => {
       const out: JoinData = { id, wallet, node, inv, local: null, cross: null, pending: null, members: null };
@@ -184,7 +199,7 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
         // inside the link's invite, else the pending invite's (spec 05 §8.4 step 4).
         const host = pickFederationHost(
           [
-            decodeHint(node),
+            node || undefined,
             link && link.decoded.channelId === cid ? link.decoded.anchorNode : undefined,
             out.pending?.decoded.anchorNode,
           ],
@@ -216,8 +231,8 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
     if (
       d.id !== props.channelId ||
       d.wallet !== (walletAddress() ?? null) ||
-      d.inv !== (queryParam('inv') ?? '') ||
-      d.node !== (queryParam('node') ?? '')
+      d.inv !== routeInv(props.channelId) ||
+      d.node !== routeNode(props.channelId)
     ) return undefined;
     return d;
   };
@@ -250,7 +265,7 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
     });
   };
 
-  const linkInvite = createMemo(() => linkCandidate(queryParam('inv') ?? ''));
+  const linkInvite = createMemo(() => linkCandidate(routeInv(props.channelId)));
 
   const evalCtx = (at: number): InviteEvalContext => ({
     channelId: channelIdNum(),
@@ -328,7 +343,7 @@ export const ChannelJoinView: Component<ChannelJoinProps> = (props) => {
     const invite = fresh.candidate.bytes;
     // Federation host: the cross-node host, else `node=`, else the invite's anchor.
     const host = d.cross?.host ?? pickFederationHost(
-      [decodeHint(d.node), fresh.candidate.decoded.anchorNode],
+      [d.node || undefined, fresh.candidate.decoded.anchorNode],
       getCurrentNodeUrl(),
       (u) => !!validateNodeUrl(u),
     );

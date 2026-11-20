@@ -23,6 +23,8 @@ import { createSignal } from 'solid-js';
 import { getSetting } from './settings';
 import { registerWalletSwitchReset, getWalletScope } from './walletScope';
 import { routeAfterAccountChange } from './routeCarryover';
+import { permalinkFromHashRoute } from './permalinkRoute';
+import type { PermalinkTarget } from '@ogmara/sdk';
 import { splitHashRoute } from './hashQuery';
 
 export type ViewName =
@@ -51,9 +53,21 @@ export interface Route {
   view: ViewName;
   params: Record<string, string>;
   query: Record<string, string>;
+  /**
+   * The route parsed as a share link by the SDK's `parsePermalink` (spec 06
+   * §6.5), or null when it is not a well-formed chat / news / join permalink.
+   * Consumers read ids (`?msg=`, `?c=`, `?node=`, `inv=`) from HERE, never
+   * from the raw `query`, so a malformed or hostile link is ignored.
+   */
+  permalink: PermalinkTarget | null;
 }
 
 function parseHash(hash: string): Route {
+  const r = parseHashRoute(hash);
+  return { ...r, permalink: permalinkFromHashRoute(hash.replace(/^#\/?/, '')) };
+}
+
+function parseHashRoute(hash: string): Omit<Route, 'permalink'> {
   // Remove leading # and /
   const raw = hash.replace(/^#\/?/, '');
   // Split the path from the query and decode the query (hashQuery.ts — pure,
@@ -166,6 +180,12 @@ function sameRecord(a: Record<string, string>, b: Record<string, string>): boole
   return ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && a[k] === b[k]);
 }
 
+/** Structural equality for two parsed routes (view + params + query + permalink). */
+function sameRoute(a: Route, b: Route): boolean {
+  return a.view === b.view && sameRecord(a.params, b.params) && sameRecord(a.query, b.query)
+    && JSON.stringify(a.permalink) === JSON.stringify(b.permalink);
+}
+
 // A bare `#/chat` resolves to the ACTIVE account's `lastChannel` (a per-account
 // setting) at parse time. Without a re-parse on switch, the route signal kept
 // the PREVIOUS account's last channel until the next hashchange, rendering —
@@ -201,9 +221,7 @@ registerWalletSwitchReset(() => {
       return;
     }
     const next = parseHash(window.location.hash);
-    if (next.view !== cur.view || !sameRecord(next.params, cur.params) || !sameRecord(next.query, cur.query)) {
-      setRoute(next);
-    }
+    if (!sameRoute(cur, next)) setRoute(next);
   });
 });
 
@@ -218,6 +236,23 @@ let navCount = 0;
 export function navigate(path: string): void {
   navCount++;
   window.location.hash = path.startsWith('/') ? path : `/${path}`;
+}
+
+/**
+ * Replace the current route IMMEDIATELY (no history entry, no wait for the
+ * async `hashchange`). Used by the chat view's "Jump to present" to drop a
+ * permalink's `?msg=` so a reload does not jump back.
+ */
+export function redirectNow(path: string): void {
+  const p = path.startsWith('/') ? path : `/${path}`;
+  const hash = `#${p}`;
+  try {
+    window.history.replaceState(window.history.state, '', hash);
+  } catch {
+    window.location.replace(hash);
+  }
+  const next = parseHash(hash);
+  if (!sameRoute(route(), next)) setRoute(next);
 }
 
 /**
@@ -237,6 +272,11 @@ export function goBack(fallback: string = '/chat'): void {
 /** Get a route parameter. */
 export function routeParam(key: string): string | undefined {
   return route().params[key];
+}
+
+/** The current route's validated share-link target, if any (see `Route.permalink`). */
+export function routePermalink(): PermalinkTarget | null {
+  return route().permalink;
 }
 
 /** Get a query parameter. */

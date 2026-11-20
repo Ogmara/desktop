@@ -3,7 +3,7 @@
  * profile resolution, and optimistic message display.
  */
 
-import { Component, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup, untrack } from 'solid-js';
+import { Component, batch, createResource, createSignal, createEffect, createMemo, For, Show, onCleanup, untrack } from 'solid-js';
 import { t } from '../i18n/init';
 import { getClient, getCurrentNodeUrl } from '../lib/api';
 import { readCachedMessages, writeCachedMessages, clearCachedMessages, mergeMessages, isAccessRevokedError } from '../lib/messageCache';
@@ -33,7 +33,14 @@ import { resolveProfile, type CachedProfile } from '../lib/profile';
 import { showMobileList } from '../lib/mobile-nav';
 import { isModernStyle } from '../lib/theme';
 import { buildChatShareUrl, copyToClipboard } from '../lib/share';
-import { queryParam, route } from '../lib/router';
+import { redirectNow, route } from '../lib/router';
+import {
+  JUMP_PAGE_LIMIT, JUMP_WINDOW_LIMIT, bufferLive, jumpAccountKey, classifyAround, classifyJumpFailure, holdBackRows, httpStatusOf,
+  mergeWindowPage, moreAfter, moreBefore, type JumpFailure,
+} from '../lib/jumpWindow';
+import { isInviteGatedChannel } from '../lib/privateInvite';
+import { isAccountChange } from '../lib/routeCarryover';
+import { NodeSelector } from '../components/NodeSelector';
 
 /** Convert a msg_id (hex string, byte array, or Uint8Array) to a consistent hex string. */
 function msgIdToHex(msgId: unknown): string {
@@ -242,7 +249,10 @@ export const ChatView: Component<ChatViewProps> = (props) => {
           const url = buildChatShareUrl(props.channelId, ctx.msgId);
           if (!url) { flashShareToast(t('share_link_failed')); break; }
           const ok = await copyToClipboard(url);
-          flashShareToast(ok ? t('share_link_copied') : t('share_link_failed'));
+          // Private / encrypted channel: the link only opens for members — say
+          // so instead of hiding the action (plan §8.6).
+          const membersOnly = isPrivate() || isEncrypted();
+          flashShareToast(ok ? t(membersOnly ? 'share_link_copied_members' : 'share_link_copied') : t('share_link_failed'));
           break;
         }
         case 'reply':
@@ -292,7 +302,13 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     const distFromBottom = scrollHeight - scrollTop - clientHeight;
     setShowScrollBtn(distFromBottom >= SCROLL_NEAR_BOTTOM_PX);
     const atBottom = distFromBottom < SCROLL_NEAR_BOTTOM_PX;
-    if (atBottom) {
+    // Detached jump window: its bottom is not the live tail — no read
+    // marker, no badge reset; scrolling down pages forward instead.
+    const isDetached = detached();
+    if (isDetached && distFromBottom < SCROLL_LOAD_OLDER_PX && jumpHasMoreAfter() && !loadingNewer()) {
+      void loadNewerMessages();
+    }
+    if (atBottom && !isDetached) {
       setNewMsgCount(0);
       // Reaching the latest message marks the channel read. Fires once per
       // scroll-to-bottom transition (idempotent server-side).
@@ -300,7 +316,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
         getClient().markChannelRead(props.channelId).catch(() => {});
       }
     }
-    wasAtBottom = atBottom;
+    wasAtBottom = atBottom && !isDetached;
     // Lazy-load older messages when user scrolls near the top.
     if (scrollTop < SCROLL_LOAD_OLDER_PX && hasMoreOlder() && !loadingOlder()) {
       loadOlderMessages();
@@ -371,7 +387,45 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   // cancels the previous request instead of letting it pile up on the main
   // thread and clobber state out of order.
   let initFetchAbort: AbortController | null = null;
-  const [messages] = createResource(
+  // Permalink jump (spec 06 §6.5). `null` in the normal flow — every
+  // jump-only branch below is gated on it, so a channel opened without `?msg=`
+  // behaves exactly as before. `loading`: the single `around` fetch is in
+  // flight (the newest page stays on screen under a "Jumping…" overlay).
+  // `detached`: `localMessages` IS the jump window — the newest page and the
+  // cache seed are hidden (they would leave a silent gap) until the window
+  // pages forward into the live tail or the user jumps to the present.
+  // Declared ahead of the `messages` resource for the same TDZ reason as
+  // `strandedRecoverAttempts` above.
+  const [jump, setJump] = createSignal<{ channelId: number; target: string; phase: 'loading' | 'detached' } | null>(null);
+  const detached = () => {
+    const j = jump();
+    return !!j && j.phase === 'detached' && j.channelId === props.channelId;
+  };
+  // Newer history exists past the window's last row (`has_more_after`).
+  const [jumpHasMoreAfter, setJumpHasMoreAfter] = createSignal(false);
+  const [loadingNewer, setLoadingNewer] = createSignal(false);
+  // Live messages that arrived while detached: held back (not appended, no
+  // auto-scroll) and merged in when the window re-attaches to the tail.
+  const [jumpBuffer, setJumpBuffer] = createSignal<any[]>([]);
+  // Banner count: others' messages only, and not suppressed button presses.
+  // Only rows that arrived LIVE while detached count — not the pre-jump rows
+  // held back with them (already seen).
+  const [jumpLiveIds, setJumpLiveIds] = createSignal<ReadonlySet<string>>(new Set());
+  const jumpNewCount = () => jumpBuffer().filter((m) =>
+    jumpLiveIds().has(msgIdToHex(m.msg_id)) && m.author !== walletAddress() && !displayViaButton(m)).length;
+  // Why the jump could not land (plan §9): `target_found: false` ("isn't on
+  // your current node"), or a failed request classified by the channel record.
+  const [jumpNotice, setJumpNotice] = createSignal<'not-on-node' | Exclude<JumpFailure, 'error'> | null>(null);
+  // The live buffer shed its oldest rows (cap): re-attaching must refetch the
+  // newest page instead of trusting the buffer alone.
+  let jumpBufferDropped = false;
+  // Bumped on every jump start / exit; an `around` / `after` response for an
+  // older token is dropped.
+  let jumpToken = 0;
+  // True between landing the window and scrolling to the target, so the
+  // auto-scroll effect cannot drag the view to the bottom first.
+  let jumpLanding = false;
+  const [messages, { refetch: refetchMessages }] = createResource(
     // `wallet` is tracked here (not just read passively as `me` below via
     // `lastWallet`) so this resource's fetcher is GUARANTEED to re-run on an
     // in-place account handover even if nothing else about the source
@@ -440,7 +494,8 @@ export const ChatView: Component<ChatViewProps> = (props) => {
         // which would otherwise blow up render and the profile-resolver fan-out.
         const capped = (resp.messages || []).slice(0, limit);
         // If we got fewer messages than asked for, there's nothing older.
-        if (capped.length < limit) setHasMoreOlder(false);
+        // (While detached, `hasMoreOlder` describes the jump window instead.)
+        if (capped.length < limit && !detached()) setHasMoreOlder(false);
         lastFetchRequestedLimit = limit;
         return capped;
       } catch (e) {
@@ -531,6 +586,8 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       if (id && !id.startsWith('local-')) { oldestId = id; break; }
     }
     if (!oldestId) return;
+    const jumpAtStart = jump();
+    const walletAtStart = walletAddress();
     setLoadingOlder(true);
     // Capture scroll metrics so we can preserve viewport position after prepend
     const el = messagesRef;
@@ -543,12 +600,24 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       // channel while we were waiting for the response, drop the result —
       // otherwise we'd prepend channel A's history into channel B's state.
       if (props.channelId !== channelId) return;
+      // Same for a jump started / left, or an in-place account switch,
+      // meanwhile: this page belongs to the view (and account) that asked.
+      if (jump() !== jumpAtStart || walletAddress() !== walletAtStart) return;
       // Defensive: hard-cap response at the requested limit (server can be
       // malicious or buggy and return more than asked).
       const older = (resp.messages || []).slice(0, OLDER_PAGE);
-      if (older.length < OLDER_PAGE) setHasMoreOlder(false);
+      // Jump window: the exact `has_more_before` (legacy `has_more`) per
+      // spec 06 §6.5; the normal flow keeps its short-page rule.
+      if (detached()) setHasMoreOlder(moreBefore(resp));
+      else if (older.length < OLDER_PAGE) setHasMoreOlder(false);
       if (older.length === 0) return;
-      setLocalMessages((prev) => {
+      if (detached()) {
+        // Jump window: the newest end is NOT backed by the (hidden) newest
+        // page, so trimming it re-arms forward paging.
+        const r = mergeWindowPage(localMessages(), older, 'older', MAX_TOTAL_MESSAGES, (m: any) => msgIdToHex(m.msg_id));
+        setLocalMessages(r.rows);
+        if (r.trimmed) setJumpHasMoreAfter(true);
+      } else setLocalMessages((prev) => {
         const seen = new Set(prev.map((m) => msgIdToHex(m.msg_id)));
         const fresh = older.filter((m: any) => !seen.has(msgIdToHex(m.msg_id)));
         const merged = [...fresh, ...prev];
@@ -870,6 +939,14 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   // scroll position. Updates the localMessages copy, or copies the target out
   // of the channel resource into localMessages so it wins the dedup.
   const applyToTarget = (targetId: string, fn: (m: any) => any) => {
+    if (detached()) {
+      // Jump window: update the row in the window or the held-back live
+      // buffer, but never copy a row of the hidden newest page into the window.
+      const hit = (m: any) => msgIdToHex(m.msg_id) === msgIdToHex(targetId);
+      setLocalMessages((prev) => (prev.some(hit) ? prev.map((m) => (hit(m) ? fn(m) : m)) : prev));
+      setJumpBuffer((prev) => (prev.some(hit) ? prev.map((m) => (hit(m) ? fn(m) : m)) : prev));
+      return;
+    }
     setLocalMessages((prev) => {
       const idx = prev.findIndex((m) => msgIdToHex(m.msg_id) === msgIdToHex(targetId));
       if (idx >= 0) return prev.map((m, i) => (i === idx ? fn(m) : m));
@@ -927,6 +1004,26 @@ export const ChatView: Component<ChatViewProps> = (props) => {
             );
             return;
           }
+        }
+        if (detached()) {
+          // Held back while viewing a jump window (plan §6.1 step 7): no
+          // append, no auto-scroll, no read marker. The banner shows the count.
+          const r = bufferLive(jumpBuffer(), msg, MAX_TOTAL_MESSAGES, (m: any) => msgIdToHex(m.msg_id));
+          if (r.dropped) jumpBufferDropped = true;
+          setJumpBuffer(r.rows);
+          if (r.rows.includes(msg)) {
+            // Keep only ids still in the capped buffer, so the set never
+            // outgrows it while the view stays detached.
+            const live = new Set<string>();
+            const prev = jumpLiveIds();
+            for (const m of r.rows) {
+              const id = msgIdToHex(m.msg_id);
+              if (prev.has(id)) live.add(id);
+            }
+            live.add(msgIdToHex(msg.msg_id));
+            setJumpLiveIds(live);
+          }
+          return;
         }
         setLocalMessages((prev) => {
           // Remove optimistic messages that match this real message
@@ -992,6 +1089,10 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     const cid = props.channelId;
     const me = walletAddress();
     if (!cid || !me || authStatus() !== 'ready' || !channelRecordUsable()) return;
+    // Not while a permalink jump is loading or detached: the viewer is not at
+    // the live end. Tracked, so this runs once the view rejoins it (attach to
+    // the tail, jump to present, or a jump that fell back to the newest page).
+    if (jump()) return;
     const key = `${me}:${cid}`;
     if (markedFor === key) return;
     markedFor = key;
@@ -1019,7 +1120,9 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     // rendered under the NEW channel's header for the ~200-400ms of the fetch
     // (found in this port's audit — the cache write path was already correctly
     // guarded, but this render path wasn't; same fix belongs in web).
-    const apiMsgs = messages.loading ? [] : (messages() || []);
+    // Detached jump window: only the window (`localMessages`) renders.
+    const isDetached = detached();
+    const apiMsgs = isDetached || messages.loading ? [] : (messages() || []);
     const local = localMessages();
     // Remove optimistic messages that now have a real counterpart (same author,
     // similar timestamp). Match against BOTH the API resource AND the real
@@ -1039,7 +1142,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     // (lowest priority) — it's already been reconciled against the fetch
     // above by the merge effect, but local/api still win on anything newer
     // than that reconciliation (a WS edit landing mid-fetch, e.g.).
-    const combined = [...filteredLocal, ...apiMsgs, ...cachedMessages()];
+    const combined = [...filteredLocal, ...apiMsgs, ...(isDetached ? [] : cachedMessages())];
     const deduped = combined.filter((msg) => {
       const id = msgIdToHex(msg.msg_id);
       if (!id || seen.has(id)) return false;
@@ -1103,7 +1206,8 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     const channelId = props.channelId;
     const snapshot = allMessages(); // always read — keeps this effect's
     const loading = messages.loading; // tracking complete regardless of
-    if (persistTimer) clearTimeout(persistTimer); // which branch below runs.
+    const isDetached = detached();      // which branch below runs.
+    if (persistTimer) clearTimeout(persistTimer);
     // A channel switch mid-debounce would otherwise silently drop the
     // PREVIOUS channel's still-unwritten snapshot (about to be overwritten
     // below) — flush it first so a switch loses at most nothing, rather
@@ -1115,6 +1219,9 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     // which point `allMessages()` (re-read fresh on that run) is
     // guaranteed to reflect the CURRENT channel.
     if (loading) return;
+    // A jump window is a slice of old history, not the channel's recent
+    // snapshot — persisting it would seed the next open with a far-away island.
+    if (isDetached) return;
     pendingPersist = { channelId, wallet: walletAddress(), nodeUrl: getCurrentNodeUrl(), snapshot };
     persistTimer = setTimeout(writePending, 1000);
   });
@@ -1263,6 +1370,9 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     // Skip poll when WebSocket is connected — WS delivers messages in real
     // time, so polling would just produce duplicates (v1.15.1 fix).
     if (wsConnected()) return;
+    // Detached: forward paging is scroll-driven; a poll `after` the window's
+    // last row would silently grow it towards the tail.
+    if (detached()) return;
     const msgs = allMessages();
     if (msgs.length === 0) return;
     // Find the latest REAL message (skip optimistic ones with 'local-' ids)
@@ -1272,12 +1382,16 @@ export const ChatView: Component<ChatViewProps> = (props) => {
       if (id && !id.startsWith('local-')) { latestMsgId = id; break; }
     }
     if (!latestMsgId) return;
+    const walletAtStart = walletAddress();
     try {
       const client = getClient();
       const resp = await client.getChannelMessages(channelId, 50, undefined, latestMsgId);
       // Channel-switch race guard: drop poll results if the user moved on
       // mid-fetch, otherwise we'd land them in the wrong channel's state.
-      if (props.channelId !== channelId) return;
+      // An account switch mid-fetch must not land A's page in B's view.
+      if (props.channelId !== channelId || walletAddress() !== walletAtStart) return;
+      // A jump started while the poll was in flight owns `localMessages` now.
+      if (jump()) return;
       // Defensive: hard-cap at 50 in case the server returns more than asked.
       const incoming = (resp.messages || []).slice(0, 50);
       if (incoming.length > 0) {
@@ -1300,9 +1414,13 @@ export const ChatView: Component<ChatViewProps> = (props) => {
 
   // Auto-scroll only when new messages arrive and user is near bottom
   createEffect(() => {
+    const jumping = jump() !== null; // tracked; always null in the normal flow
     if (messages.loading) return;
     const msgs = allMessages();
     const count = msgs.length;
+    // A permalink jump owns the scroll position (it lands on the target, and
+    // a detached window must not follow appended pages to the bottom).
+    if (jumping || jumpLanding) { prevMsgCount = count; initialLoad = false; return; }
     if (count === 0 || count === prevMsgCount) { prevMsgCount = count; return; }
     const wasMore = count > prevMsgCount;
     const isFirst = initialLoad;
@@ -1346,59 +1464,384 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     }
   });
 
-  // Deep-link consumer: when the URL carries `?msg=<hex>`, scroll to that
-  // message once it's loaded. If it's older than the initial page, paginate
-  // backwards up to a small limit before giving up.
+  // Permalink consumer (spec 06 §6.5, plan §6.1). The route's `?msg=` is read
+  // only from `route().permalink` — the SDK's `parsePermalink` result — so a
+  // malformed or hostile link silently opens the channel as normal. ONE
+  // `around` fetch replaces the old "paginate back up to N pages" loop.
   //
-  // State is keyed by (channelId, target) so switching channels and returning
-  // to the same `?msg=` value re-tries the lookup instead of silently no-oping.
-  let deepLinkAttempts = 0;
+  // Keyed by (channelId, target) so leaving the channel and returning to the
+  // same `?msg=` jumps again instead of silently no-oping.
   let deepLinkSatisfiedKey: string | null = null;
-  const MAX_DEEPLINK_PAGINATES = 3;
-  createEffect(() => {
-    route();
-    const targetRaw = queryParam('msg');
-    const channelAtEntry = props.channelId;
-    // Lowercased: `data-msg-id` and `msgIdToHex()` (used for the
-    // `displayMessages` pin comparison) are always lowercase, so an
-    // uppercase-hex share link would otherwise never match either — the
-    // exact "permalinks MUST render unconditionally" case this pin exists
-    // for.
-    const target = targetRaw && /^[0-9a-fA-F]{64}$/.test(targetRaw) ? targetRaw.toLowerCase() : null;
-    if (!target) { deepLinkSatisfiedKey = null; deepLinkAttempts = 0; setDeepLinkPinnedId(null); return; }
-    const key = `${channelAtEntry}:${target}`;
-    if (deepLinkSatisfiedKey === key) return;
-    if (messages.loading) return;
-    // Exempt this id from the via_button feed filter for as long as we're
-    // trying to resolve it — a shared link to a button press must still
-    // render (see `displayMessages` above).
-    setDeepLinkPinnedId(target);
+  const idOf = (m: any) => msgIdToHex(m.msg_id);
+
+  /** Drop all jump state (channel switch, link removed, unmount). */
+  const resetJump = () => {
+    jumpToken++;
+    jumpLanding = false;
+    jumpBufferDropped = false;
+    batch(() => {
+      setJump(null);
+      setJumpHasMoreAfter(false);
+      setLoadingNewer(false);
+      setJumpBuffer([]);
+      setJumpLiveIds(new Set<string>());
+      setJumpNotice(null);
+    });
+  };
+  onCleanup(() => { jumpToken++; clearPermalinkHighlight?.(); });
+
+  /** Scroll to the newest message (or the unread divider) — the normal first
+   *  paint, for when a jump falls back to the newest page. */
+  const scrollToLatest = () => {
     setTimeout(() => {
-      if (props.channelId !== channelAtEntry) return;
-      const el = document.querySelector(`[data-msg-id="${CSS.escape(target)}"]`) as HTMLElement | null;
-      if (el) {
-        scrollToMessage(target);
-        deepLinkSatisfiedKey = key;
-        deepLinkAttempts = 0;
-        // Deliberately do NOT clear the pin here: `displayMessages()` is a
-        // Solid memo, so clearing it synchronously un-suppresses the row
-        // out from under `scrollToMessage()`'s smooth-scroll before the
-        // user ever sees it — the row would disappear mid-animation. The
-        // pin already self-clears on every OTHER exit from this effect
-        // (target removed from the URL, or a new target overwrites it), so
-        // leaving it set here just means a visited permalink stays visible
-        // in the feed for the rest of this view's lifetime — harmless, and
-        // arguably correct (the user explicitly navigated to it).
-      } else if (hasMoreOlder() && deepLinkAttempts < MAX_DEEPLINK_PAGINATES && !loadingOlder()) {
-        deepLinkAttempts++;
-        loadOlderMessages();
-      } else {
-        deepLinkSatisfiedKey = key;
-        deepLinkAttempts = 0;
-        setDeepLinkPinnedId(null);
-        flashShareToast(t('share_link_unavailable'));
+      if (!messagesRef) return;
+      const divider = messagesRef.querySelector('.unread-divider') as HTMLElement | null;
+      messagesRef.scrollTop = divider ? Math.max(0, divider.offsetTop - 8) : messagesRef.scrollHeight;
+    }, 0);
+  };
+
+  // Flash-then-persist highlight for a permalink target (plan §6.1 step 4):
+  // the usual flash plus an accent bar that stays until the user first
+  // scrolls / taps / presses a key in the message list, or 10 s pass. A reply-jump keeps the plain flash.
+  const PERMALINK_HIGHLIGHT_MS = 10_000;
+  let clearPermalinkHighlight: (() => void) | null = null;
+  const highlightPermalink = (el: HTMLElement) => {
+    clearPermalinkHighlight?.();
+    el.classList.add('message-highlight', 'message-permalink');
+    const flash = setTimeout(() => el.classList.remove('message-highlight'), 1500);
+    const container = messagesRef;
+    const events = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
+    const clear = () => {
+      clearTimeout(flash);
+      clearTimeout(timer);
+      el.classList.remove('message-permalink');
+      for (const e of events) container?.removeEventListener(e, clear);
+      if (clearPermalinkHighlight === clear) clearPermalinkHighlight = null;
+    };
+    const timer = setTimeout(clear, PERMALINK_HIGHLIGHT_MS);
+    // Registered on the next tick so the click that opened the link does not
+    // clear it immediately.
+    setTimeout(() => { if (clearPermalinkHighlight === clear) for (const e of events) container?.addEventListener(e, clear, { passive: true }); }, 0);
+    clearPermalinkHighlight = clear;
+  };
+
+  /** Centre the target and highlight it once rendered (no-op if it never renders). */
+  const landOnTarget = (target: string, token: number) => {
+    jumpLanding = true;
+    // The landing IS the first paint: a newest page resolving later must not
+    // run the "scroll to bottom / unread divider" first-load scroll over it.
+    initialLoad = false;
+    setTimeout(() => {
+      jumpLanding = false;
+      if (token !== jumpToken || !messagesRef) return;
+      const el = messagesRef.querySelector(`[data-msg-id="${CSS.escape(target)}"]`) as HTMLElement | null;
+      if (!el) return;
+      el.scrollIntoView({ block: 'center' });
+      highlightPermalink(el);
+      // Late-loading images above the target shift it — re-centre once, unless
+      // the user has already started moving (which cleared the highlight).
+      setTimeout(() => {
+        if (token === jumpToken && el.classList.contains('message-permalink')) el.scrollIntoView({ block: 'center' });
+        // A window too short to scroll can never fire the scroll-driven pager.
+        if (token === jumpToken && detached() && messagesRef
+          && messagesRef.scrollHeight <= messagesRef.clientHeight + SCROLL_LOAD_OLDER_PX) void loadNewerMessages();
+      }, 300);
+    }, 0);
+  };
+
+  /** Fold a newest-page response (legacy node) into the view. */
+  const mergeNewestPage = (rows: any[]) => {
+    if (rows.length === 0) return;
+    setLocalMessages((prev) => mergeWindowPage(prev, rows, 'newer', MAX_TOTAL_MESSAGES, idOf).rows);
+  };
+
+  const startJump = async (cid: number, target: string) => {
+    resetJump();
+    const token = jumpToken;
+    const account = jumpAccountKey(walletAddress(), authStatus() === 'ready');
+    // Every await below re-checks: same jump, same channel, same account.
+    const stale = () => token !== jumpToken || props.channelId !== cid
+      || jumpAccountKey(walletAddress(), authStatus() === 'ready') !== account;
+    setJump({ channelId: cid, target, phase: 'loading' });
+    let resp;
+    try {
+      resp = await getClient().getChannelMessages(cid, { around: target, limit: JUMP_WINDOW_LIMIT });
+    } catch (e) {
+      if (stale()) return;
+      // Plan §9: tell "no access" apart from "channel no longer exists" via
+      // the channel record (a private channel answers with its restricted
+      // view, a deleted one 404s); offer Join only for a public channel.
+      const status = httpStatusOf(e);
+      let failure: JumpFailure = 'error';
+      if (status === 403 || status === 404) {
+        let record: Parameters<typeof classifyJumpFailure>[1];
+        try {
+          const detail = await getClient().getChannelDetail(cid);
+          const ch = detail?.channel;
+          record = ch && ch.channel_id === cid
+            // Floor-aware, fail closed (privateInvite.ts): only an explicit
+            // Public / ReadPublic type below the private namespace is joinable.
+            ? { found: true, isPublic: !isInviteGatedChannel(ch.channel_type, cid) }
+            : { found: false, status: null };
+        } catch (e2) {
+          record = { found: false, status: httpStatusOf(e2) };
+        }
+        if (stale()) return;
+        failure = classifyJumpFailure(status, record);
       }
-    }, 100);
+      setJump(null);
+      if (failure === 'error') flashShareToast(t('permalink_load_failed'));
+      else setJumpNotice(failure);
+      scrollToLatest();
+      return;
+    }
+    if (stale()) return;
+    // Defensive cap, as for every other page.
+    const rows = (resp.messages || []).slice(0, JUMP_WINDOW_LIMIT);
+    const outcome = classifyAround({ target_found: resp.target_found, messages: rows }, target, idOf);
+    if (outcome === 'found') {
+      // `around` support implies the exact flags; absent → assume more and
+      // let forward paging find the tail.
+      const more = resp.has_more_after !== false;
+      // Set before the batch: its effects flush when it ends, before
+      // `landOnTarget` below runs.
+      jumpLanding = true;
+      initialLoad = false;
+      batch(() => {
+        // REPLACE the view with the window. Every other row the view held
+        // (live messages, unconfirmed sends, older pages) is held back with
+        // the live buffer — uncapped, `localMessages` is already bounded —
+        // and restored on return to the present; nothing is dropped.
+        const held = holdBackRows(localMessages(), rows, idOf);
+        setHasMoreOlder(moreBefore(resp));
+        if (more) {
+          setLocalMessages(rows);
+          setJumpBuffer(held);
+          setJumpHasMoreAfter(true);
+          setJump({ channelId: cid, target, phase: 'detached' });
+        } else {
+          // The window already reaches the live tail: nothing to detach from.
+          setLocalMessages([...rows, ...held]);
+          setJump(null);
+        }
+      });
+      landOnTarget(target, token);
+      return;
+    }
+    // Both other outcomes served the newest page instead — the normal flow
+    // already shows it. Only a legacy hit folds it in, so the target is
+    // rendered even if the regular fetch has not resolved yet.
+    const legacyHit = outcome === 'legacy' && rows.some((m) => idOf(m) === target);
+    if (legacyHit) { jumpLanding = true; initialLoad = false; }
+    batch(() => {
+      if (legacyHit) mergeNewestPage(rows);
+      setJump(null);
+    });
+    if (outcome === 'not-on-node') {
+      // `target_found: false` — honest, not "not found" (plan §9).
+      setJumpNotice('not-on-node');
+      scrollToLatest();
+      return;
+    }
+    // Pre-0.150.0 node ignored `around`: the old behaviour — land on the
+    // target if it is in the newest page, else say we could not reach it.
+    if (legacyHit) {
+      landOnTarget(target, token);
+    } else {
+      flashShareToast(t('permalink_node_outdated'));
+      scrollToLatest();
+    }
+  };
+
+  /** Page forward from the window's newest row; re-attach at the live tail. */
+  const loadNewerMessages = async () => {
+    const j = jump();
+    const channelId = props.channelId;
+    if (!j || !detached() || !channelId || loadingNewer() || !jumpHasMoreAfter()) return;
+    const rows = localMessages();
+    let newestId: string | null = null;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const id = idOf(rows[i]);
+      if (id && !id.startsWith('local-')) { newestId = id; break; }
+    }
+    if (!newestId) return;
+    const token = jumpToken;
+    const wallet = walletAddress();
+    setLoadingNewer(true);
+    try {
+      const resp = await getClient().getChannelMessages(channelId, { after: newestId, limit: JUMP_PAGE_LIMIT });
+      if (token !== jumpToken || props.channelId !== channelId || jump() !== j || walletAddress() !== wallet) return;
+      const page = (resp.messages || []).slice(0, JUMP_PAGE_LIMIT);
+      const more = moreAfter(resp, page.length, JUMP_PAGE_LIMIT);
+      // Keep the row at the top of the viewport in place: trimming the old
+      // end of the window would otherwise yank the content upwards.
+      const anchor = topVisibleRow();
+      const r = mergeWindowPage(localMessages(), page, 'newer', MAX_TOTAL_MESSAGES, idOf);
+      batch(() => {
+        setLocalMessages(r.rows);
+        if (r.trimmed) setHasMoreOlder(true);
+        if (more) setJumpHasMoreAfter(true);
+        else attachToTail();
+      });
+      if (anchor) restoreAnchor(anchor);
+    } catch {
+      /* keep jumpHasMoreAfter so the next scroll retries */
+    } finally {
+      if (token === jumpToken) setLoadingNewer(false);
+    }
+  };
+
+  /** The window met the live tail: merge the held-back live messages and
+   *  resume the normal (bottom-anchored) flow. */
+  const attachToTail = () => {
+    // The buffer shed rows past its cap: the newest page fills them back in.
+    if (jumpBufferDropped) void refetchMessages();
+    jumpBufferDropped = false;
+    batch(() => {
+      const buffered = jumpBuffer();
+      if (buffered.length > 0) {
+        setLocalMessages((prev) => mergeWindowPage(prev, buffered, 'newer', MAX_TOTAL_MESSAGES + buffered.length, idOf).rows);
+      }
+      setJumpBuffer([]);
+      setJumpLiveIds(new Set<string>());
+      setJumpHasMoreAfter(false);
+      setJump(null);
+      setNewMsgCount(0);
+    });
+  };
+
+  /** "Jump to present": drop the window and reload the newest page. */
+  const jumpToPresent = () => {
+    const cid = props.channelId;
+    if (!cid) return;
+    const buffered = jumpBuffer();
+    resetJump();
+    clearPermalinkHighlight?.();
+    batch(() => {
+      setLocalMessages(buffered);
+      setHasMoreOlder(true);
+      setNewMsgCount(0);
+    });
+    // The next settle of `allMessages()` is a first paint again (bottom /
+    // unread divider) — see the auto-scroll effect.
+    initialLoad = true;
+    prevMsgCount = 0;
+    // Drop `?msg=` so a reload does not jump back (no history entry).
+    deepLinkSatisfiedKey = null;
+    // No debounced / tab-hide flush may persist the just-replaced view (the
+    // buffer alone, before the refetch lands) as the channel's cache.
+    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+    pendingPersist = null;
+    redirectNow(`/chat/${cid}`);
+    void refetchMessages();
+  };
+
+  const topVisibleRow = (): { id: string; top: number } | null => {
+    if (!messagesRef) return null;
+    const box = messagesRef.getBoundingClientRect();
+    for (const row of messagesRef.querySelectorAll('[data-msg-id]')) {
+      const rect = (row as HTMLElement).getBoundingClientRect();
+      if (rect.bottom > box.top) return { id: (row as HTMLElement).dataset.msgId || '', top: rect.top };
+    }
+    return null;
+  };
+  const restoreAnchor = (a: { id: string; top: number }) => {
+    requestAnimationFrame(() => {
+      if (!messagesRef || !a.id) return;
+      const el = messagesRef.querySelector(`[data-msg-id="${CSS.escape(a.id)}"]`) as HTMLElement | null;
+      if (el) messagesRef.scrollTop += el.getBoundingClientRect().top - a.top;
+    });
+  };
+
+  /**
+   * Leave a detached window without restoring it (link gone / account change).
+   * `refetch: false` when the resource's own source (channel / auth / wallet)
+   * changed too — it is already re-running, a second fetch would be wasted.
+   */
+  const dropWindowAndRefetch = (refetch = true) => {
+    batch(() => {
+      setLocalMessages([]);
+      setHasMoreOlder(true);
+    });
+    initialLoad = true;
+    prevMsgCount = 0;
+    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+    pendingPersist = null;
+    if (refetch) void refetchMessages();
+  };
+
+  // The account the current jump / notice was made for (`jumpAccountKey`).
+  let jumpAccount: string | null = null;
+  // Last NON-null wallet this effect saw, to tell an in-place switch between
+  // two accounts (desktop's account switcher / disconnect handover, same rule
+  // as `routeCarryover.isAccountChange`) apart from a session restore.
+  let jumpLastWallet: string | null = null;
+  // `${channelId}:${target}` of a link left behind by an in-place account
+  // switch: it belonged to the previous account and is never jumped to as the
+  // new one (the router moves the view to the neutral `/chat` route anyway).
+  let jumpSuppressed: string | null = null;
+
+  createEffect(() => {
+    const channelAtEntry = props.channelId;
+    const p = route().permalink;
+    const target = p && p.kind === 'chat' && p.channelId === channelAtEntry ? p.msgId : null;
+    // Tracked: an account change (incl. the session being restored after first
+    // render: no wallet → wallet, auth → ready) RE-ARMS the jump — the old
+    // window / in-flight request / notice was for the previous identity (a
+    // pre-auth `around` on a private channel can 403), so it is dropped and
+    // the link is jumped to again as the current account.
+    //
+    // Desktop: an in-place switch between two DIFFERENT wallets keeps this
+    // view mounted (the router replaces `/chat/<id>?msg=` with the neutral
+    // route a microtask later — routeCarryover.ts). That case is NOT re-armed:
+    // the jump, its window, live buffer and notice are dropped, and the link
+    // is never re-requested as the new account, so no window ever mixes rows
+    // fetched for two accounts.
+    const wallet = walletAddress() ?? null;
+    const account = jumpAccountKey(wallet, authStatus() === 'ready');
+    untrack(() => {
+      const walletSwitched = isAccountChange(jumpLastWallet, wallet);
+      if (wallet) jumpLastWallet = wallet;
+      const j = jump();
+      const accountChanged = jumpAccount !== null && jumpAccount !== account;
+      if ((accountChanged || walletSwitched) && !j) setJumpNotice(null);
+      // A jump belongs to one channel + target + account; leaving any ends it
+      // (the channel switch / plain `#/chat/<id>` navigation reloads normally).
+      if (j && (j.channelId !== channelAtEntry || j.target !== target || accountChanged || walletSwitched)) {
+        const wasDetached = j.phase === 'detached' && j.channelId === channelAtEntry;
+        resetJump();
+        // Same channel, link dropped (e.g. the channel re-selected in the
+        // sidebar) or replaced by another permalink: back to the present
+        // first, so the old window never mixes with the newest page. On an
+        // account change the resource is already refetching (its source
+        // tracks wallet + auth), so only the window is dropped here.
+        if (wasDetached) dropWindowAndRefetch(!(accountChanged || walletSwitched));
+      }
+      if (!target) {
+        deepLinkSatisfiedKey = null;
+        jumpSuppressed = null;
+        setDeepLinkPinnedId(null);
+        setJumpNotice(null);
+        return;
+      }
+      const linkKey = `${channelAtEntry}:${target}`;
+      if (walletSwitched) {
+        clearPermalinkHighlight?.();
+        setJumpNotice(null);
+        jumpSuppressed = linkKey;
+      }
+      if (jumpSuppressed !== null && jumpSuppressed !== linkKey) jumpSuppressed = null;
+      if (jumpSuppressed === linkKey) return;
+      const key = `${account}:${linkKey}`;
+      if (deepLinkSatisfiedKey === key) return;
+      deepLinkSatisfiedKey = key;
+      // Exempt the target from the via_button feed filter — a shared link to
+      // a button press must still render (see `viaButtonFilteredMessages` above). Kept
+      // set after landing so the row does not vanish mid-scroll.
+      setDeepLinkPinnedId(target);
+      jumpAccount = account;
+      void startJump(channelAtEntry!, target);
+    });
   });
 
   // Attach a picked/pasted file to the composer. On an encrypted channel the
@@ -1504,6 +1947,9 @@ export const ChatView: Component<ChatViewProps> = (props) => {
         replyTo: replyTo()?.msgId ?? null,
       });
       const localId = `local-${Date.now()}`;
+      // Sending from a jump window: return to the present first, so the
+      // optimistic bubble lands at the live tail, not under old history.
+      if (detached()) jumpToPresent();
       setLocalMessages((prev) => [...prev, {
         msg_id: localId,
         author: addr,
@@ -2083,11 +2529,49 @@ export const ChatView: Component<ChatViewProps> = (props) => {
             />
           </div>
         </Show>
-          <Show when={showScrollBtn()}>
+          <Show when={showScrollBtn() && !detached()}>
             <button class="scroll-to-bottom-btn" onClick={() => { scrollToBottom(); setNewMsgCount(0); setShowScrollBtn(false); }}>
               <Show when={newMsgCount() > 0}><span class="scroll-badge">{newMsgCount()}</span></Show>
               <span class="scroll-arrow">↓</span>
             </button>
+          </Show>
+          {/* Permalink jump (spec 06 §6.5): the single `around` fetch in flight. */}
+          <Show when={jump()?.phase === 'loading' && jump()?.channelId === props.channelId}>
+            <div class="jump-loading" role="status">
+              <span class="jump-loading-text">{t('permalink_jumping')}</span>
+            </div>
+          </Show>
+          {/* Detached from the live tail: way back + count of held-back live messages. */}
+          <Show when={detached()}>
+            <div class="jump-banner" role="status">
+              <span class="jump-banner-text">{t('permalink_viewing_older')}</span>
+              <button class="jump-banner-btn" onClick={jumpToPresent}>
+                {jumpNewCount() > 0
+                  ? t('permalink_jump_present_new', { count: jumpNewCount() })
+                  : t('permalink_jump_present')} ↓
+              </button>
+            </div>
+          </Show>
+          {/* Why the jump could not land (plan §9). `not-on-node`: offer the
+              node picker (a switch reloads the webview at the same hash, so
+              the link is retried on the new node). */}
+          <Show when={jumpNotice()}>
+            <div class="jump-notice" role="status">
+              <span class="jump-notice-text">{t({
+                'not-on-node': 'permalink_not_on_node',
+                'no-access': 'permalink_no_access',
+                'no-access-joinable': 'permalink_no_access',
+                'channel-gone': 'permalink_channel_gone',
+              }[jumpNotice()!])}</span>
+              <Show when={jumpNotice() === 'not-on-node'}>
+                <span class="jump-notice-try">{t('permalink_try_other_node')}</span>
+                <NodeSelector />
+              </Show>
+              <Show when={jumpNotice() === 'no-access-joinable' && props.channelId}>
+                <button class="jump-banner-btn" onClick={() => navigate(`/join/${props.channelId}`)}>{t('permalink_join_channel')}</button>
+              </Show>
+              <button class="jump-notice-close" onClick={() => setJumpNotice(null)} aria-label={t('media_close')}>✕</button>
+            </div>
           </Show>
         </div>
 
@@ -2678,6 +3162,42 @@ export const ChatView: Component<ChatViewProps> = (props) => {
         }
 
         .message-highlight { animation: msg-flash 1.5s ease-out; }
+        .message-permalink { box-shadow: inset 3px 0 0 var(--color-accent-primary); background: var(--color-accent-bg, color-mix(in srgb, var(--color-accent-primary) 12%, transparent)); border-radius: var(--radius-sm); }
+        .jump-loading {
+          position: absolute; inset: 0; z-index: 6;
+          display: flex; align-items: center; justify-content: center;
+          background: var(--color-bg-primary); opacity: 0.92;
+        }
+        .jump-loading-text { color: var(--color-text-secondary); font-size: var(--font-size-sm); }
+        .jump-banner {
+          position: absolute; top: var(--spacing-sm); left: 50%; transform: translateX(-50%); z-index: 5;
+          display: flex; align-items: center; gap: var(--spacing-sm); flex-wrap: wrap; justify-content: center;
+          max-width: calc(100% - 2 * var(--spacing-md));
+          padding: var(--spacing-xs) var(--spacing-sm);
+          background: var(--color-bg-secondary); color: var(--color-text-primary);
+          border: 1px solid var(--color-border); border-radius: var(--radius-md);
+          box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: var(--font-size-sm);
+        }
+        .jump-banner-text { color: var(--color-text-secondary); }
+        .jump-banner-btn {
+          background: var(--color-accent-primary); color: var(--color-text-inverse);
+          border: none; border-radius: var(--radius-sm); padding: 2px var(--spacing-sm);
+          font-size: var(--font-size-sm); cursor: pointer;
+        }
+        .jump-notice {
+          position: absolute; bottom: var(--spacing-sm); left: var(--spacing-md); right: var(--spacing-md); z-index: 5;
+          display: flex; align-items: center; gap: var(--spacing-sm); flex-wrap: wrap;
+          padding: var(--spacing-sm);
+          background: var(--color-bg-secondary); color: var(--color-text-primary);
+          border: 1px solid var(--color-warning); border-radius: var(--radius-md);
+          font-size: var(--font-size-sm);
+        }
+        .jump-notice-text { font-weight: 600; }
+        .jump-notice-try { color: var(--color-text-secondary); }
+        .jump-notice-close {
+          margin-left: auto; background: none; border: none; cursor: pointer;
+          color: var(--color-text-secondary); font-size: var(--font-size-sm);
+        }
         @keyframes msg-flash {
           0% { background: var(--color-accent-primary); border-radius: var(--radius-sm); }
           100% { background: transparent; }
